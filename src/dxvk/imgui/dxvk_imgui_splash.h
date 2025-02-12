@@ -40,7 +40,7 @@ namespace dxvk {
     void update(ImFont* largeFont);
 
   private:
-    const int m_timeToLiveSeconds = 10;
+    const int m_timeToLiveSeconds = 20;
 
     bool m_hasStarted = false;
     std::chrono::system_clock::time_point  m_startTime;
