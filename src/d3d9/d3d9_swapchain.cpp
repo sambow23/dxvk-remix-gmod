@@ -266,57 +266,105 @@ namespace dxvk {
         PostMessageW(window, WM_ACTIVATEAPP, 1, GetCurrentThreadId());
     }
 
-    // Safe from bSkipSwapchainActions as we're just getting a handle that shouldn't
-    // be invalidated
-    auto& gui = windowData.swapchain->getDxvkDevice()->getCommon()->getImgui();
-    if (message == WM_SETCURSOR) {
-      // If ImGui is initialized and wants to capture mouse
-      if (gui.isInit() && ImGui::GetIO().WantCaptureMouse) {
-        // Let ImGui handle the cursor
-        if (ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam))
-          return TRUE;  // Prevent further processing
-      }
-      // Otherwise, let the game handle it
-      else if (windowData.proc) {
-        return CallCharsetFunction(
-          CallWindowProcW, CallWindowProcA, unicode,
-          windowData.proc, window, message, wParam, lParam);
-      }
-      return FALSE;
+  // Safe from bSkipSwapchainActions as we're just getting a handle
+  auto& gui = windowData.swapchain->getDxvkDevice()->getCommon()->getImgui();
+  
+  // Check if ImGui wants to handle the input
+  bool imguiWantsInput = gui.isInit() && (ImGui::GetIO().WantCaptureMouse || ImGui::GetIO().WantCaptureKeyboard);
+  
+  // Check if we should block input based on our custom input blocking
+  bool shouldBlockInput = dxvk::ImGuiInputBlocking::g_blockInputToGame;
+  
+  // Handle WM_SETCURSOR specially
+  if (message == WM_SETCURSOR) {
+    if (imguiWantsInput) {
+      if (ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam))
+        return TRUE;  // Prevent further processing
     }
-
-    // Normal processing for other messages
-    if (gui.isInit()) {
-      gui.wndProcHandler(window, message, wParam, lParam);
-    }
-
-    if(!bSkipSwapchainActions) {
-      if (!present_parms.Windowed && env::isRemixBridgeActive()) {
-        FSEState state = ProcessFullscreenExclusiveMessages(window, message, wParam, lParam);
-
-        // Update FSE state
-        if (state == FSEState::Acquire) {
-          windowData.swapchain->AcquireFullscreenExclusive();
-        } else if (state == FSEState::Release) {
-          windowData.swapchain->ReleaseFullscreenExclusive();
-        }
-      }
-    }
-
-    if (windowData.proc) {
+    else if (windowData.proc) {
       return CallCharsetFunction(
         CallWindowProcW, CallWindowProcA, unicode,
-          windowData.proc, window, message, wParam, lParam);
+        windowData.proc, window, message, wParam, lParam);
     }
-
-    if(!bSkipSwapchainActions) {
-      windowData.swapchain->onWindowMessageEvent(message, wParam);
-    }
-
-    // NV-DXVK end
-
-    return 0;
+    return FALSE;
   }
+
+  // Let ImGui process the message first
+  bool imguiHandled = false;
+  if (gui.isInit()) {
+    // This calls ImGui_ImplWin32_WndProcHandler internally
+    gui.wndProcHandler(window, message, wParam, lParam);
+    
+    // Check if imgui handled this message
+    imguiHandled = ImGui::GetIO().WantCaptureMouse || ImGui::GetIO().WantCaptureKeyboard;
+  }
+
+  // Handle fullscreen exclusive messages
+  if(!bSkipSwapchainActions) {
+    if (!present_parms.Windowed && env::isRemixBridgeActive()) {
+      FSEState state = ProcessFullscreenExclusiveMessages(window, message, wParam, lParam);
+
+      // Update FSE state
+      if (state == FSEState::Acquire) {
+        windowData.swapchain->AcquireFullscreenExclusive();
+      } else if (state == FSEState::Release) {
+        windowData.swapchain->ReleaseFullscreenExclusive();
+      }
+    }
+  }
+
+  // If input is blocked and this is an input message, don't forward to the original procedure
+  if (shouldBlockInput) {
+    // Add debug logging for a few frames to see which messages are being processed
+    static int debugCounter = 0;
+    if (debugCounter < 100) {
+      debugCounter++;
+      Logger::debug(str::format("Processing message: 0x", std::hex, message, " with blocking enabled"));
+    }
+
+    switch (message) {
+      // Block keyboard input
+      case WM_KEYDOWN:
+      case WM_KEYUP:
+      case WM_SYSKEYDOWN:
+      case WM_SYSKEYUP:
+      case WM_CHAR:
+      case WM_SYSCHAR:
+      case WM_UNICHAR:
+      // Block mouse input
+      case WM_MOUSEMOVE:
+      case WM_LBUTTONDOWN:
+      case WM_LBUTTONUP:
+      case WM_RBUTTONDOWN:
+      case WM_RBUTTONUP:
+      case WM_MBUTTONDOWN:
+      case WM_MBUTTONUP:
+      case WM_MOUSEWHEEL:
+      case WM_MOUSEHWHEEL:
+      case WM_XBUTTONDOWN:
+      case WM_XBUTTONUP:
+      // Block other potentially relevant input messages
+      case WM_INPUT:
+      case WM_CAPTURECHANGED:
+      case WM_NCHITTEST:  // Can affect mouse behavior
+        return 0; // Block the message
+    }
+  }
+
+  // Forward to original window procedure if it exists
+  if (windowData.proc) {
+    return CallCharsetFunction(
+      CallWindowProcW, CallWindowProcA, unicode,
+        windowData.proc, window, message, wParam, lParam);
+  }
+
+  // Handle swapchain message event
+  if(!bSkipSwapchainActions) {
+    windowData.swapchain->onWindowMessageEvent(message, wParam);
+  }
+
+  return 0;
+}
 
 
   static uint16_t MapGammaControlPoint(float x) {

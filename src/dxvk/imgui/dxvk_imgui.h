@@ -234,5 +234,25 @@ namespace dxvk {
     RTX_OPTION("rtx.gui", float, reflexStatRangePaddingRatio, 0.05f, "A value specifying the amount of padding applied to the Reflex stat graph ranges as a ratio to the calculated range.");
   
   };
+
+  namespace ImGuiInputBlocking {
+    // Flag to indicate whether input should be blocked from the game
+    extern bool g_blockInputToGame;
+    
+    // Original window procedure (will be stored when we subclass)
+    extern WNDPROC g_originalWndProc;
+    
+    // Set the input blocking state
+    void SetInputBlockingState(bool blockInput);
+    
+    // Custom window procedure for input blocking
+    LRESULT CALLBACK CustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    
+    // Setup function to install the hook
+    void SetupInputBlocking(HWND hwnd);
+    
+    // Cleanup function to remove the hook
+    void CleanupInputBlocking(HWND hwnd);
+  }
   
 }

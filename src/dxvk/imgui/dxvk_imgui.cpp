@@ -126,6 +126,77 @@ namespace ImGui {
 }
 
 namespace dxvk {
+
+    namespace ImGuiInputBlocking {
+    bool g_blockInputToGame = false;
+    WNDPROC g_originalWndProc = nullptr;
+
+    void SetInputBlockingState(bool blockInput) {
+      g_blockInputToGame = blockInput;
+    }
+
+    LRESULT CALLBACK CustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+      // Let ImGui handle its input first
+      if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
+        return TRUE;
+      
+      // If we're blocking input to the game and this is an input message
+      if (g_blockInputToGame) {
+        switch (msg) {
+          // Block keyboard input
+          case WM_KEYDOWN:
+          case WM_KEYUP:
+          case WM_SYSKEYDOWN:
+          case WM_SYSKEYUP:
+          case WM_CHAR:
+          // Block mouse input
+          case WM_MOUSEMOVE:
+          case WM_LBUTTONDOWN:
+          case WM_LBUTTONUP:
+          case WM_RBUTTONDOWN:
+          case WM_RBUTTONUP:
+          case WM_MBUTTONDOWN:
+          case WM_MBUTTONUP:
+          case WM_MOUSEWHEEL:
+          case WM_MOUSEHWHEEL:
+          case WM_XBUTTONDOWN:
+          case WM_XBUTTONUP:
+            return 0; // Block the message
+          
+          // Let other messages through
+          default:
+            break;
+        }
+      }
+      
+      // Pass unhandled messages to the original window procedure
+      return CallWindowProc(g_originalWndProc, hwnd, msg, wParam, lParam);
+    }
+
+    void SetupInputBlocking(HWND hwnd) {
+      if (hwnd != nullptr && g_originalWndProc == nullptr) {
+        // Save the original window procedure and install our custom one
+        g_originalWndProc = (WNDPROC)SetWindowLongPtr(
+          hwnd, 
+          GWLP_WNDPROC, 
+          (LONG_PTR)CustomWndProc
+        );
+      }
+    }
+
+    void CleanupInputBlocking(HWND hwnd) {
+      if (hwnd != nullptr && g_originalWndProc != nullptr) {
+        // Restore the original window procedure
+        SetWindowLongPtr(
+          hwnd, 
+          GWLP_WNDPROC, 
+          (LONG_PTR)g_originalWndProc
+        );
+        g_originalWndProc = nullptr;
+      }
+    }
+  }
+  
   struct ImGuiTexture {
     Rc<DxvkImageView> imageView = VK_NULL_HANDLE;
     VkDescriptorSet texID = VK_NULL_HANDLE;
@@ -433,6 +504,8 @@ namespace dxvk {
   }
 
   ImGUI::~ImGUI() {
+    ImGuiInputBlocking::CleanupInputBlocking(m_hwnd);
+
     g_imguiTextureMap.clear();
 
     ImGui::SetCurrentContext(m_context);
@@ -487,9 +560,30 @@ namespace dxvk {
     g_usedFogStateHash = usedFogHash;
   }
 
-  void ImGUI::wndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+void ImGUI::wndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     ImGui::SetCurrentContext(m_context);
+    
+    // Forward to ImGui's handler
     ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+    
+    // Check if we need to update the input blocking state based on this message
+    // This ensures messages processed outside our custom window proc still affect blocking state
+    if (m_hwnd == hWnd && ImGuiInputBlocking::g_originalWndProc != nullptr) {
+      // For example, if this is a key message that toggles the UI
+      // Check to see if we need to update the blocking state
+      if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
+        auto& opts = *RtxOptions::Get();
+        
+        // Check if this is the key combo that toggles the menu
+        // This is a simplified example - adapt to your actual hotkey checking
+        if (checkHotkeyState(RtxOptions::Get()->remixMenuKeyBinds())) {
+          // Update blocking state based on new UI state
+          const bool doBlock = opts.blockInputToGameInUI() && 
+                            (opts.showUI() != UIType::None);
+          ImGuiInputBlocking::SetInputBlockingState(doBlock);
+        }
+      }
+    }
   }
 
   void ImGUI::showMemoryStats() const {
@@ -575,10 +669,14 @@ namespace dxvk {
       ImGui::GetIO().MouseDrawCursor = type != UIType::None;
     }
 
-    if (RtxOptions::Get()->blockInputToGameInUI()) {
-      BridgeMessageChannel::get().send("UWM_REMIX_UIACTIVE_MSG",
-                                       type != UIType::None ? 1 : 0, 0);
+    // Make sure this setting is enabled by default
+    if (!RtxOptions::Get()->blockInputToGameInUI()) {
+      Logger::debug("blockInputToGameInUI is disabled, enabling it");
+      RtxOptions::Get()->blockInputToGameInUIRef() = true;
     }
+
+    // Call the input blocking function
+    sendUIActivationMessage();
   }
   
   void ImGUI::showMaterialOptions() {
@@ -702,10 +800,13 @@ namespace dxvk {
   void ImGUI::sendUIActivationMessage() {
     auto& opts = *RtxOptions::Get();
     const bool doBlock = opts.blockInputToGameInUI() &&
-      opts.showUI() != UIType::None;
-
-    BridgeMessageChannel::get().send("UWM_REMIX_UIACTIVE_MSG",
-                                     doBlock ? 1 : 0, 0);
+                        opts.showUI() != UIType::None;
+                        
+    // Add some debug logging
+    Logger::debug(str::format("Setting input blocking state: ", doBlock ? "TRUE" : "FALSE"));
+    
+    // Set the state
+    ImGuiInputBlocking::SetInputBlockingState(doBlock);
   }
 
   void ImGUI::update(const Rc<DxvkContext>& ctx) {
@@ -3232,11 +3333,19 @@ namespace dxvk {
 
     // Sometimes games can change windows on us, so we need to check that here and tell ImGUI
     if (m_hwnd != hwnd) {
+      // Cleanup old window procedure if window changed
+      if (m_hwnd != nullptr) {
+        ImGuiInputBlocking::CleanupInputBlocking(m_hwnd);
+      }
+      
       if(m_init) {
         ImGui_ImplWin32_Shutdown();
       }
       m_hwnd = hwnd;
       ImGui_ImplWin32_Init(hwnd);
+      
+      // Set up the new window procedure
+      ImGuiInputBlocking::SetupInputBlocking(m_hwnd);
     }
 
     if (!m_init) {
