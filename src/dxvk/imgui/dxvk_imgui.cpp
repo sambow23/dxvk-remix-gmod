@@ -135,6 +135,7 @@ namespace dxvk {
   fast_unordered_cache<FogState> g_imguiFogMap;
   XXH64_hash_t g_usedFogStateHash;
   std::mutex g_imguiFogMapMutex; // protects g_imguiFogMap
+  ImGUI* g_imgui = nullptr;
 
   struct RtxTextureOption {
     const char* uniqueId;
@@ -361,6 +362,8 @@ namespace dxvk {
   , m_hwnd   (nullptr)
   , m_about  (new ImGuiAbout)
   , m_splash  (new ImGuiSplash) {
+
+  g_imgui = this;
     // Clamp Option ranges
 
     RTX_OPTION_CLAMP(reflexStatRangeInterpolationRate, 0.0f, 1.0f);
@@ -433,6 +436,7 @@ namespace dxvk {
   }
 
   ImGUI::~ImGUI() {
+    g_imgui = nullptr;
     g_imguiTextureMap.clear();
 
     ImGui::SetCurrentContext(m_context);
@@ -471,6 +475,22 @@ namespace dxvk {
       g_imguiTextureMap[hash] = texture;
     }
   }
+
+  // void switchImGuiMenu(UIType type) {
+  //   // Since we don't have direct access to the ImGUI instance,
+  //   // we'll just set the option directly
+  //   RtxOptions::Get()->showUIRef() = type;
+    
+  //   // TODO: Additional state adjustment if needed
+  //   if (RtxOptions::Get()->showUICursor()) {
+  //     ImGui::GetIO().MouseDrawCursor = type != UIType::None;
+  //   }
+    
+  //   if (RtxOptions::Get()->blockInputToGameInUI()) {
+  //     BridgeMessageChannel::get().send("UWM_REMIX_UIACTIVE_MSG",
+  //                                     type != UIType::None ? 1 : 0, 0);
+  //   }
+  // }
 
   void ImGUI::ReleaseTexture(const XXH64_hash_t hash) {
     if (RtxOptions::Get()->keepTexturesForTagging()) {
