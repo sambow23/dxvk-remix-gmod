@@ -2308,32 +2308,33 @@ namespace dxvk {
       ImGui::Separator();
       spacing();
     };
-
+  
     constexpr ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
     constexpr ImGuiTabItemFlags tab_item_flags = ImGuiTabItemFlags_NoCloseWithMiddleMouseButton;
     if (!ImGui::BeginTabBar("##showSetupWindow", tab_bar_flags)) {
       return;
     }
-    ImGui::PushItemWidth(200);
-
+  
     texture_popup::lastOpenCategoryActive = false;
-
+  
     const float thumbnailScale = RtxOptions::textureGridThumbnailScale();
     const float thumbnailSize = (120.f * thumbnailScale);
     const float thumbnailSpacing = ImGui::GetStyle().ItemSpacing.x;
     const float thumbnailPadding = ImGui::GetStyle().CellPadding.x;
     const uint32_t numThumbnailsPerRow = uint32_t(std::max(1.f, (m_windowWidth - 18.f) / (thumbnailSize + thumbnailSpacing + thumbnailPadding * 2.f)));
-
+  
     if (IMGUI_ADD_TOOLTIP(ImGui::BeginTabItem("Step 1: Categorize Textures", nullptr, tab_item_flags), "Select texture definitions for Remix")) {
+      ImGui::PushItemWidth(200);
+      
       spacing();
       ImGui::Checkbox("Preserve discarded textures", &RtxOptions::Get()->keepTexturesForTaggingObject());
       separator();
-
+  
       // set thumbnail size
       {
         constexpr int step = 25;
         int percentage = static_cast<int>(round(100.f * RtxOptions::textureGridThumbnailScale()));
-
+  
         float buttonsize = ImGui::GetFont() ? ImGui::GetFont()->FontSize * 1.3f : 4;
         if (ImGui::Button("-##thumbscale", { buttonsize, buttonsize })) {
           percentage = std::max(25, percentage - step);
@@ -2347,17 +2348,17 @@ namespace dxvk {
         if (ImGui::IsItemHovered()) {
           ImGui::SetTooltipUnformatted(RtxOptions::textureGridThumbnailScaleDescription());
         }
-
+  
         RtxOptions::textureGridThumbnailScaleRef() = static_cast<float>(percentage) / 100.f;
       }
-
+  
       ImGui::Checkbox("Split Texture Category List", &showLegacyTextureGuiObject());
       ImGui::BeginDisabled(!showLegacyTextureGui());
       ImGui::Checkbox("Only Show Assigned Textures in Category Lists", &legacyTextureGuiShowAssignedOnlyObject());
       ImGui::EndDisabled();
-
+  
       separator();
-
+  
       if (showLegacyTextureGui()) {
         ImGui::TextUnformatted(
           "Hover over an object on screen, or an icon in the grid below.\n"
@@ -2368,13 +2369,12 @@ namespace dxvk {
           "Hover over an object on screen, or an icon in the grid below.\n"
           "Left click to open a category selection window.");
       }
-
+  
       spacing();
-
+  
       if (!showLegacyTextureGui()) {
         showTextureSelectionGrid(ctx, Uncategorized, numThumbnailsPerRow, thumbnailSize);
       } else {
-
         auto showLegacyGui = [&](const char* uniqueId, const char* displayName, const char* description) {
           const bool countOnlySelected = legacyTextureGuiShowAssignedOnly() && !(strcmp(uniqueId, Uncategorized) == 0);
           const auto height = calculateTextureCategoryHeight(countOnlySelected, uniqueId, numThumbnailsPerRow, thumbnailSize);
@@ -2396,7 +2396,7 @@ namespace dxvk {
                 // Update last opened category ID if texture category (ImGui::CollapsingHeader) was just toggled open or if ID is empty
                 texture_popup::lastOpenCategoryId = uniqueId;
               }
-
+  
               showTextureSelectionGrid(ctx, uniqueId, numThumbnailsPerRow, thumbnailSize, *height);
             }
           }
@@ -2404,7 +2404,7 @@ namespace dxvk {
             ImGui::PopStyleColor(2);
           }
         };
-
+  
         if (legacyTextureGuiShowAssignedOnly()) {
           showLegacyGui(Uncategorized, "Uncategorized", "Textures that are not assigned to any category");
           spacing();
@@ -2412,31 +2412,35 @@ namespace dxvk {
         for (const RtxTextureOption& category : rtxTextureOptions) {
           showLegacyGui(category.uniqueId, category.displayName, category.textureSetOption->getDescription());
         }
-
+  
         // Check if last saved category was closed this frame
         if (!texture_popup::lastOpenCategoryActive) {
           texture_popup::lastOpenCategoryId.clear();
         }
       }
-
+  
       separator();
+      
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
-
+  
     if (ImGui::BeginTabItem("Step 2: Parameter Tuning", nullptr, tab_item_flags)) {
+      ImGui::PushItemWidth(200);
+      
       spacing();
       ImGui::DragFloat("Scene Unit Scale", &RtxOptions::Get()->sceneScaleObject(), 0.00001f, 0.00001f, FLT_MAX, "%.5f", sliderFlags);
       ImGui::Checkbox("Scene Z-Up", &RtxOptions::Get()->zUpObject());
       ImGui::Checkbox("Scene Left-Handed Coordinate System", &RtxOptions::Get()->leftHandedCoordinateSystemObject());
       fusedWorldViewModeCombo.getKey(&RtxOptions::Get()->fusedWorldViewModeRef());
       ImGui::Separator();
-
+  
       ImGui::DragFloat("Unique Object Search Distance", &RtxOptions::Get()->uniqueObjectDistanceObject(), 0.01f, FLT_MIN, FLT_MAX, "%.3f", sliderFlags);
       ImGui::Separator();
-
+  
       ImGui::DragFloat("Vertex Color Strength", &RtxOptions::Get()->vertexColorStrengthObject(), 0.001f, 0.0f, 1.0f);
       ImGui::Separator();
-
+  
       if (ImGui::CollapsingHeader("Heuristics", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         ImGui::Checkbox("Orthographic Is UI", &D3D9Rtx::orthographicIsUIObject());
@@ -2445,7 +2449,7 @@ namespace dxvk {
         ImGui::Checkbox("Skip Sky Fog Values", &RtxOptions::fogIgnoreSkyObject());
         ImGui::Unindent();
       }
-
+  
       if (ImGui::CollapsingHeader("Texture Parameters", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         ImGui::DragFloat("Force Cutout Alpha", &RtxOptions::Get()->forceCutoutAlphaObject(), 0.01f, 0.0f, 1.0f, "%.3f", sliderFlags);
@@ -2454,7 +2458,7 @@ namespace dxvk {
         ImGui::Checkbox("Enable Multiple Stage Texture Factor Blending", &RtxOptions::enableMultiStageTextureFactorBlendingObject());
         ImGui::Unindent();
       }
-
+  
       if (ImGui::CollapsingHeader("Shader Support (Experimental)", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         ImGui::Checkbox("Capture Vertices from Shader", &D3D9Rtx::useVertexCaptureObject());
@@ -2463,7 +2467,7 @@ namespace dxvk {
         ImGui::Checkbox("Use World Transforms", &D3D9Rtx::useWorldMatricesForShadersObject());
         ImGui::Unindent();
       }
-
+  
       if (ImGui::CollapsingHeader("View Model", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         ImGui::Checkbox("Enable View Model", &RtxOptions::ViewModel::enableObject());
@@ -2473,17 +2477,17 @@ namespace dxvk {
         ImGui::DragFloat("Scale", &RtxOptions::ViewModel::scaleObject(), 0.01f, 0.01f, 2.0f);
         ImGui::Unindent();
       }
-
+  
       if (ImGui::CollapsingHeader("Sky Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         ImGui::DragFloat("Sky Brightness", &RtxOptions::Get()->skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
         ImGui::InputInt("First N Untextured Draw Calls", &RtxOptions::Get()->skyDrawcallIdThresholdObject(), 1, 1, 0);
         ImGui::SliderFloat("Sky Min Z Threshold", &RtxOptions::Get()->skyMinZThresholdObject(), 0.0f, 1.0f);
         skyAutoDetectCombo.getKey(&RtxOptions::Get()->skyAutoDetectObject());
-
+  
         if (ImGui::CollapsingHeader("Advanced", collapsingHeaderClosedFlags)) {
           ImGui::Indent();
-
+  
           ImGui::Checkbox("Reproject Sky to Main Camera", &RtxOptions::skyReprojectToMainCameraSpaceObject());
           {
             ImGui::BeginDisabled(!RtxOptions::skyReprojectToMainCameraSpace());
@@ -2491,28 +2495,28 @@ namespace dxvk {
             ImGui::EndDisabled();
           }
           ImGui::DragFloat("Sky Auto-Detect Unique Camera Search Distance", &RtxOptions::skyAutoDetectUniqueCameraDistanceObject(), 1.0f, 0.1f, 1000.0f);
-
+  
           ImGui::Checkbox("Force HDR sky", &RtxOptions::Get()->skyForceHDRObject());
-
+  
           static const char* exts[] = { "256 (1.5MB vidmem)", "512 (6MB vidmem)", "1024 (24MB vidmem)",
             "2048 (96MB vidmem)", "4096 (384MB vidmem)", "8192 (1.5GB vidmem)" };
-
+  
           static int extIdx;
           extIdx = std::clamp(bit::tzcnt(RtxOptions::Get()->skyProbeSide()), 8u, 13u) - 8;
-
+  
           ImGui::Combo("Sky Probe Extent", &extIdx, exts, IM_ARRAYSIZE(exts));
           RtxOptions::Get()->skyProbeSideRef() = 1 << (extIdx + 8);
-
+  
           ImGui::Unindent();
         }
         ImGui::Unindent();
       }
-
+  
       auto common = ctx->getCommonObjects();
       common->getSceneManager().getLightManager().showImguiSettings();
-
+  
       showMaterialOptions();
-
+  
       if (ImGui::CollapsingHeader("Fog Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         ImGui::PushID("FogInfos");
@@ -2521,29 +2525,29 @@ namespace dxvk {
           ImGui::TextWrapped("In D3D9, every draw call comes with its own fog settings."
             " In Remix pathtracing, all rays need to use the same fog setting."
             " So Remix will choose the earliest valid non-sky fog to use."
-
+  
             "\n\nIn some games, fog can be used to indicate the player is inside some "
             "translucent medium, like being underwater.  In path tracing this is "
             "better represented as starting inside a translucent material.  To "
             "support this, you can copy one or more of the fog hashes listed below, "
             "and specify a translucent replacement material in your mod.usda."
-
+  
             "\n\nThis replacement material should share transmittance and ior properties"
             " with your water material, but does not need any textures set."
-
+  
             "\n\nReplacing a given fog state with a translucent material will disable that "
             "fog."
           );
           ImGui::Unindent();
         }
-
+  
         constexpr static const char* fogModes[] = {
           "D3DFOG_NONE",
           "D3DFOG_EXP",
           "D3DFOG_EXP2",
           "D3DFOG_LINEAR",
         };
-
+  
         {
           const std::lock_guard<std::mutex> lock(g_imguiFogMapMutex);
           for (const auto& pair : g_imguiFogMap) {
@@ -2554,7 +2558,7 @@ namespace dxvk {
             ImGui::Text("Hash: %s%s%s", hashString.c_str(), replaced, usedAsMain);
             const FogState& fog = pair.second;
             ImGui::Indent();
-
+  
             if (ImGui::Button(str::format("Copy hash to clipboard##fog_list", hashString).c_str())) {
               ImGui::SetClipboardText(hashString.c_str());
             }
@@ -2574,12 +2578,13 @@ namespace dxvk {
         ImGui::PopID();
         ImGui::Unindent();
       }
-
+  
       separator();
+      
+      ImGui::PopItemWidth();
       ImGui::EndTabItem();
     }
-
-    ImGui::PopItemWidth();
+  
     ImGui::EndTabBar();
   }
 
