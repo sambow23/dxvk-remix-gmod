@@ -52,15 +52,17 @@ namespace dxvk {
 
   DxvkAdapter::DxvkAdapter(
     const Rc<vk::InstanceFn>& vki,
-          VkPhysicalDevice    handle)
-  : m_vki           (vki),
-    m_handle        (handle) {
+    VkPhysicalDevice handle,
+    const VkPhysicalDeviceProperties* nvidiaProps,
+    const VkPhysicalDeviceIDProperties* nvidiaIdProps)
+  : m_vki(vki),
+    m_handle(handle) {
     this->initHeapAllocInfo();
     this->queryExtensions();
-    this->queryDeviceInfo();
+    this->queryDeviceInfo(nvidiaProps, nvidiaIdProps);
     this->queryDeviceFeatures();
     this->queryDeviceQueues();
-
+  
     m_hasMemoryBudget = m_deviceExtensions.supports(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
   }
 
@@ -858,6 +860,18 @@ namespace dxvk {
     return result;
   }
 
+  void DxvkAdapter::injectDeviceLuid(const uint8_t* luid) {
+    if (luid != nullptr && m_deviceInfo.coreDeviceId.deviceLUIDValid) {
+      // Copy the NVIDIA LUID to this adapter
+      memcpy(m_deviceInfo.coreDeviceId.deviceLUID, luid, VK_LUID_SIZE);
+      
+      // Make sure LUID is valid
+      m_deviceInfo.coreDeviceId.deviceLUIDValid = VK_TRUE;
+      
+      Logger::info(str::format("Injected external LUID into GPU: ", 
+                             m_deviceInfo.core.properties.deviceName));
+    }
+  }
 
   void DxvkAdapter::notifyHeapMemoryAlloc(
           uint32_t            heap,
@@ -944,82 +958,120 @@ namespace dxvk {
   }
 
 
-  void DxvkAdapter::queryDeviceInfo() {
+  void DxvkAdapter::queryDeviceInfo(
+    const VkPhysicalDeviceProperties* nvidiaProps,
+    const VkPhysicalDeviceIDProperties* nvidiaIdProps) {
     m_deviceInfo = DxvkDeviceInfo();
     m_deviceInfo.core.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     m_deviceInfo.core.pNext = nullptr;
-
+    
     // Query info now so that we have basic device properties available
     m_vki->vkGetPhysicalDeviceProperties2(m_handle, &m_deviceInfo.core);
-
+    
+    // Store original vendor ID
+    m_originalVendorId = m_deviceInfo.core.properties.vendorID;
+    
+    // Check if this is an AMD GPU that needs spoofing
+    if (m_deviceInfo.core.properties.vendorID == 0x1002) { // AMD vendor ID
+      Logger::info(str::format("Spoofing AMD GPU for HDRemix compatibility: ", 
+                             m_deviceInfo.core.properties.deviceName));
+      
+      // Create a name that indicates this is a spoofed GPU
+      const std::string originalDeviceName = m_deviceInfo.core.properties.deviceName;
+      std::string spoofedName = "NVIDIA GeForce RTX (AMD " + std::string(originalDeviceName) + ")";
+      
+      // Use NVIDIA properties
+      m_deviceInfo.core.properties.vendorID = 0x10DE; // NVIDIA vendor ID
+      m_deviceInfo.core.properties.deviceID = 0x1E82; // RTX 2080
+      m_deviceInfo.core.properties.driverVersion = VK_MAKE_VERSION(572, 70, 0); // NVIDIA 572.70.0
+      
+      strncpy(m_deviceInfo.core.properties.deviceName, spoofedName.c_str(), 
+              VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
+      m_deviceInfo.core.properties.deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = '\0';
+    }
+  
     m_deviceInfo.coreDeviceId.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
     m_deviceInfo.coreDeviceId.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.coreDeviceId);
-
+  
     m_deviceInfo.coreSubgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
     m_deviceInfo.coreSubgroup.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.coreSubgroup);
-
+  
     if (m_deviceExtensions.supports(VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME)) {
       m_deviceInfo.extConservativeRasterization.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONSERVATIVE_RASTERIZATION_PROPERTIES_EXT;
       m_deviceInfo.extConservativeRasterization.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extConservativeRasterization);
     }
-
+  
     if (m_deviceExtensions.supports(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME)) {
       m_deviceInfo.extCustomBorderColor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
       m_deviceInfo.extCustomBorderColor.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extCustomBorderColor);
     }
-
+  
     if (m_deviceExtensions.supports(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
       m_deviceInfo.extRobustness2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_PROPERTIES_EXT;
       m_deviceInfo.extRobustness2.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extRobustness2);
     }
-
+  
     if (m_deviceExtensions.supports(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME)) {
       m_deviceInfo.extTransformFeedback.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT;
       m_deviceInfo.extTransformFeedback.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extTransformFeedback);
     }
-
+  
     if (m_deviceExtensions.supports(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {
       m_deviceInfo.extVertexAttributeDivisor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES_EXT;
       m_deviceInfo.extVertexAttributeDivisor.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extVertexAttributeDivisor);
     }
-
+  
     if (m_deviceExtensions.supports(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME)) {
       m_deviceInfo.khrDepthStencilResolve.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES_KHR;
       m_deviceInfo.khrDepthStencilResolve.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.khrDepthStencilResolve);
     }
-
+  
     if (m_deviceExtensions.supports(VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME)) {
       m_deviceInfo.khrDeviceDriverProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES_KHR;
       m_deviceInfo.khrDeviceDriverProperties.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.khrDeviceDriverProperties);
     }
-
+  
     if (m_deviceExtensions.supports(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME)) {
       m_deviceInfo.khrShaderFloatControls.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES_KHR;
       m_deviceInfo.khrShaderFloatControls.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.khrShaderFloatControls);
     }
-
+  
     if (m_deviceExtensions.supports(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
         m_deviceInfo.khrDeviceRayTracingPipelineProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
         m_deviceInfo.khrDeviceRayTracingPipelineProperties.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.khrDeviceRayTracingPipelineProperties);
     }
-
+  
     if (m_deviceExtensions.supports(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)) {
       m_deviceInfo.khrDeviceAccelerationStructureProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
       m_deviceInfo.khrDeviceAccelerationStructureProperties.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.khrDeviceAccelerationStructureProperties);
     }
-
+  
     if (m_deviceExtensions.supports(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME)) {
       m_deviceInfo.extOpacityMicromapProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_PROPERTIES_EXT;
       m_deviceInfo.extOpacityMicromapProperties.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extOpacityMicromapProperties);
     }
-
+  
     if (m_deviceExtensions.supports(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME)) {
       m_deviceInfo.nvRayTracingInvocationReorderProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_PROPERTIES_NV;
       m_deviceInfo.nvRayTracingInvocationReorderProperties.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.nvRayTracingInvocationReorderProperties);
     }
-
-    // Query full device properties for all enabled extensions
+  
     m_vki->vkGetPhysicalDeviceProperties2(m_handle, &m_deviceInfo.core);
+  
+    // If this is an AMD GPU, generate a fake LUID that will satisfy HDRemix
+    if (m_originalVendorId == 0x1002 && m_deviceInfo.coreDeviceId.deviceLUIDValid) {
+      // Create a consistent LUID that HDRemix will accept
+      Logger::info("Creating fake NVIDIA LUID for HDRemix compatibility");
+      
+      // Use a fixed LUID pattern that should be stable across runs
+      uint8_t fakeLuid[VK_LUID_SIZE] = {
+        0xDE, 0x10, // First bytes from NVIDIA vendor ID
+        0x82, 0x1E, // Bytes from RTX 2080 device ID
+        0x01, 0x23, 0x45, 0x67, // Fixed pattern
+      };
+      
+      memcpy(m_deviceInfo.coreDeviceId.deviceLUID, fakeLuid, VK_LUID_SIZE);
+    }
     
     // Some drivers reports the driver version in a slightly different format
     switch (m_deviceInfo.khrDeviceDriverProperties.driverID) {
@@ -1029,13 +1081,13 @@ namespace dxvk {
           (m_deviceInfo.core.properties.driverVersion >> 14) & 0x0ff,
           (m_deviceInfo.core.properties.driverVersion >>  6) & 0x0ff);
         break;
-
+  
       case VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS:
         m_deviceInfo.core.properties.driverVersion = VK_MAKE_VERSION(
           m_deviceInfo.core.properties.driverVersion >> 14,
           m_deviceInfo.core.properties.driverVersion & 0x3fff, 0);
         break;
-
+  
       default:;
     }
   }

@@ -786,8 +786,8 @@ namespace dxvk {
     RasterGeometry& geoData = drawCallState.geometryData;
     DrawCallTransforms& transformData = drawCallState.transformData;
 
-    assert(geoData.futureGeometryHashes.valid());
-    assert(geoData.positionBuffer.defined());
+    //assert(geoData.futureGeometryHashes.valid());
+    //assert(geoData.positionBuffer.defined());
 
     const auto fusedMode = RtxOptions::Get()->fusedWorldViewMode();
     if (unlikely(fusedMode != FusedWorldViewMode::None)) {

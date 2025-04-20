@@ -42,6 +42,14 @@ namespace dxvk {
      */
     bool testAdapter(
       const VkPhysicalDeviceProperties& properties) const;
+
+    bool isMatchingDeviceName() const {
+      return m_flags.test(DxvkDeviceFilterFlag::MatchDeviceName);
+    }
+
+    const std::string& getMatchDeviceName() const {
+      return m_matchDeviceName;
+    }
     
   private:
     

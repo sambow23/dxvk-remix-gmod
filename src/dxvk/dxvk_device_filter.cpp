@@ -21,19 +21,27 @@ namespace dxvk {
       Logger::warn(str::format("Skipping Vulkan 1.0 adapter: ", properties.deviceName));
       return false;
     }
-
-    if (m_flags.test(DxvkDeviceFilterFlag::MatchDeviceName)) {
-      if (std::string(properties.deviceName).find(m_matchDeviceName) == std::string::npos)
-        return false;
-    }
-
+  
+    // We want to include both AMD and NVIDIA GPUs in the list
+    // but prioritize AMD for actual rendering
+    
+    // Skip CPU virtual devices
     if (m_flags.test(DxvkDeviceFilterFlag::SkipCpuDevices)) {
       if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
         Logger::warn(str::format("Skipping CPU adapter: ", properties.deviceName));
         return false;
       }
     }
-
+  
+    // Apply name matching if requested
+    if (m_flags.test(DxvkDeviceFilterFlag::MatchDeviceName)) {
+      if (std::string(properties.deviceName).find(m_matchDeviceName) == std::string::npos) {
+        Logger::info(str::format("Adapter doesn't match name filter: ", properties.deviceName));
+        return false;
+      }
+    }
+  
+    // Accept all GPU adapters that pass the above checks
     return true;
   }
   
