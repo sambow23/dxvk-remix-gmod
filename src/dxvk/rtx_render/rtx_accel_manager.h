@@ -56,6 +56,7 @@ class AccelManager : public CommonDeviceObject {
     VkGeometryInstanceFlagsKHR instanceFlags = 0;
     bool usesUnorderedApproximations = false;
     uint32_t reorderedSurfacesOffset = UINT32_MAX;
+    bool hasOmmInstances = false;
     
     // Tries to add a geometry instance to the bucket. The addition is successful if either:
     //   a) the bucket is empty,
@@ -147,6 +148,8 @@ private:
   void internalBuildTlas(Rc<DxvkContext> ctx, size_t& totalScratchSize);
 
   void buildParticleSurfaceMapping(std::vector<uint32_t>& surfaceIndexMapping);
+
+  bool validateUpdateMode(const VkAccelerationStructureBuildGeometryInfoKHR& oldInfo, const VkAccelerationStructureBuildGeometryInfoKHR& newInfo);
 
   std::vector<RtInstance*> m_reorderedSurfaces;
   std::vector<uint32_t> m_reorderedSurfacesFirstIndexOffset;
