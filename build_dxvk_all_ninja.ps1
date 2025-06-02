@@ -22,7 +22,7 @@
 
 .   ".\build_common.ps1"
 
-$BuildFlavours = @("debug","debugoptimized","release")
+$BuildFlavours = @("release")
 $BuildSubDirs = @("_Comp64Debug","_Comp64DebugOptimized","_Comp64Release")
 
 For ($i=0; $i -lt $BuildFlavours.Length; $i++) {
