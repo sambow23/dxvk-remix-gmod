@@ -228,7 +228,7 @@ namespace dxvk {
     boilingFilterRemoveReservoirThreshold.set(62.f);
 
     // Weaken specular light at corners to reduce noise
-    useVirtualSample.set(true);
+    useVirtualSample.set(false);
     virtualSampleMaxDistanceRatio.set(0.0f);
 
     // Improve performance when stealing samples

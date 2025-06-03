@@ -100,7 +100,7 @@ namespace dxvk {
     // contribution is hit. Then the hit T will be used to extend the 1st indirect ray, whose extended end point will be the
     // virtual sample's position. If the significant path vertex has high specular contribution, its distance to light source
     // will also get accumulated.
-    RTX_OPTION("rtx.restirGI", bool, useVirtualSample, true, "Uses virtual position for samples from highly specular surfaces.");
+    RTX_OPTION("rtx.restirGI", bool, useVirtualSample, false, "Uses virtual position for samples from highly specular surfaces.");
     RTX_OPTION("rtx.restirGI", float, virtualSampleLuminanceThreshold, 2.0, "The last path vertex with luminance greater than 2 times of the previous accumulated radiance will get virtualized. Higher values tend to keep the first path vertex with non-zero contribution.");
     RTX_OPTION("rtx.restirGI", float, virtualSampleRoughnessThreshold, 0.2, R"(Surface with roughness under this threshold is considered to be highly specular, i.e. a "mirror".)");
     RTX_OPTION("rtx.restirGI", float, virtualSampleSpecularThreshold, 0.5, "If a highly specular path vertex's direct specular light portion is higher than this. Its distance to the light source will get accumulated.");
