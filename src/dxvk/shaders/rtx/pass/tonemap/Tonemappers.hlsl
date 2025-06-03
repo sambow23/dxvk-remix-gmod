@@ -2,6 +2,8 @@
 // The file is received from: https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
 // SWIPAT filed under: https://nvbugspro.nvidia.com/bug/5182738
 
+// AgX implementation based off MrLixm's implementation: https://github.com/MrLixm/AgXc
+
 //=================================================================================================
 //
 //  Baking Lab
@@ -80,7 +82,7 @@ static const float3x3 AgX_OutputTransform =
     {-0.0529716355144438, -0.0980434501171241, 1.15107367264116}
 };
 
-// AgX curve implementation - more accurate polynomial
+// AgX curve implementation
 float agx_default_contrast_approx(float x) {
     float x2 = x * x;
     float x4 = x2 * x2;

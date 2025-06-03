@@ -24,7 +24,7 @@
 #include "rtx/pass/tonemap/tonemapping.h"
 #include "rtx/utility/color.slangh"
 
-#include "ACES.hlsl"
+#include "Tonemappers.hlsl"
 
 static const uint kHistogramFixedPointScale = 0x100;
 
