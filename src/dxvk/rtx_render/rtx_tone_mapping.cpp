@@ -109,7 +109,14 @@ namespace dxvk {
     ImGui::Checkbox("Tonemapping Enabled", &tonemappingEnabledObject());
     if (tonemappingEnabled()) {
       ImGui::Indent();
-      ImGui::Checkbox("Finalize With ACES", &finalizeWithACESObject());
+      
+      // Tone mapping operator selection
+      const char* operators[] = { "Standard", "ACES", "AgX" };
+      int currentOp = useAgX() ? 2 : (finalizeWithACES() ? 1 : 0);
+      if (ImGui::Combo("Tone Mapping Operator", &currentOp, operators, IM_ARRAYSIZE(operators))) {
+        finalizeWithACES.set(currentOp == 1);
+        useAgX.set(currentOp == 2);
+      }
 
       ImGui::Combo("Dither Mode", &ditherModeObject(), "Disabled\0Spatial\0Spatial + Temporal\0");
 
@@ -254,6 +261,7 @@ namespace dxvk {
     pushArgs.colorGradingEnabled = colorGradingEnabled();
     pushArgs.enableAutoExposure = autoExposureEnabled;
     pushArgs.finalizeWithACES = finalizeWithACES();
+    pushArgs.useAgX = useAgX();
     pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
 
     // Tonemap args

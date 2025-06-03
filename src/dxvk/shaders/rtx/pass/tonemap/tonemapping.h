@@ -121,6 +121,7 @@ struct ToneMappingApplyToneMappingArgs {
   uint ditherMode;
   uint frameIndex;
   uint useLegacyACES;
+  uint useAgX;
   uint pad1;
 };
 

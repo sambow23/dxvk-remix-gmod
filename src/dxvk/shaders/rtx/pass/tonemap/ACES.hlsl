@@ -60,3 +60,42 @@ float3 ACESFitted(float3 color, bool suppressBlackLevelClamp)
 
     return color;
 }
+
+// AgX tone mapping implementation based on https://github.com/sobotka/AgX
+// Implementation follows Troy Sobotka's AgX 
+float3 AgXLog2(float3 x) {
+    return log2(max(x, float3(1e-10, 1e-10, 1e-10)));
+}
+
+float3 AgXPow2(float3 x) {
+    return pow(2.0, x);
+}
+
+float3 AgXLook(float3 x) {
+    const float3 a = float3(0.856627153315983, 0.856627153315983, 0.856627153315983);
+    const float3 b = float3(0.047996709891013, 0.047996709891013, 0.047996709891013);
+    const float3 c = float3(0.895906626106349, 0.895906626106349, 0.895906626106349);
+    const float3 d = float3(0.266839800085409, 0.266839800085409, 0.266839800085409);
+    const float3 e = float3(0.358254953079327, 0.358254953079327, 0.358254953079327);
+    const float3 f = float3(0.137692104802882, 0.137692104802882, 0.137692104802882);
+    
+    return (a * x + b) / (c * x + d) + e * x + f;
+}
+
+float3 AgXToneMapping(float3 color) {
+    // AgX constants
+    const float AgXMinEv = -12.47393;
+    const float AgXMaxEv = 4.026069;
+    
+    // Convert to log2 space
+    float3 logColor = AgXLog2(color);
+    
+    // Apply AgX scale and offset in log space
+    logColor = (logColor - AgXMinEv) / (AgXMaxEv - AgXMinEv);
+    
+    // Apply the AgX look transform
+    logColor = AgXLook(logColor);
+    
+    // Clamp to [0, 1]
+    return saturate(logColor);
+}

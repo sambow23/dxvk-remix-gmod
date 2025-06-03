@@ -106,6 +106,7 @@ struct FinalCombineArgs
   uint ditherMode;
   uint frameIndex;
   uint useLegacyACES;
+  uint useAgX;
   uint pad2;
 };
 

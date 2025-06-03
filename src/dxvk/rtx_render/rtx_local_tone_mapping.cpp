@@ -133,7 +133,15 @@ namespace dxvk {
     ImGui::DragInt("Display Mip", &displayMipObject(), 0.06f, 0, 16);
     ImGui::Checkbox("Boost Local Contrast", &boostLocalContrastObject());
     ImGui::Checkbox("Use Gaussian Kernel", &useGaussianObject());
-    ImGui::Checkbox("Finalize With ACES", &finalizeWithACESObject());
+    
+    // Tone mapping operator selection
+    const char* operators[] = { "Standard", "ACES", "AgX" };
+    int currentOp = useAgX() ? 2 : (finalizeWithACES() ? 1 : 0);
+    if (ImGui::Combo("Tone Mapping Operator", &currentOp, operators, IM_ARRAYSIZE(operators))) {
+      finalizeWithACES.set(currentOp == 1);
+      useAgX.set(currentOp == 2);
+    }
+    
     ImGui::DragFloat("Exposure Level", &exposureObject(), 0.01f, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::DragFloat("Shadow Level", &shadowsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::DragFloat("Highlight Level", &highlightsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -277,6 +285,7 @@ namespace dxvk {
       pushArgs.enableAutoExposure = enableAutoExposure;
       pushArgs.performSRGBConversion = performSRGBConversion;
       pushArgs.finalizeWithACES = finalizeWithACES();
+      pushArgs.useAgX = useAgX();
       pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
       switch (ditherMode()) {
       case DitherMode::None: pushArgs.ditherMode = ditherModeNone; break;
