@@ -126,6 +126,11 @@ struct ToneMappingApplyToneMappingArgs {
   float agxGamma;
   float agxSaturation;
   float agxExposureOffset;
+  uint agxLook;
+  
+  float agxContrast;
+  float agxSlope;
+  float agxPower;
   uint pad1;
 };
 

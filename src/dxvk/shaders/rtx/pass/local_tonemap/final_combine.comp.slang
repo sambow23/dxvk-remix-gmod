@@ -107,7 +107,8 @@ void main(uint2 threadId : SV_DispatchThreadID)
   vec3 texelFinal = originalColor.xyz * finalMultiplier;
   if (cb.finalizeWithACES || cb.useAgX)
   {
-    texelFinal = applyToneMapping(texelFinal, cb.useAgX, cb.useLegacyACES, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset);
+    texelFinal = applyToneMapping(texelFinal, cb.useAgX, cb.useLegacyACES, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset,
+                                  cb.agxLook, cb.agxContrast, cb.agxSlope, cb.agxPower);
   }
   if (cb.performSRGBConversion)
   {
