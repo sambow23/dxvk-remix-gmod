@@ -76,6 +76,9 @@ namespace dxvk {
     RTX_OPTION("rtx.localtonemap", bool, useGaussian, true, "Uses gaussian kernel to generate tone map pyramid.");
     RTX_OPTION("rtx.localtonemap", bool, finalizeWithACES, true, "Applies ACES tone mapping on final result.");
     RTX_OPTION("rtx.localtonemap", bool, useAgX, false, "Applies AgX tone mapping instead of ACES on final result.");
+    RTX_OPTION("rtx.localtonemap", float, agxGamma, 0.9f, "AgX gamma adjustment for contrast control. Lower values increase contrast. Range [0.5, 1.5].");
+    RTX_OPTION("rtx.localtonemap", float, agxSaturation, 1.1f, "AgX saturation multiplier. Higher values increase color saturation. Range [0.5, 2.0].");
+    RTX_OPTION("rtx.localtonemap", float, agxExposureOffset, 0.0f, "AgX exposure offset in EV stops. Positive values brighten the image. Range [-2.0, 2.0].");
     RTX_OPTION("rtx.localtonemap", float, exposure, 0.75, "Exposure factor applied on average exposure.");
     RTX_OPTION("rtx.localtonemap", float, shadows, 2.0, "Shadow area strength. Higher values cause brighter shadows.");
     RTX_OPTION("rtx.localtonemap", float, highlights, 4.0, "Highlight area strength. Higher values cause darker highlight.");

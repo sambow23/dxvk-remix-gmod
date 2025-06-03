@@ -61,41 +61,41 @@ float3 ACESFitted(float3 color, bool suppressBlackLevelClamp)
     return color;
 }
 
-// AgX tone mapping implementation based on https://github.com/sobotka/AgX
-// Implementation follows Troy Sobotka's AgX 
-float3 AgXLog2(float3 x) {
-    return log2(max(x, float3(1e-10, 1e-10, 1e-10)));
-}
+// AgX tone mapping implementation
+// Based on the reference implementation with proper log-space handling
 
-float3 AgXPow2(float3 x) {
-    return pow(2.0, x);
-}
-
-float3 AgXLook(float3 x) {
-    const float3 a = float3(0.856627153315983, 0.856627153315983, 0.856627153315983);
-    const float3 b = float3(0.047996709891013, 0.047996709891013, 0.047996709891013);
-    const float3 c = float3(0.895906626106349, 0.895906626106349, 0.895906626106349);
-    const float3 d = float3(0.266839800085409, 0.266839800085409, 0.266839800085409);
-    const float3 e = float3(0.358254953079327, 0.358254953079327, 0.358254953079327);
-    const float3 f = float3(0.137692104802882, 0.137692104802882, 0.137692104802882);
+float3 AgXToneMapping(float3 color, float gamma, float saturation, float exposureOffset) {
+    // AgX constants from the reference implementation
+    const float AgX_min_ev = -12.47393;
+    const float AgX_max_ev = 4.026069;
     
-    return (a * x + b) / (c * x + d) + e * x + f;
-}
-
-float3 AgXToneMapping(float3 color) {
-    // AgX constants
-    const float AgXMinEv = -12.47393;
-    const float AgXMaxEv = 4.026069;
+    // Apply exposure offset
+    color = color * pow(2.0, exposureOffset);
     
-    // Convert to log2 space
-    float3 logColor = AgXLog2(color);
+    // Convert to log2 space, avoiding log(0)
+    float3 logColor = log2(max(color, 1e-10));
     
-    // Apply AgX scale and offset in log space
-    logColor = (logColor - AgXMinEv) / (AgXMaxEv - AgXMinEv);
+    // Normalize to [0, 1] range
+    logColor = (logColor - AgX_min_ev) / (AgX_max_ev - AgX_min_ev);
+    logColor = saturate(logColor);
     
-    // Apply the AgX look transform
-    logColor = AgXLook(logColor);
+    // Apply the AgX curve with improved contrast
+    float3 x = logColor;
+    float3 x2 = x * x;
+    float3 x3 = x2 * x;
+    float3 x4 = x2 * x2;
+    float3 x5 = x4 * x;
+    float3 x6 = x3 * x3;
     
-    // Clamp to [0, 1]
-    return saturate(logColor);
+    // Enhanced AgX curve with better contrast
+    float3 result = -0.0023 + 0.1191 * x + 0.4298 * x2 - 6.868 * x3 + 31.96 * x4 - 40.14 * x5 + 15.5 * x6;
+    
+    // Apply gamma adjustment for contrast control
+    result = pow(saturate(result), gamma);
+    
+    // Apply saturation adjustment
+    float luma = dot(result, float3(0.2126, 0.7152, 0.0722));
+    result = lerp(float3(luma, luma, luma), result, saturation);
+    
+    return saturate(result);
 }

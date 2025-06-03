@@ -107,6 +107,10 @@ struct FinalCombineArgs
   uint frameIndex;
   uint useLegacyACES;
   uint useAgX;
+  
+  float agxGamma;
+  float agxSaturation;
+  float agxExposureOffset;
   uint pad2;
 };
 

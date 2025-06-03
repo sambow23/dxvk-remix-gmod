@@ -142,6 +142,15 @@ namespace dxvk {
       useAgX.set(currentOp == 2);
     }
     
+    // AgX-specific controls (only show when AgX is selected)
+    if (useAgX()) {
+      ImGui::Indent();
+      ImGui::DragFloat("AgX Gamma", &agxGammaObject(), 0.01f, 0.5f, 1.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::DragFloat("AgX Saturation", &agxSaturationObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::DragFloat("AgX Exposure Offset", &agxExposureOffsetObject(), 0.01f, -2.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::Unindent();
+    }
+    
     ImGui::DragFloat("Exposure Level", &exposureObject(), 0.01f, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::DragFloat("Shadow Level", &shadowsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::DragFloat("Highlight Level", &highlightsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -287,6 +296,12 @@ namespace dxvk {
       pushArgs.finalizeWithACES = finalizeWithACES();
       pushArgs.useAgX = useAgX();
       pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
+      
+      // AgX parameters
+      pushArgs.agxGamma = agxGamma();
+      pushArgs.agxSaturation = agxSaturation();
+      pushArgs.agxExposureOffset = agxExposureOffset();
+      
       switch (ditherMode()) {
       case DitherMode::None: pushArgs.ditherMode = ditherModeNone; break;
       case DitherMode::Spatial: pushArgs.ditherMode = ditherModeSpatialOnly; break;

@@ -71,11 +71,11 @@ float3 ACESFilm(float3 color, bool useLegacyACES, bool suppressBlackLevelClamp =
 }
 
 // Unified tone mapping function that handles ACES, AgX, or no tonemapping
-float3 applyToneMapping(float3 color, bool useAgX, bool useLegacyACES, bool suppressBlackLevelClamp = false)
+float3 applyToneMapping(float3 color, bool useAgX, bool useLegacyACES, float agxGamma = 0.9, float agxSaturation = 1.1, float agxExposureOffset = 0.0, bool suppressBlackLevelClamp = false)
 {
   if (useAgX)
   {
-    return AgXToneMapping(color);
+    return AgXToneMapping(color, agxGamma, agxSaturation, agxExposureOffset);
   }
   return ACESFilm(color, useLegacyACES, suppressBlackLevelClamp);
 }

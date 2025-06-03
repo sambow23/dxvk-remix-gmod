@@ -109,6 +109,9 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap", bool,  tuningMode, false, "A flag to enable a debug visualization to tune the tonemapping exposure curve with, as well as exposing parameters for tuning the tonemapping in the UI.");
     RTX_OPTION("rtx.tonemap", bool,  finalizeWithACES, false, "A flag to enable applying a final pass of ACES tonemapping to the tonemapped result.");
     RTX_OPTION("rtx.tonemap", bool,  useAgX, false, "A flag to enable AgX tonemapping instead of ACES or standard tonemapping.");
+    RTX_OPTION("rtx.tonemap", float, agxGamma, 0.9f, "AgX gamma adjustment for contrast control. Lower values increase contrast. Range [0.5, 1.5].");
+    RTX_OPTION("rtx.tonemap", float, agxSaturation, 1.1f, "AgX saturation multiplier. Higher values increase color saturation. Range [0.5, 2.0].");
+    RTX_OPTION("rtx.tonemap", float, agxExposureOffset, 0.0f, "AgX exposure offset in EV stops. Positive values brighten the image. Range [-2.0, 2.0].");
     RTX_OPTION("rtx.tonemap", float, dynamicRange, 15.f, "Range [0, inf). Without further adjustments, the tone curve will try to fit the entire luminance of the scene into the range [-dynamicRange, 0] in linear photographic stops. Higher values adjust for ambient monitor lighting; perfect conditions -> 17.587 stops.");
     RTX_OPTION("rtx.tonemap", float, shadowMinSlope, 0.f, "Range [0, inf). Forces the tone curve below a linear value of 0.18 to have at least this slope, making the tone darker.");
     RTX_OPTION("rtx.tonemap", float, shadowContrast, 0.f, "Range [0, inf). Additional gamma power to apply to the tone of the tone curve below shadowContrastEnd.");

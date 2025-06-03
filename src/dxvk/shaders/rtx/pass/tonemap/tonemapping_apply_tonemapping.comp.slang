@@ -133,7 +133,7 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
       
       if (cb.finalizeWithACES || cb.useAgX)
       {
-        color = applyToneMapping(color, cb.useAgX, cb.useLegacyACES);
+        color = applyToneMapping(color, cb.useAgX, cb.useLegacyACES, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset);
       }
     } 
     else
