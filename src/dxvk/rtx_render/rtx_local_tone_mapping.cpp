@@ -145,7 +145,7 @@ namespace dxvk {
     // AgX-specific controls (only show when AgX is selected)
     if (useAgX()) {
       ImGui::Indent();
-      ImGui::DragFloat("AgX Gamma", &agxGammaObject(), 0.01f, 0.5f, 1.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::DragFloat("AgX Gamma", &agxGammaObject(), 0.01f, 0.5f, 3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::DragFloat("AgX Saturation", &agxSaturationObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::DragFloat("AgX Exposure Offset", &agxExposureOffsetObject(), 0.01f, -2.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::Unindent();
