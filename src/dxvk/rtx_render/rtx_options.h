@@ -39,6 +39,7 @@
 #include "rtx_pathtracer_integrate_direct.h"
 #include "rtx_pathtracer_integrate_indirect.h"
 #include "rtx_dlss.h"
+#include "rtx_fsr3.h"
 #include "rtx_materials.h"
 #include "rtx/pass/material_args.h"
 #include "rtx_option.h"
@@ -482,6 +483,7 @@ namespace dxvk {
                "Full list of key names available in `src/util/util_keybind.h`.");
 
     RTX_OPTION_ENV("rtx", DLSSProfile, qualityDLSS, DLSSProfile::Auto, "RTX_QUALITY_DLSS", "Adjusts internal DLSS scaling factor, trades quality for performance.");
+    RTX_OPTION_ENV("rtx", FSR3Profile, qualityFSR3, FSR3Profile::Auto, "RTX_QUALITY_FSR3", "Adjusts internal FSR3 scaling factor, trades quality for performance.");
     // Note: All ray tracing modes depend on the rtx.raytraceModePreset option as they may be overridden by automatic defaults for a specific vendor if the preset is set to Auto. Set
     // to Custom to ensure these settings are not overridden.
     //RenderPassVolumeIntegrateRaytraceMode renderPassVolumeIntegrateRaytraceMode = RenderPassVolumeIntegrateRaytraceMode::RayQuery;

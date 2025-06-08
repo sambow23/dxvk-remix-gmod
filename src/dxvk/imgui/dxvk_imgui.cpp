@@ -330,6 +330,7 @@ namespace dxvk {
       {UpscalerType::None, "None"},
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
+      {UpscalerType::FSR3, "FSR3"},
   } });
 
   static auto upscalerDLSSCombo = ImGui::ComboWithKey<UpscalerType>(
@@ -339,6 +340,7 @@ namespace dxvk {
       {UpscalerType::DLSS, "DLSS"},
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
+      {UpscalerType::FSR3, "FSR3"},
   } });
 
   ImGui::ComboWithKey<DlssPreset> dlssPresetCombo{
@@ -380,6 +382,18 @@ namespace dxvk {
         {TaauPreset::Balanced, "Balanced"},
         {TaauPreset::Quality, "Quality"},
         {TaauPreset::Fullscreen, "Fullscreen"},
+    } }
+  };
+
+  ImGui::ComboWithKey<FSR3Profile> fsr3ProfileCombo{
+    "FSR3 Mode",
+    ImGui::ComboWithKey<FSR3Profile>::ComboEntries{ {
+        {FSR3Profile::UltraPerf, "Ultra Performance"},
+        {FSR3Profile::MaxPerf, "Performance"},
+        {FSR3Profile::Balanced, "Balanced"},
+        {FSR3Profile::MaxQuality, "Quality"},
+        {FSR3Profile::FullResolution, "Full Resolution"},
+        {FSR3Profile::Auto, "Auto"},
     } }
   };
 
@@ -1344,6 +1358,15 @@ namespace dxvk {
           auto resolutionScale = RtxOptions::resolutionScale();
 
           ImGui::TextWrapped(str::format("TAA-U Resolution Scale: ", resolutionScale).c_str());
+
+          break;
+        }
+        case UpscalerType::FSR3: {
+          m_userGraphicsSettingChanged |= fsr3ProfileCombo.getKey(&RtxOptions::qualityFSR3Object());
+
+          // Display FSR3 Upscaling Information
+          auto resolutionScale = RtxOptions::resolutionScale();
+          ImGui::TextWrapped(str::format("FSR3 Resolution Scale: ", resolutionScale).c_str());
 
           break;
         }
@@ -3081,6 +3104,9 @@ namespace dxvk {
         ImGui::SliderFloat("Sharpness", &ctx->getCommonObjects()->metaNIS().m_sharpness, 0.1f, 1.0f);
         ImGui::Checkbox("Use FP16", &ctx->getCommonObjects()->metaNIS().m_useFp16);
       } else if (RtxOptions::upscalerType() == UpscalerType::TAAU) {
+        ImGui::SliderFloat("Resolution scale", &RtxOptions::resolutionScaleObject(), 0.5f, 1.0f);
+      } else if (RtxOptions::upscalerType() == UpscalerType::FSR3) {
+        fsr3ProfileCombo.getKey(&RtxOptions::qualityFSR3Object());
         ImGui::SliderFloat("Resolution scale", &RtxOptions::resolutionScaleObject(), 0.5f, 1.0f);
       }
 
