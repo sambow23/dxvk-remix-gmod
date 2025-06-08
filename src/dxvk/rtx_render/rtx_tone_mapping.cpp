@@ -114,8 +114,8 @@ namespace dxvk {
       const char* operators[] = { "Standard", "ACES", "AgX" };
       int currentOp = useAgX() ? 2 : (finalizeWithACES() ? 1 : 0);
       if (ImGui::Combo("Tone Mapping Operator", &currentOp, operators, IM_ARRAYSIZE(operators))) {
-        finalizeWithACES.set(currentOp == 1);
-        useAgX.set(currentOp == 2);
+        finalizeWithACES.setDeferred(currentOp == 1);
+        useAgX.setDeferred(currentOp == 2);
       }
 
       // AgX-specific controls (only show when AgX is selected)
