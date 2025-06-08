@@ -150,7 +150,7 @@ namespace dxvk {
     if (m_bTriggerCapture) {
       m_bTriggerCapture = false;
       if(isIdle()) {
-        if (RtxOptions::Get()->getEnableAnyReplacements() && m_sceneManager.areAllReplacementsLoaded()) {
+        if (RtxOptions::getEnableAnyReplacements() && m_sceneManager.areAllReplacementsLoaded()) {
           Logger::warn("[GameCapturer] Cannot begin capture when replacement assets are enabled/loaded.");
         } else if (m_state.has<State::Capturing>()) {
           Logger::warn("[GameCapturer] Cannot begin new capture, one currently in progress.");
@@ -247,8 +247,8 @@ namespace dxvk {
       if (capCamera.proj.bInv) {
         // Check if the up vector in view matrix is upside down
         const auto& up = viewToWorld[1].xyz();
-        if ((!RtxOptions::Get()->isZUp() && dot(up, Vector3d(0.0, 1.0, 0.0)) < 0.0) ||
-            (RtxOptions::Get()->isZUp() && dot(up, Vector3d(0.0, 0.0, 1.0)) < 0.0)) {
+        if ((!RtxOptions::zUp() && dot(up, Vector3d(0.0, 1.0, 0.0)) < 0.0) ||
+            (RtxOptions::zUp() && dot(up, Vector3d(0.0, 0.0, 1.0)) < 0.0)) {
           capCamera.view.bInv = true;
         }
       }
@@ -444,7 +444,7 @@ namespace dxvk {
     const BlasEntry* pBlas = rtInstance.getBlas();
     assert(pBlas != nullptr);
     const XXH64_hash_t matHash = rtInstance.getMaterialDataHash();
-    const XXH64_hash_t meshHash = pBlas->input.getHash(RtxOptions::Get()->GeometryAssetHashRule);
+    const XXH64_hash_t meshHash = pBlas->input.getHash(RtxOptions::geometryAssetHashRule());
     assert(meshHash != 0);
 
     const LegacyMaterialData& material = pBlas->getMaterialData(matHash);
@@ -619,18 +619,18 @@ namespace dxvk {
       OriginCalc originCalc;
       for (size_t idx = 0; idx < numVertices; ++idx) {
         pxr::GfVec3f pos = *reinterpret_cast<const pxr::GfVec3f*>(&pVkPosBuf[idx * positionStride]);
-        if(m_correctBakedTransforms) {
+        if(correctBakedTransforms()) {
           originCalc.compareAndSwap(pos);
         }
         positions.push_back(pos);
       }
-      if(m_correctBakedTransforms) {
+      if(correctBakedTransforms()) {
         pMesh->originCalc.compareAndSwap(originCalc);
       }
       assert(positions.size() > 0);
       // Create comparison function that returns float
       static auto positionsDifferentEnough = [](const pxr::GfVec3f& a, const pxr::GfVec3f& b) {
-        const static float captureMeshPositionDelta = RtxOptions::Get()->getCaptureMeshPositionDelta();
+        const static float captureMeshPositionDelta = RtxOptions::captureMeshPositionDelta();
         const static float captureMeshPositionDeltaSq = captureMeshPositionDelta * captureMeshPositionDelta;
         return (a - b).GetLengthSq() > captureMeshPositionDeltaSq;
       };
@@ -669,7 +669,7 @@ namespace dxvk {
       assert(normals.size() > 0);
       // Create comparison function that returns float
       static auto normalsDifferentEnough = [](const pxr::GfVec3f& a, const pxr::GfVec3f& b) {
-        const static float captureMeshNormalDelta = RtxOptions::Get()->getCaptureMeshNormalDelta();
+        const static float captureMeshNormalDelta = RtxOptions::captureMeshNormalDelta();
         const static float captureMeshNormalDeltaSq = captureMeshNormalDelta * captureMeshNormalDelta;
         return (a - b).GetLengthSq() > captureMeshNormalDeltaSq;
       };
@@ -770,7 +770,7 @@ namespace dxvk {
       assert(texcoords.size() > 0);
       // Create comparison function that returns float
       static auto differentIndices = [](const pxr::GfVec2f& a, const pxr::GfVec2f& b) {
-        const static float captureMeshTexcoordDelta = RtxOptions::Get()->getCaptureMeshTexcoordDelta();
+        const static float captureMeshTexcoordDelta = RtxOptions::captureMeshTexcoordDelta();
         const static float captureMeshTexcoordDeltaSq = captureMeshTexcoordDelta * captureMeshTexcoordDelta;
         return (a - b).GetLengthSq() > captureMeshTexcoordDeltaSq;
       };
@@ -811,7 +811,7 @@ namespace dxvk {
       assert(colors.size() > 0);
       // Create comparison function that returns float
       static auto colorsDifferentEnough = [](const pxr::GfVec4f& a, const pxr::GfVec4f& b) {
-        const static float captureMeshColorDelta = RtxOptions::Get()->getCaptureMeshColorDelta();
+        const static float captureMeshColorDelta = RtxOptions::captureMeshColorDelta();
         const static float captureMeshColorDeltaSq = captureMeshColorDelta * captureMeshColorDelta;
         return (a - b).GetLengthSq() > captureMeshColorDeltaSq;
       };
@@ -862,7 +862,7 @@ namespace dxvk {
       assert(targetBuffer.size() > 0);
       // Create comparison function that returns float
       static auto weightsDifferentEnough = [](const float& a, const float& b) {
-        const static float delta = RtxOptions::Get()->getCaptureMeshBlendWeightDelta();
+        const static float delta = RtxOptions::captureMeshBlendWeightDelta();
         return std::abs(a - b) > delta;
       };
       // Cache buffer iff new buffer differs from previous buffer
@@ -1012,15 +1012,15 @@ namespace dxvk {
     exportPrep.meta.windowTitle = window::getWindowTitle(cap.hwnd);
     exportPrep.meta.exeName = env::getExeName();
     exportPrep.meta.iconPath = BASE_DIR + exportPrep.meta.exeName + "_icon.bmp";
-    exportPrep.meta.geometryHashRule = RtxOptions::Get()->geometryAssetHashRuleString();
-    exportPrep.meta.metersPerUnit = RtxOptions::Get()->getSceneScale();
+    exportPrep.meta.geometryHashRule = RtxOptions::geometryAssetHashRuleString();
+    exportPrep.meta.metersPerUnit = RtxOptions::sceneScale();
     exportPrep.meta.timeCodesPerSecond = framesPerSecond;
     exportPrep.meta.startTimeCode = 0.0;
     exportPrep.meta.endTimeCode = floor(static_cast<double>(cap.currentFrameNum));
     exportPrep.meta.numFramesCaptured = cap.numFramesCaptured;
     window::saveWindowIconToFile(exportPrep.meta.iconPath, cap.hwnd);
     exportPrep.meta.bReduceMeshBuffers = true;
-    exportPrep.meta.isZUp = RtxOptions::Get()->isZUp();
+    exportPrep.meta.isZUp = RtxOptions::zUp();
     if (s_captureRemixConfigs) {
       for (auto& pair : RtxOptionImpl::getGlobalRtxOptionMap()) {
         exportPrep.meta.renderingSettingsDict[pair.second->getFullName()] = pair.second->genericValueToString(RtxOptionImpl::ValueType::Value);
@@ -1054,13 +1054,13 @@ namespace dxvk {
       if (cap.materials.count(pMesh->matHash) > 0) {
         pMesh->lssData.matId = pMesh->matHash;
       }
-      if(m_correctBakedTransforms) {
+      if(correctBakedTransforms()) {
         pMesh->lssData.origin = pMesh->originCalc.calc();
         stageOriginCalc.compareAndSwap(pMesh->lssData.origin);
       }
       exportPrep.meshes[hash] = pMesh->lssData;
     }
-    if(m_correctBakedTransforms) {
+    if(correctBakedTransforms()) {
       exportPrep.stageOrigin = stageOriginCalc.calc();
     }
   }
@@ -1104,5 +1104,33 @@ namespace dxvk {
     const auto pFlattenedStage = pStage->Export(flattenedStagePath, true);
     assert(pFlattenedStage);
     Logger::info("[GameCapturer][" + exportPrep.debugId + "] USD capture flattened.");
+  }
+
+  std::string GameCapturer::getCaptureInstanceStageNameWithTimestamp() {
+
+    const std::string& stageName = RtxOptions::captureInstanceStageName();
+    const auto timestampPos = stageName.find(RtxOptions::captureTimestampReplacement());
+    const auto usdExtPos =
+      stageName.find(lss::ext::usd, stageName.length() - lss::ext::usda.length() - 1);
+    std::string stageNameWithExt = stageName + ((usdExtPos == std::string::npos) ? lss::ext::usd : "");
+    
+    if (timestampPos == std::string::npos) {
+      return stageNameWithExt;
+    }
+    
+    const std::time_t curTime = std::time(nullptr);
+    std::tm locTime;
+    // The vanilla versions of localtime are not thread safe, see:
+    // https://en.cppreference.com/w/cpp/chrono/c/localtime
+    localtime_s(&locTime, &curTime);
+    static constexpr size_t kTimeStrLen = 19; // length of YYYY-MM-DD_HH-MM-SS
+    const auto putTime = std::put_time(&locTime, "%Y-%m-%d_%H-%M-%S");
+    
+    std::stringstream stageNameSS;
+    stageNameSS << stageNameWithExt.substr(0, timestampPos);
+    stageNameSS << putTime;
+    stageNameSS << stageNameWithExt.substr(timestampPos + RtxOptions::captureTimestampReplacement().length());
+
+    return stageNameSS.str();
   }
 }

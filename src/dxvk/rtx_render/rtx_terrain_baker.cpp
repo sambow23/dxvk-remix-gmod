@@ -323,9 +323,9 @@ namespace dxvk {
       const float maxInputDisplacement = maxInputDepth + maxInputHeight;
 
       // The deepest the baked terrain can go.
-      const float maxBakedDepth = 2 * RtxOptions::Get()->getMeterToWorldUnitScale() * cascadeMap.levelHalfWidth() * m_prevFrameMaxDisplaceIn;
+      const float maxBakedDepth = 2 * RtxOptions::getMeterToWorldUnitScale() * cascadeMap.levelHalfWidth() * m_prevFrameMaxDisplaceIn;
       // The highest the baked terrain can go.
-      const float maxBakedHeight = 2 * RtxOptions::Get()->getMeterToWorldUnitScale() * cascadeMap.levelHalfWidth() * m_prevFrameMaxDisplaceOut;
+      const float maxBakedHeight = 2 * RtxOptions::getMeterToWorldUnitScale() * cascadeMap.levelHalfWidth() * m_prevFrameMaxDisplaceOut;
 
       const float maxBakedDisplacement = maxBakedDepth + maxBakedHeight;
 
@@ -629,9 +629,6 @@ namespace dxvk {
       Resources& resourceManager = ctx->getResourceManager();
       m_terrainSampler = resourceManager.getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
     }
-
-    // ToDo use TerrainBaker's material defaults
-    const LegacyMaterialDefaults& defaults = RtxOptions::Get()->legacyMaterial;
     
     auto createTextureRef = [&](ReplacementMaterialTextureType::Enum textureType) {
       return m_materialTextures[textureType].isBaked()
@@ -659,26 +656,26 @@ namespace dxvk {
       Material::Properties::enableEmission(),
       // Setting expected constant values. Baked terrain should not need to have other values for the below material parameters set
       1, 1, 0, /* spriteSheet* */
-      false, // defaults.enableThinFilm(),
-      false, // defaults.alphaIsThinFilmThickness(),
+      false, // LegacyMaterialDefaults::enableThinFilm(),
+      false, // LegacyMaterialDefaults::alphaIsThinFilmThickness(),
       0.f,
       false, // Set to false for now, otherwise the baked terrain is not fully opaque - opaqueMaterialDefaults.UseLegacyAlphaState
-      false, // opaqueMaterialDefaults.BlendEnabled,
+      false, // OpaqueMaterialDefaults::BlendEnabled,
       BlendType::kAlpha,
-      false, // opaqueMaterialDefaults.InvertedBlend,
+      false, // OpaqueMaterialDefaults::InvertedBlend,
       AlphaTestType::kAlways,
-      0,//opaqueMaterialDefaults.AlphaReferenceValue;
+      0,//OpaqueMaterialDefaults::AlphaReferenceValue;
       // Using the previous frame's displaceIn/Out because all current frame draw calls are normalized to the previous frame's max.
-      m_prevFrameMaxDisplaceIn / Material::Properties::displaceInFactor(),  // opaqueMaterialDefaults.DisplaceIn
-      m_prevFrameMaxDisplaceOut / Material::Properties::displaceInFactor(),  // opaqueMaterialDefaults.DisplaceOut
-      Vector3(),  // opaqueMaterialDefaults.subsurfaceTransmittanceColor
-      0.0f,  // opaqueMaterialDefaults.subsurfaceMeasurementDistance
-      Vector3(),  // opaqueMaterialDefaults.subsurfaceSingleScatteringAlbedo
-      0.0f, // opaqueMaterialDefaults.subsurfaceVolumetricAnisotropy
-      false, // opaqueMaterialDefaults.subsurfaceDiffusionProfile
-      Vector3(),  // opaqueMaterialDefaults.subsurfaceRadius
-      0.0f, // opaqueMaterialDefaults.subsurfaceRadiusScale
-      0.0f, // opaqueMaterialDefaults.subsurfaceMaxSampleRadius
+      m_prevFrameMaxDisplaceIn / Material::Properties::displaceInFactor(),  // OpaqueMaterialDefaults::DisplaceIn
+      m_prevFrameMaxDisplaceOut / Material::Properties::displaceInFactor(),  // OpaqueMaterialDefaults::DisplaceOut
+      Vector3(),  // OpaqueMaterialDefaults::subsurfaceTransmittanceColor
+      0.0f,  // OpaqueMaterialDefaults::subsurfaceMeasurementDistance
+      Vector3(),  // OpaqueMaterialDefaults::subsurfaceSingleScatteringAlbedo
+      0.0f, // OpaqueMaterialDefaults::subsurfaceVolumetricAnisotropy
+      false, // OpaqueMaterialDefaults::subsurfaceDiffusionProfile
+      Vector3(),  // OpaqueMaterialDefaults::subsurfaceRadius
+      0.0f, // OpaqueMaterialDefaults::subsurfaceRadiusScale
+      0.0f, // OpaqueMaterialDefaults::subsurfaceMaxSampleRadius
       // NOTE: The terrain defines it's own sampler, and these are the modes it uses.
       lss::Mdl::Filter::Linear,
       lss::Mdl::WrapMode::Clamp, // U
@@ -868,7 +865,7 @@ namespace dxvk {
 
     if (m_calculatingDisplaceInFactor) {
       m_calculatingDisplaceInFactor = false;
-      Material::Properties::displaceInFactorRef() = m_calculatedDisplaceInFactor;
+      Material::Properties::displaceInFactor.setDeferred(m_calculatedDisplaceInFactor);
     }
     m_calculatingDisplaceInFactor = m_calculateDisplaceInFactorNextFrame;
     m_calculateDisplaceInFactorNextFrame = false;
@@ -967,7 +964,7 @@ namespace dxvk {
   }
 
   bool TerrainBaker::needsTerrainBaking() {
-    return enableBaking() && RtxOptions::Get()->terrainTextures().size() > 0;
+    return enableBaking() && RtxOptions::terrainTextures().size() > 0;
   }
 
   void TerrainBaker::onFrameBegin(Rc<RtxContext> ctx, const DxvkContextState& dxvkCtxState) {
@@ -1038,7 +1035,7 @@ namespace dxvk {
     Resources& resourceManager = ctx->getResourceManager();
     const RtCamera& camera = sceneManager.getCamera();
     const uint32_t currentFrameIndex = ctx->getDevice()->getCurrentFrameId();
-    const float metersToWorldUnitScale = RtxOptions::Get()->getMeterToWorldUnitScale();
+    const float metersToWorldUnitScale = RtxOptions::getMeterToWorldUnitScale();
 
     m_bakingParams.frameIndex = currentFrameIndex;
 

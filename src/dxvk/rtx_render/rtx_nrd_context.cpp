@@ -159,7 +159,7 @@ namespace dxvk {
     // Disable the replace direct specular HitT with indirect specular HitT if we are using combined denoiser.
     // Because in combined denoiser the direct and indirect signals are denoised together,
     // in such case we will break the denoiser if replace the direct with indirect specular HitT.
-    RtxOptions::Get()->setReplaceDirectSpecularHitTWithIndirectSpecularHitT(RtxOptions::Get()->isSeparatedDenoiserEnabled());
+    RtxOptions::replaceDirectSpecularHitTWithIndirectSpecularHitT.setDeferred(RtxOptions::denoiseDirectAndIndirectLightingSeparately());
   }
 
   NRDContext::~NRDContext() {
@@ -634,6 +634,7 @@ namespace dxvk {
     m_settings.m_resetHistory |= inputs.reset;
 
     ScopedGpuProfileZone(ctx, "NRD");
+    static_cast<RtxContext*>(ctx.ptr())->setFramePassStage(RtxFramePassStage::NRD);
 
     prepareResources(ctx, rtOutput);
 
@@ -789,6 +790,11 @@ namespace dxvk {
             imageView->imageInfo().layout, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, imageView->imageInfo().access,
             imageView->imageInfo().layout, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             bStorage ? VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_SHADER_READ_BIT);
+
+#ifdef REMIX_DEVELOPMENT
+          // Cache NRD image views
+          static_cast<RtxContext*>(ctx.ptr())->cacheResourceAliasingImageView(imageView);
+#endif
         }
 
         barriers.recordCommands(ctx->getCommandList());
@@ -838,7 +844,7 @@ namespace dxvk {
         updateAdaptiveScaling(inputs.diffuse_hitT->image->info().extent);
       }
 
-      if (RtxOptions::Get()->adaptiveAccumulation()) {
+      if (RtxOptions::adaptiveAccumulation()) {
         m_settings.updateAdaptiveAccumulation(inputs.frameTimeMs);
       }
     }
@@ -904,7 +910,7 @@ namespace dxvk {
 
       auto* cameraTeleportDirectionInfo = sceneManager.getRayPortalManager().getCameraTeleportationRayPortalDirectionInfo();
 
-      if (cameraTeleportDirectionInfo && RtxOptions::Get()->isUseVirtualShadingNormalsForDenoisingEnabled()) {
+      if (cameraTeleportDirectionInfo && RtxOptions::useVirtualShadingNormalsForDenoising()) {
         memcpy(commonSettings.worldPrevToWorldMatrix, &cameraTeleportDirectionInfo->portalToOpposingPortalDirection, sizeof(Matrix4));
       } else {
         static const auto identity = Matrix4{};
@@ -943,7 +949,7 @@ namespace dxvk {
     // This default height is hard-code to align with NRD default settings (1440p),
     // we probably need to move this to settings later
     constexpr float defaultScreenHeight = 1440.0f;
-    float radiusResolutionScale = RtxOptions::Get()->isAdaptiveResolutionDenoisingEnabled() ? static_cast<float>(std::min(renderSize.width, renderSize.height)) / defaultScreenHeight : 1.0f;
+    float radiusResolutionScale = RtxOptions::adaptiveResolutionDenoising() ? static_cast<float>(std::min(renderSize.width, renderSize.height)) / defaultScreenHeight : 1.0f;
     if (m_settings.m_denoiserDesc.denoiser == nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR) {
       m_settings.m_reblurSettings.maxBlurRadius = m_settings.m_reblurInternalBlurRadius.maxBlurRadius > 0.0f ?
         std::max(1.0f, round(m_settings.m_reblurInternalBlurRadius.maxBlurRadius * radiusResolutionScale)) : 0.0f;

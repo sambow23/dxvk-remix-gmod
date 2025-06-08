@@ -131,7 +131,8 @@ public:
   bool areAllReplacementsLoaded() const;
   std::vector<Mod::State> getReplacementStates() const;
 
-  uint64_t getGameTimeSinceStartMS();
+  uint64_t getGameTimeSinceStartMS() const;
+  uint64_t getRealTimeSinceStartMS() const;
 
   RtxGlobals& getGlobals() { return m_globals; }
 
@@ -219,6 +220,9 @@ public:
   void requestTextureVramFree();
   void requestVramCompaction();
   void manageTextureVram();
+
+  bool isThinOpaqueMaterialExist() const { return m_thinOpaqueMaterialExist; }
+  bool isSssMaterialExist() const { return m_sssMaterialExist; }
 
 private:
   enum class ObjectCacheState
@@ -317,6 +321,9 @@ private:
 
   std::atomic_bool m_forceFreeTextureMemory = false;
   std::atomic_bool m_forceFreeUnusedDxvkAllocatorChunks = false;
+
+  bool m_thinOpaqueMaterialExist = false;
+  bool m_sssMaterialExist = false;
 };
 
 }  // namespace nvvk

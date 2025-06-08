@@ -64,7 +64,7 @@
 * 
 *     A) Long-lived lights are those which haven't moved for 'getNumFramesToPutLightsToSleep' frames.
 * 
-*     B) A short-lived light is one which has not been seen for 'getNumFramesToKeepLights' frames, and before it can be put to sleep.
+*     B) A short-lived light is one which has not been seen for 'numFramesToKeepLights' frames, and before it can be put to sleep.
 * 
 *     C) Any light which moves, is defined as a dynamic light.
 */
@@ -78,9 +78,10 @@ namespace dxvk {
   LightManager::LightManager(DxvkDevice* device)
     : CommonDeviceObject(device) {
     // Legacy light translation Options
-    fallbackLightRadianceRef().x = std::max(fallbackLightRadiance().x, 0.0f);
-    fallbackLightRadianceRef().y = std::max(fallbackLightRadiance().y, 0.0f);
-    fallbackLightRadianceRef().z = std::max(fallbackLightRadiance().z, 0.0f);
+    fallbackLightRadiance.setDeferred(Vector3(
+      std::max(fallbackLightRadiance().x, 0.0f),
+      std::max(fallbackLightRadiance().y, 0.0f),
+      std::max(fallbackLightRadiance().z, 0.0f)));
     RTX_OPTION_CLAMP_MIN(fallbackLightAngle, 0.0f);
     RTX_OPTION_CLAMP_MIN(fallbackLightRadius, 0.0f);
     RTX_OPTION_CLAMP_MIN(fallbackLightConeAngle, 0.0f);
@@ -100,14 +101,14 @@ namespace dxvk {
 
   void LightManager::garbageCollectionInternal() {
     const uint32_t currentFrame = m_device->getCurrentFrameId();
-    const uint32_t framesToKeep = RtxOptions::Get()->getNumFramesToKeepLights();
-    const uint32_t framesToSleep = RtxOptions::Get()->getNumFramesToPutLightsToSleep();
+    const uint32_t framesToKeep = RtxOptions::numFramesToKeepLights();
+    const uint32_t framesToSleep = RtxOptions::getNumFramesToPutLightsToSleep();
 
     const bool forceGarbageCollection = (m_lights.size() >= RtxOptions::AntiCulling::Light::numLightsToKeep());
     for (auto it = m_lights.begin(); it != m_lights.end();) {
       const RtLight& light = it->second;
       const uint32_t frameLastTouched = light.getFrameLastTouched();
-      if (!RtxOptions::AntiCulling::Light::enable() || // It's always True if anti-culling is disabled
+      if (!RtxOptions::AntiCulling::isLightAntiCullingEnabled() || // It's always True if anti-culling is disabled
           (light.getIsInsideFrustum() ||
            frameLastTouched + RtxOptions::AntiCulling::Light::numFramesToExtendLightLifetime() <= currentFrame)) {
         if (light.isChildOfMesh() || light.isDynamic || suppressLightKeeping()) {
@@ -125,7 +126,7 @@ namespace dxvk {
   }
 
   void LightManager::garbageCollection(RtCamera& camera) {
-    if (RtxOptions::AntiCulling::Light::enable()) {
+    if (RtxOptions::AntiCulling::isLightAntiCullingEnabled()) {
       cFrustum& cameraLightAntiCullingFrustum = camera.getLightAntiCullingFrustum();
       for (auto& [lightHash, rtLight] : getLightTable()) {
         bool isLightInsideFrustum = true;
@@ -142,7 +143,7 @@ namespace dxvk {
           break;
         case RtLightAntiCullingType::MeshReplacement:
           // Do Object-Anti-Culling if current light replaces original mesh
-          if (RtxOptions::Get()->needsMeshBoundingBox()) {
+          if (RtxOptions::needsMeshBoundingBox()) {
             const AxisAlignedBoundingBox& boundingBox = rtLight.getMeshReplacementBoundingBox();
             const Matrix4 objectToView = camera.getWorldToView(false) * rtLight.getMeshReplacementTransform();
             isLightInsideFrustum = boundingBoxIntersectsFrustumSAT((RtCamera&)camera, boundingBox.minPos, boundingBox.maxPos, objectToView, false);
@@ -552,7 +553,7 @@ namespace dxvk {
       break;
     }
 
-    if (RtxOptions::AntiCulling::Light::enable() && type == D3DLIGHT_POINT) {
+    if (RtxOptions::AntiCulling::isLightAntiCullingEnabled() && type == D3DLIGHT_POINT) {
       // Cache the sphere light data into replacement properties so we can unify the game light and light replacement into a single case in LightManager::garbageCollection
       rtLight.cacheLightReplacementAntiCullingProperties(rtLight.getSphereLight());
 
@@ -596,7 +597,7 @@ namespace dxvk {
           const uint32_t isStaticCount = foundLightIt->second.isStaticCount;
 
           // If this light hasnt moved for N frames, put it to sleep.  This is a defeat device to stop games aggressively ramping up/down intensity as lights 
-          if (isStaticCount < RtxOptions::Get()->getNumFramesToPutLightsToSleep()) {
+          if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
             uint16_t bufferIdx = foundLightIt->second.getBufferIdx();
             foundLightIt->second = rtLight;
             foundLightIt->second.setBufferIdx(bufferIdx);
@@ -623,7 +624,7 @@ namespace dxvk {
 
         // Update the cached light if it's similar.  This should catch minor perturbations in static lights (e.g. due to precision loss)
         const float kDistanceThresholdMeters = 0.02f;
-        const float kDistanceThresholdWorldUnits = kDistanceThresholdMeters * RtxOptions::Get()->getMeterToWorldUnitScale();
+        const float kDistanceThresholdWorldUnits = kDistanceThresholdMeters * RtxOptions::getMeterToWorldUnitScale();
         const float thisLightsSimilarity = isSimilar(light, rtLight, kDistanceThresholdWorldUnits);
 
         if (thisLightsSimilarity >= 0.f && thisLightsSimilarity > bestSimilarity) {

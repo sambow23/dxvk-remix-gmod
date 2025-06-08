@@ -187,8 +187,8 @@ namespace dxvk {
     const bool isOpacityMicromapSupported = OpacityMicromapManager::checkIsOpacityMicromapSupported(*m_device);
     const bool isShaderExecutionReorderingSupported = 
       RtxContext::checkIsShaderExecutionReorderingSupported(*m_device) && 
-      RtxOptions::Get()->isShaderExecutionReorderingInPathtracerGbufferEnabled();
-    const bool portalsEnabled = RtxOptions::Get()->rayPortalModelTextureHashes().size() > 0;
+      RtxOptions::isShaderExecutionReorderingInPathtracerGbufferEnabled();
+    const bool portalsEnabled = RtxOptions::rayPortalModelTextureHashes().size() > 0;
 
     if (RtxOptions::Shader::prewarmAllVariants()) {
       for (int32_t nrcEnabled = isNrcSupported; nrcEnabled >= 0; nrcEnabled--) {
@@ -208,15 +208,15 @@ namespace dxvk {
       }
     } else {
       // Note: The getters for these SER/OMM enabled flags also check if SER/OMMs are supported, so we do not need to check for that manually.
-      const bool serEnabled = RtxOptions::Get()->isShaderExecutionReorderingInPathtracerGbufferEnabled();
-      const bool ommEnabled = RtxOptions::Get()->getEnableOpacityMicromap();
-      const bool nrcEnabled = RtxOptions::Get()->integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
+      const bool serEnabled = RtxOptions::isShaderExecutionReorderingInPathtracerGbufferEnabled();
+      const bool ommEnabled = RtxOptions::getEnableOpacityMicromap();
+      const bool nrcEnabled = RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
 
       // Need both PSR and non-PSR passes.
       for (int32_t isPSRPass = 1; isPSRPass >= 0; isPSRPass--) {
         for (int32_t includePortals = portalsEnabled; includePortals >= 0; includePortals--) {
           DxvkComputePipelineShaders shaders;
-          switch (RtxOptions::Get()->getRenderPassGBufferRaytraceMode()) {
+          switch (RtxOptions::renderPassGBufferRaytraceMode()) {
           case RaytraceMode::RayQuery:
             getComputeShader(isPSRPass, nrcEnabled);
             break;
@@ -236,6 +236,7 @@ namespace dxvk {
     RtxContext* ctx, 
     const Resources::RaytracingOutput& rtOutput) {
     ScopedGpuProfileZone(ctx, "Gbuffer Raytracing");
+    ctx->setFramePassStage(RtxFramePassStage::GBufferPrimaryRays);
 
     // Bind resources
 
@@ -271,7 +272,7 @@ namespace dxvk {
     ctx->bindResourceView(GBUFFER_BINDING_SHARED_MEDIUM_MATERIAL_INDEX_OUTPUT, rtOutput.m_sharedMediumMaterialIndex.view, nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_SHARED_BIAS_CURRENT_COLOR_MASK_OUTPUT, rtOutput.m_sharedBiasCurrentColorMask.view(Resources::AccessType::Write), nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_SHARED_TEXTURE_COORD_OUTPUT, rtOutput.m_sharedTextureCoord.view, nullptr);
-    ctx->bindResourceView(GBUFFER_BINDING_SHARED_SURFACE_INDEX_OUTPUT, rtOutput.m_sharedSurfaceIndex.view, nullptr);
+    ctx->bindResourceView(GBUFFER_BINDING_SHARED_SURFACE_INDEX_OUTPUT, rtOutput.m_sharedSurfaceIndex.view(Resources::AccessType::Write), nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_SHARED_SUBSURFACE_DATA_OUTPUT, rtOutput.m_sharedSubsurfaceData.view, nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_SHARED_SUBSURFACE_DIFFUSION_PROFILE_DATA_OUTPUT, rtOutput.m_sharedSubsurfaceDiffusionProfileData.view, nullptr);
 
@@ -282,10 +283,10 @@ namespace dxvk {
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_LINEAR_VIEW_Z_OUTPUT, rtOutput.m_primaryLinearViewZ.view, nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_ALBEDO_OUTPUT, rtOutput.m_primaryAlbedo.view, nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_BASE_REFLECTIVITY_OUTPUT, rtOutput.m_primaryBaseReflectivity.view(Resources::AccessType::Write), nullptr);
-    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_VIRTUAL_MVEC_OUTPUT, rtOutput.m_primaryVirtualMotionVector.view, nullptr);
+    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_VIRTUAL_MVEC_OUTPUT, rtOutput.m_primaryVirtualMotionVector.view(Resources::AccessType::Write), nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_SCREEN_SPACE_MOTION_OUTPUT, rtOutput.m_primaryScreenSpaceMotionVector.view, nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_OUTPUT, rtOutput.m_primaryVirtualWorldShadingNormalPerceptualRoughness.view, nullptr);
-    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_DENOISING_OUTPUT, rtOutput.m_primaryVirtualWorldShadingNormalPerceptualRoughnessDenoising.view, nullptr);
+    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_DENOISING_OUTPUT, rtOutput.m_primaryVirtualWorldShadingNormalPerceptualRoughnessDenoising.view(Resources::AccessType::Write), nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_HIT_DISTANCE_OUTPUT, rtOutput.m_primaryHitDistance.view, nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_VIEW_DIRECTION_OUTPUT, rtOutput.m_primaryViewDirection.view, nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_CONE_RADIUS_OUTPUT, rtOutput.m_primaryConeRadius.view, nullptr);
@@ -326,8 +327,8 @@ namespace dxvk {
 
     // Bind necessary buffers for DLSS-RR. 
     // Note: RR uses different PSR rules compared to other uses, and its resolves are resolved in an another shader.
-    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_DEPTH_DLSSRR_OUTPUT, rtOutput.m_primaryDepthDLSSRR.view, nullptr);
-    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_NORMAL_DLSSRR_OUTPUT, rtOutput.m_primaryWorldShadingNormalDLSSRR.view, nullptr);
+    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_DEPTH_DLSSRR_OUTPUT, rtOutput.m_primaryDepthDLSSRR.view(Resources::AccessType::Write), nullptr);
+    ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_NORMAL_DLSSRR_OUTPUT, rtOutput.m_primaryWorldShadingNormalDLSSRR.view(Resources::AccessType::Write), nullptr);
     ctx->bindResourceView(GBUFFER_BINDING_PRIMARY_SCREEN_SPACE_MOTION_DLSSRR_OUTPUT, rtOutput.m_primaryScreenSpaceMotionVectorDLSSRR.view, nullptr);
 
     // Bind necessary resources for Neural Radiance Cache
@@ -337,16 +338,16 @@ namespace dxvk {
     const VkExtent3D& rayDims = rtOutput.m_compositeOutputExtent;
 
     const bool nrcEnabled = nrc.isActive();
-    const bool serEnabled = RtxOptions::Get()->isShaderExecutionReorderingInPathtracerGbufferEnabled();
-    const bool ommEnabled = RtxOptions::Get()->getEnableOpacityMicromap();
-    const bool includePortals = RtxOptions::Get()->rayPortalModelTextureHashes().size() > 0 || rtOutput.m_raytraceArgs.numActiveRayPortals > 0;
+    const bool serEnabled = RtxOptions::isShaderExecutionReorderingInPathtracerGbufferEnabled();
+    const bool ommEnabled = RtxOptions::getEnableOpacityMicromap();
+    const bool includePortals = RtxOptions::rayPortalModelTextureHashes().size() > 0 || rtOutput.m_raytraceArgs.numActiveRayPortals > 0;
 
     GbufferPushConstants pushArgs = {};
     pushArgs.isTransmissionPSR = 0;
     ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
     ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
 
-    switch (RtxOptions::Get()->getRenderPassGBufferRaytraceMode()) {
+    switch (RtxOptions::renderPassGBufferRaytraceMode()) {
     case RaytraceMode::RayQuery:
       VkExtent3D workgroups = util::computeBlockCount(rayDims, VkExtent3D { 16, 8, 1 });
       {
@@ -359,12 +360,14 @@ namespace dxvk {
         // Warning: do not change the order of Reflection and Transmission PSR, that will break
         // PSR data dependencies due to resource aliasing.
         ScopedGpuProfileZone(ctx, "Reflection PSR");
+        ctx->setFramePassStage(RtxFramePassStage::ReflectionPSR);
         ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, getComputeShader(true, nrcEnabled));
         ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
       }
 
       {
         ScopedGpuProfileZone(ctx, "Transmission PSR");
+        ctx->setFramePassStage(RtxFramePassStage::TransmissionPSR);
         pushArgs.isTransmissionPSR = 1;
         ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
         ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
@@ -382,12 +385,14 @@ namespace dxvk {
         // Warning: do not change the order of Reflection and Transmission PSR, that will break
         // PSR data dependencies due to resource aliasing.
         ScopedGpuProfileZone(ctx, "Reflection PSR");
+        ctx->setFramePassStage(RtxFramePassStage::ReflectionPSR);
         ctx->bindRaytracingPipelineShaders(getPipelineShaders(true, true, serEnabled, ommEnabled, includePortals, nrcEnabled));
         ctx->traceRays(rayDims.width, rayDims.height, rayDims.depth);
       }
 
       {
         ScopedGpuProfileZone(ctx, "Transmission PSR");
+        ctx->setFramePassStage(RtxFramePassStage::TransmissionPSR);
         pushArgs.isTransmissionPSR = 1;
         ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
         ctx->traceRays(rayDims.width, rayDims.height, rayDims.depth);
@@ -405,12 +410,14 @@ namespace dxvk {
         // Warning: do not change the order of Reflection and Transmission PSR, that will break
         // PSR data dependencies due to resource aliasing.
         ScopedGpuProfileZone(ctx, "Reflection PSR");
+        ctx->setFramePassStage(RtxFramePassStage::ReflectionPSR);
         ctx->bindRaytracingPipelineShaders(getPipelineShaders(true, false, serEnabled, ommEnabled, includePortals, nrcEnabled));
         ctx->traceRays(rayDims.width, rayDims.height, rayDims.depth);
       }
 
       {
         ScopedGpuProfileZone(ctx, "Transmission PSR");
+        ctx->setFramePassStage(RtxFramePassStage::TransmissionPSR);
         pushArgs.isTransmissionPSR = 1;
         ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
         ctx->traceRays(rayDims.width, rayDims.height, rayDims.depth);

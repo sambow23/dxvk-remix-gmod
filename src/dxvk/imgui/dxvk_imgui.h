@@ -111,12 +111,12 @@ namespace dxvk {
     };
     template<Tabs tab>
     void openTab() {
-      RtxOptions::Get()->m_showUI.getValue() = UIType::Advanced;
+      RtxOptions::showUI.setDeferred(UIType::Advanced);
       triggerTab(tab);
     }
     template<Tabs tab>
     bool isTabOpen() const {
-      if(RtxOptions::Get()->m_showUI.getValue() != UIType::Advanced) {
+      if(RtxOptions::showUI() != UIType::Advanced) {
         return false;
       } else {
         return m_curTab == tab;
@@ -229,8 +229,6 @@ namespace dxvk {
     void showVsyncOptions(bool enableDLFGGuard);
 
     void processHotkeys();
-
-    void sendUIActivationMessage();
 
     void showMemoryStats() const;
     bool showRayReconstructionEnable(bool supportsRR);

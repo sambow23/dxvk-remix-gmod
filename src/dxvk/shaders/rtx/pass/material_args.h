@@ -108,7 +108,7 @@ struct OpaqueMaterialOptions {
              "Should only be used for debugging or development.");
 
 public:
-  void fillShaderParams(OpaqueMaterialArgs& args) const {
+  static void fillShaderParams(OpaqueMaterialArgs& args) {
     args.albedoScale = albedoScale();
     args.albedoBias = albedoBias();
     args.roughnessScale = roughnessScale();
@@ -154,7 +154,7 @@ struct TranslucentMaterialOptions {
   RTX_OPTION("rtx.translucentMaterial", bool, enableDiffuseLayerOverride, false, "A flag to force the diffuse layer on the translucent material to be enabled. Should only be used for debugging or development.");
 
 public:
-  void fillShaderParams(TranslucentMaterialArgs& args) const {
+  static void fillShaderParams(TranslucentMaterialArgs& args) {
     args.transmittanceColorScale = transmittanceColorScale();
     args.transmittanceColorBias = transmittanceColorBias();
     args.normalIntensity = normalIntensity();

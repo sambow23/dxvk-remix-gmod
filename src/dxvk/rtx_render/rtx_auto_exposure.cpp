@@ -113,8 +113,20 @@ namespace dxvk {
 
       if (useExposureCompensation()) {
         ImGui::Indent();
-
-        float* splinePoints[] = { &exposureWeightCurve0Ref(),&exposureWeightCurve1Ref(),&exposureWeightCurve2Ref(),&exposureWeightCurve3Ref(),&exposureWeightCurve4Ref() };
+        const uint32_t kNumPoints = 5;
+        dxvk::RtxOption<float>* splineOptions[] = {
+          &exposureWeightCurve0,
+          &exposureWeightCurve1,
+          &exposureWeightCurve2,
+          &exposureWeightCurve3,
+          &exposureWeightCurve4
+        };
+        float splineValues[kNumPoints];
+        float* splinePoints[kNumPoints];
+        for (int i = 0; i < kNumPoints; i++) {
+          splineValues[i] = splineOptions[i]->get();
+          splinePoints[i] = &splineValues[i];
+        }
         ImGui::PushID("AE-Spline-lines");
         ImGui::PlotLines("", &histogramWeight, splinePoints, EXPOSURE_HISTOGRAM_SIZE, 0, "", 0.0f, 1.0f, ImVec2(0, 150.0f));
         ImGui::PopID();
@@ -137,12 +149,17 @@ namespace dxvk {
         ImGui::Columns(1);
 
         if (ImGui::Button("Reset")) {
-          exposureWeightCurve0Ref() = 1.0f;
-          exposureWeightCurve1Ref() = 1.0f;
-          exposureWeightCurve2Ref() = 1.0f;
-          exposureWeightCurve3Ref() = 1.0f;
-          exposureWeightCurve4Ref() = 1.0f;
+          for (int i = 0; i < kNumPoints; i++) {
+            splineValues[i] = 1.f;
+          }
           m_isCurveChanged = true;
+        }
+
+        if (m_isCurveChanged) {
+          for (int i = 0; i < kNumPoints; i++) {
+            splineOptions[i]->setDeferred(splineValues[i]);
+          }
+          m_isCurveChanged = false;
         }
         ImGui::Unindent();
       }
@@ -225,7 +242,21 @@ namespace dxvk {
       if (useExposureCompensation() && m_isCurveChanged) {
         float data[EXPOSURE_HISTOGRAM_SIZE];
 
-        float* splinePoints[] = { &exposureWeightCurve0Ref(),&exposureWeightCurve1Ref(),&exposureWeightCurve2Ref(),&exposureWeightCurve3Ref(),&exposureWeightCurve4Ref() };
+        const uint32_t kNumPoints = 5;
+        dxvk::RtxOption<float>* splineOptions[] = {
+          &exposureWeightCurve0,
+          &exposureWeightCurve1,
+          &exposureWeightCurve2,
+          &exposureWeightCurve3,
+          &exposureWeightCurve4
+        };
+        float splineValues[kNumPoints];
+        float* splinePoints[kNumPoints];
+        for (int i = 0; i < kNumPoints; i++) {
+          splineValues[i] = splineOptions[i]->get();
+          splinePoints[i] = &splineValues[i];
+        }
+
         for (int i = 0; i < EXPOSURE_HISTOGRAM_SIZE; i++) {
           data[i] = histogramWeight(splinePoints, i);
         }
@@ -243,6 +274,7 @@ namespace dxvk {
 
       {
         ScopedGpuProfileZone(ctx, "Histogram");
+        static_cast<RtxContext*>(ctx.ptr())->setFramePassStage(RtxFramePassStage::AutoExposure_Histogram);
         // Prepare shader arguments
         ToneMappingAutoExposureArgs pushArgs = {};
         pushArgs.numPixels = rtOutput.m_finalOutputExtent.width * rtOutput.m_finalOutputExtent.height;
@@ -269,6 +301,7 @@ namespace dxvk {
       // Calculate avg luminance
       {
         ScopedGpuProfileZone(ctx, "Exposure");
+        static_cast<RtxContext*>(ctx.ptr())->setFramePassStage(RtxFramePassStage::AutoExposure_Exposure);
         DebugView& debugView = ctx->getDevice()->getCommon()->metaDebugView();
 
         ctx->bindResourceView(AUTO_EXPOSURE_HISTOGRAM_INPUT_OUTPUT, m_exposureHistogram.view, nullptr);

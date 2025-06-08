@@ -8,6 +8,8 @@ Thanks to all the contributors to DXVK for creating this foundational piece of s
 
 While dxvk-remix is a fork of DXVK, please report bugs encountered with dxvk-remix to this repo rather than to the DXVK project.
 
+dxvk-remix also contains a subproject in the `bridge` folder, which enables 32 bit games to communicate with the 64 bit dxvk-remix runtime.
+
 ## Build instructions
 
 ### Requirements:
@@ -20,7 +22,7 @@ While dxvk-remix is a fork of DXVK, please report bugs encountered with dxvk-rem
 4. [Windows SDK](https://developer.microsoft.com/en-us/windows/downloads/sdk-archive/)
     - 10.0.19041.0 is tested
 5. [Meson](https://mesonbuild.com/)
-    - 0.61.4 has been tested
+    - 1.1.0 has been tested
     - Follow [instructions](https://mesonbuild.com/SimpleStart.html#installing-meson) on how to install and reboot the PC before moving on (Meson will indicate as much)
 6. [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows)
     - 1.3.211.0 or newer
@@ -95,6 +97,7 @@ Alternatively, Remix API can be used to programmatically pass the game data to t
 ## Project Documentation
 
 - [Anti-Culling System](/documentation/AntiCullingSystem.md)
+- [Contributing Guide](/CONTRIBUTING.md)
 - [Foliage System](/documentation/FoliageSystem.md)
 - [GPU Print](/documentation/GpuPrint.md)
 - [Opacity Micromap](/documentation/OpacityMicromap.md)
