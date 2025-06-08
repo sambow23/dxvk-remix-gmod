@@ -43,6 +43,7 @@
 #include "rtx_render/rtx_ngx_wrapper.h"
 #include "rtx_render/rtx_dlfg.h"
 #include "rtx_render/rtx_dlss.h"
+#include "rtx_render/rtx_fsr3.h"
 #include "rtx_render/rtx_nis.h"
 #include "rtx_render/rtx_taa.h"
 #include "rtx_render/rtx_auto_exposure.h"
@@ -204,6 +205,10 @@ namespace dxvk {
       return m_dlss.get();
     }
 
+    DxvkFSR3& metaFSR3() {
+      return m_fsr3.get();
+    }
+
     DxvkRayReconstruction& metaRayReconstruction() {
       return m_rayReconstruction.get();
     }
@@ -360,6 +365,7 @@ namespace dxvk {
     Active<DxvkDenoise>                     m_referenceDenoiserSecondLobe1;
     Active<DxvkDenoise>                     m_referenceDenoiserSecondLobe2;
     Active<DxvkDLSS>                        m_dlss;
+    Active<DxvkFSR3>                         m_fsr3;
     Active<DxvkRayReconstruction>           m_rayReconstruction;
     Active<DxvkNIS>                         m_nis;
     Active<DxvkTemporalAA>                  m_taa;

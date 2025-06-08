@@ -169,6 +169,7 @@ namespace dxvk {
       NIS,
       TAAU,
       DLSS_RR,
+      FSR3,
     };
 
     void reportCpuSimdSupport();
@@ -190,6 +191,7 @@ namespace dxvk {
     void dispatchNeeCache(const Resources::RaytracingOutput& rtOutput);
     void dispatchDLSS(const Resources::RaytracingOutput& rtOutput, float frameTimeMilliseconds);
     void dispatchRayReconstruction(const Resources::RaytracingOutput& rtOutput, float frameTimeMilliseconds);
+    void dispatchFSR3(const Resources::RaytracingOutput& rtOutput, float frameTimeMilliseconds);
     void dispatchDenoise(const Resources::RaytracingOutput& rtOutput, float frameTimeMilliseconds);
     void dispatchComposite(const Resources::RaytracingOutput& rtOutput);
     void dispatchReplaceCompositeWithDebugView(const Resources::RaytracingOutput& rtOutput);
@@ -234,7 +236,8 @@ namespace dxvk {
     bool shouldUseRayReconstruction() const;
     bool shouldUseNIS() const;
     bool shouldUseTAA() const;
-    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA(); }
+    bool shouldUseFSR3() const;
+    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA() || shouldUseFSR3(); }
 
     inline static bool s_triggerScreenshot = false;
     inline static bool s_triggerUsdCapture = false;

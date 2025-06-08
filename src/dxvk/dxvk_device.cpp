@@ -545,6 +545,7 @@ namespace dxvk {
     m_referenceDenoiserSecondLobe1(device, DenoiserType::Reference),
     m_referenceDenoiserSecondLobe2(device, DenoiserType::Reference),
     m_dlss(device),
+    m_fsr3(device),
     m_rayReconstruction(device),
     m_nis(device),
     m_taa(device),
@@ -579,6 +580,7 @@ namespace dxvk {
     m_referenceDenoiserSecondLobe2.get().onDestroy();
     m_rayReconstruction.get().onDestroy();
     m_dlss.get().onDestroy();
+    m_fsr3.get().onDestroy();
     m_dlfg.get().onDestroy();
   }
 }

@@ -250,6 +250,14 @@ namespace dxvk {
       downscaleExtent.width = renderSize[0];
       downscaleExtent.height = renderSize[1];
       downscaleExtent.depth = 1;
+    } else if (shouldUseFSR3()) {
+      DxvkFSR3& fsr3 = m_common->metaFSR3();
+      uint32_t displaySize[2] = { upscaleExtent.width, upscaleExtent.height };
+      uint32_t renderSize[2];
+      fsr3.setSetting(displaySize, FSR3Profile::Auto, renderSize);
+      downscaleExtent.width = renderSize[0];
+      downscaleExtent.height = renderSize[1];
+      downscaleExtent.depth = 1;
     } else if (shouldUseNIS() || shouldUseTAA()) {
       auto resolutionScale = RtxOptions::resolutionScale();
       downscaleExtent.width = uint32_t(std::roundf(upscaleExtent.width * resolutionScale));
@@ -307,6 +315,8 @@ namespace dxvk {
       return InternalUpscaler::DLSS;
     } else if (shouldUseRayReconstruction() && m_common->metaRayReconstruction().isActive()) {
       return InternalUpscaler::DLSS_RR;
+    } else if (shouldUseFSR3()) {
+      return InternalUpscaler::FSR3;
     } else if (shouldUseNIS()) {
       return InternalUpscaler::NIS;
     } else if (shouldUseTAA()) {
@@ -406,6 +416,9 @@ namespace dxvk {
       } else if (m_previousUpscaler == InternalUpscaler::DLSS) {
         DxvkDLSS& dlss = m_common->metaDLSS();
         dlss.release();
+      } else if (m_previousUpscaler == InternalUpscaler::FSR3) {
+        DxvkFSR3& fsr3 = m_common->metaFSR3();
+        fsr3.release();
       }
     }
 
@@ -624,6 +637,8 @@ namespace dxvk {
         } else if (m_currentUpscaler == InternalUpscaler::DLSS_RR) {
           m_common->metaAutoExposure().createResources(this);
           dispatchRayReconstruction(rtOutput, frameTimeMilliseconds);
+        } else if (m_currentUpscaler == InternalUpscaler::FSR3) {
+          dispatchFSR3(rtOutput, frameTimeMilliseconds);
         } else if (m_currentUpscaler == InternalUpscaler::NIS) {
           dispatchNIS(rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::TAAU){
@@ -1565,6 +1580,11 @@ namespace dxvk {
     rayReconstruction.dispatch(this, m_execBarriers, rtOutput, m_resetHistory, frameTimeMilliseconds);
   }
 
+  void RtxContext::dispatchFSR3(const Resources::RaytracingOutput& rtOutput, float frameTimeMilliseconds) {
+    DxvkFSR3& fsr3 = m_common->metaFSR3();
+    fsr3.dispatch(this, m_execBarriers, rtOutput, m_resetHistory);
+  }
+
   void RtxContext::dispatchNIS(const Resources::RaytracingOutput& rtOutput) {
     ScopedGpuProfileZone(this, "NIS");
     setFramePassStage(RtxFramePassStage::NIS);
@@ -2107,6 +2127,10 @@ namespace dxvk {
 
   bool RtxContext::shouldUseTAA() const {
     return RtxOptions::isTAAEnabled();
+  }
+
+  bool RtxContext::shouldUseFSR3() const {
+    return RtxOptions::isFSR3Enabled();
   }
 
   D3D9RtxVertexCaptureData& RtxContext::allocAndMapVertexCaptureConstantBuffer() {

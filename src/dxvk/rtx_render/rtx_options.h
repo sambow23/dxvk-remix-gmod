@@ -64,7 +64,8 @@ namespace dxvk {
     None = 0,
     DLSS,
     NIS,
-    TAAU
+    TAAU,
+    FSR3
   };
 
   enum class GraphicsPreset : int {
@@ -1298,6 +1299,7 @@ namespace dxvk {
     }
     static bool isNISEnabled() { return upscalerType() == UpscalerType::NIS; }
     static bool isTAAEnabled() { return upscalerType() == UpscalerType::TAAU; }
+    static bool isFSR3Enabled() { return upscalerType() == UpscalerType::FSR3; }
     
     static float getUniqueObjectDistanceSqr() { return uniqueObjectDistance() * uniqueObjectDistance(); }
     static uint32_t getNumFramesToPutLightsToSleep() { return numFramesToKeepLights() /2; }
