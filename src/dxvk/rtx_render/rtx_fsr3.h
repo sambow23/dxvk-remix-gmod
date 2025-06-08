@@ -24,12 +24,16 @@
 #include "../dxvk_include.h"
 #include "rtx_resources.h"
 #include "dxvk_image.h"
+#include "../util/rc/util_rc_ptr.h"
+#include "rtx_option.h"
 
 namespace dxvk {
 
   class DxvkCommandList;
   class DxvkBarrierSet;
   class DxvkContext;
+  class RtxContext;
+  class FSR3UpscalerContext;
 
   enum class FSR3Profile : uint32_t {
     UltraPerf = 0,
@@ -102,5 +106,7 @@ namespace dxvk {
     
     // FSR3 context/resources would go here
     // (placeholder for actual FSR3 SDK integration)
+
+    std::unique_ptr<FSR3UpscalerContext> m_fsr3Context;
   };
 }  // namespace dxvk 

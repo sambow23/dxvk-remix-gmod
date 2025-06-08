@@ -215,6 +215,8 @@ dxvk_src = files([
   'rtx_render/rtx_dlss.h',
   'rtx_render/rtx_fsr3.cpp',
   'rtx_render/rtx_fsr3.h',
+  'rtx_render/rtx_fsr3_wrapper.cpp',
+  'rtx_render/rtx_fsr3_wrapper.h',
   'rtx_render/rtx_draw_call_cache.cpp',
   'rtx_render/rtx_draw_call_cache.h',
   'rtx_render/rtx_env.cpp',

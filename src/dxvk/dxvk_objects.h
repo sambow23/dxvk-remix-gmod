@@ -63,6 +63,9 @@
 #include "../util/util_lazy.h"
 #include "../util/util_active.h"
 
+// NGX Wrapper for DLSS/DLFG/etc.
+#include "rtx_render/rtx_fsr3_wrapper.h"
+
 namespace dxvk {
 
   class DxvkDevice;
@@ -82,6 +85,7 @@ namespace dxvk {
   class NeuralRadianceCache;
 
   class NGXContext;
+  class FSR3Context;
 
   class DxvkObjects {
 
@@ -187,6 +191,10 @@ namespace dxvk {
 
     NGXContext& metaNGXContext() {
       return m_ngxContext.get();
+    }
+
+    FSR3Context& metaFSR3Context() {
+      return m_fsr3Context.get();
     }
 
     DxvkDenoise& metaReferenceDenoiserSecondLobe0() {
@@ -359,6 +367,7 @@ namespace dxvk {
     Active<DxvkDenoise>                     m_primaryCombinedLightDenoiser;
     Active<DxvkDenoise>                     m_secondaryCombinedLightDenoiser;
     Active<NGXContext>                      m_ngxContext;
+    Active<FSR3Context>                     m_fsr3Context;
     Active<DxvkDLFG>                        m_dlfg;
     // Secondary reference denoisers used for a second lobe when non-combined signal reference denoising is enabled
     Active<DxvkDenoise>                     m_referenceDenoiserSecondLobe0;
