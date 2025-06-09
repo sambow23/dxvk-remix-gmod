@@ -260,17 +260,79 @@ namespace dxvk {
     // Release any existing context
     releaseFSR3Feature();
 
-    // Temporary implementation to avoid compilation errors
-    // TODO: Restore full FSR3Context integration once compilation issues are resolved
+    Logger::info("[FSR3] Initializing FSR3 upscaler with direct SDK integration");
+
+    // Step 1: Create VkDeviceContext for FidelityFX
+    VkDeviceContext vkDeviceContext = {};
+    vkDeviceContext.vkDevice = m_device->handle();
+    vkDeviceContext.vkPhysicalDevice = m_device->adapter()->handle();
+    vkDeviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
     
-    Logger::info("[FSR3] FSR3 upscaler initialize called - temporarily disabled");
+    // Step 2: Create FfxDevice
+    m_ffxDevice = ffxGetDeviceVK(&vkDeviceContext);
+    Logger::info("[FSR3] FidelityFX device created");
     
-    // Mark as not initialized to prevent crashes
-    m_initialized = false;
+    // Step 3: Calculate scratch buffer size
+    const size_t maxContexts = 1; // Just one FSR3 context for now
+    m_scratchBufferSize = ffxGetScratchMemorySizeVK(m_device->adapter()->handle(), maxContexts);
     
-    // For now, just return without doing anything to avoid the crash
-    Logger::warn("[FSR3] FSR3 initialization temporarily disabled to prevent SDK crashes");
-    return;
+    // Step 4: Allocate scratch buffer
+    m_scratchBuffer = std::make_unique<uint8_t[]>(m_scratchBufferSize);
+    
+    // Step 5: Create FfxInterface
+    m_ffxInterface = std::make_unique<FfxInterface>();
+    
+    FfxErrorCode result = ffxGetInterfaceVK(
+      m_ffxInterface.get(),
+      m_ffxDevice,
+      m_scratchBuffer.get(),
+      m_scratchBufferSize,
+      maxContexts
+    );
+    
+    if (result != FFX_OK) {
+      Logger::err("[FSR3] Failed to create FidelityFX Vulkan interface");
+      return;
+    }
+    
+    Logger::info("[FSR3] FidelityFX Vulkan interface created successfully");
+
+    // Step 6: Allocate FSR3 context
+    m_fsr3Context = new FfxFsr3UpscalerContext();
+
+    // Step 7: Create FSR3 context description
+    FfxFsr3UpscalerContextDescription contextDesc = {};
+    contextDesc.flags = 0;
+    
+    if (isContentHDR) {
+      contextDesc.flags |= FFX_FSR3UPSCALER_ENABLE_HIGH_DYNAMIC_RANGE;
+    }
+    
+    if (depthInverted) {
+      contextDesc.flags |= FFX_FSR3UPSCALER_ENABLE_DEPTH_INVERTED;
+    }
+    
+    contextDesc.maxRenderSize.width = maxRenderSize[0];
+    contextDesc.maxRenderSize.height = maxRenderSize[1];
+    contextDesc.maxUpscaleSize.width = displayOutSize[0];
+    contextDesc.maxUpscaleSize.height = displayOutSize[1];
+    contextDesc.fpMessage = nullptr;
+    contextDesc.backendInterface = *m_ffxInterface.get();
+    
+    Logger::info("[FSR3] Creating FSR3 upscaler context");
+    
+    // Step 8: Initialize FSR3 upscaler context
+    FfxErrorCode errorCode = ffxFsr3UpscalerContextCreate(m_fsr3Context, &contextDesc);
+    if (errorCode != FFX_OK) {
+      Logger::err("[FSR3] Failed to create FSR3 upscaler context");
+      delete m_fsr3Context;
+      m_fsr3Context = nullptr;
+      return;
+    }
+
+    m_initialized = true;
+    
+    Logger::info("[FSR3] FSR3UpscalerContext initialized successfully");
   }
 
   void FSR3UpscalerContext::releaseFSR3Feature() {
@@ -286,6 +348,11 @@ namespace dxvk {
       delete m_fsr3Context;
       m_fsr3Context = nullptr;
     }
+
+    // Clean up FidelityFX resources
+    m_ffxInterface.reset();
+    m_scratchBuffer.reset();
+    m_scratchBufferSize = 0;
 
     m_initialized = false;
     Logger::info("[FSR3] FSR3UpscalerContext released");

@@ -178,6 +178,12 @@ namespace dxvk {
     bool m_initialized = false;
     FfxFsr3UpscalerContext* m_fsr3Context = nullptr;
     
+    // FidelityFX SDK resources (must persist for context lifetime)
+    FfxDevice m_ffxDevice;
+    std::unique_ptr<FfxInterface> m_ffxInterface;
+    std::unique_ptr<uint8_t[]> m_scratchBuffer;
+    size_t m_scratchBufferSize = 0;
+    
     // Helper methods
     FfxErrorCode createFSR3Context();
     void destroyFSR3Context();
