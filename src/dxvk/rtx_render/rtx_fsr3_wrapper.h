@@ -21,9 +21,11 @@
 */
 #pragma once
 
-// TODO: Add FidelityFX SDK includes when SDK is integrated
-// #include "../../../external/fidelityfx_sdk/include/ffx_fsr3upscaler.h"
-// #include "../../../external/fidelityfx_sdk/include/ffx_api.h"
+// FidelityFX SDK includes
+#include <FidelityFX/host/ffx_fsr3upscaler.h>
+#include <FidelityFX/host/ffx_interface.h>
+#include <FidelityFX/host/ffx_types.h>
+#include <FidelityFX/host/ffx_error.h>
 
 #include <memory>
 #include "../util/rc/util_rc_ptr.h"
@@ -33,12 +35,6 @@ namespace dxvk {
   class DxvkDevice;
   class DxvkContext;
   class RtxContext;
-  
-  // Forward declarations for FSR3 SDK types
-  // TODO: Replace with actual SDK types when integrated
-  typedef void* FfxFsr3UpscalerContext;
-  typedef int FfxErrorCode;
-  typedef uint32_t FfxResourceFlags;
 
   class FSR3Context;
   class FSR3UpscalerContext;
@@ -186,7 +182,7 @@ namespace dxvk {
     uint32_t profileToQualityMode(int profile);
     
     // Convert Vulkan format to FSR3 format
-    uint32_t vulkanFormatToFSR3Format(VkFormat format);
+    FfxSurfaceFormat vulkanFormatToFSR3Format(VkFormat format);
     
     // Get recommended render resolution for given display size and quality
     void getRecommendedRenderResolution(

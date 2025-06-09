@@ -171,6 +171,7 @@ dxvk_include_dirs = [
   './include',
   './include/vulkan/include',
   'submodules/nrc/include',
+  'submodules/fidelityfx-sdk/sdk/include',
 ]
 
 dxvk_include_path = include_directories(dxvk_include_dirs)

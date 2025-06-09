@@ -335,6 +335,14 @@ dxvk_src = files([
 
   'rtx_render/rtx_constants.h',
 
+  # FidelityFX SDK source files for FSR3
+  '../../submodules/fidelityfx-sdk/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp',
+  '../../submodules/fidelityfx-sdk/sdk/src/backends/vk/ffx_vk.cpp',
+  '../../submodules/fidelityfx-sdk/sdk/src/shared/ffx_object_management.cpp',
+  '../../submodules/fidelityfx-sdk/sdk/src/shared/ffx_assert.cpp',
+  '../../submodules/fidelityfx-sdk/sdk/src/shared/ffx_message.cpp',
+  '../../submodules/fidelityfx-sdk/sdk/src/backends/shared/ffx_shader_blobs.cpp',
+
   'platform/dxvk_win32_exts.cpp',
   
   'hud/dxvk_hud.cpp',
@@ -404,6 +412,14 @@ dlss_dep = declare_dependency(
   include_directories : [ dlss_include_dir, dlfg_include_dir ]
 )
 
+# FidelityFX SDK for FSR3
+fidelityfx_include_dir = include_directories(join_paths('../../', 'submodules/fidelityfx-sdk/sdk/include'))
+fidelityfx_src_shared_dir = include_directories(join_paths('../../', 'submodules/fidelityfx-sdk/sdk/src/shared'))
+fidelityfx_backends_shared_dir = include_directories(join_paths('../../', 'submodules/fidelityfx-sdk/sdk/src/backends/shared'))
+fidelityfx_dep = declare_dependency(
+  include_directories : [ fidelityfx_include_dir, fidelityfx_src_shared_dir, fidelityfx_backends_shared_dir ]
+)
+
 nrc_include_path = include_directories(join_paths('../../', 'submodules/nrc/include'))
 nrc_dll_path = join_paths(meson.global_source_root(), 'submodules/nrc/bin/')
 nrc_lib_path = join_paths(meson.global_source_root(), 'submodules/nrc/lib/')
@@ -429,7 +445,7 @@ dxvk_embedded_data_files = files([
 
 dxvk_generated_embedded_files = embedding_compiler.process(dxvk_embedded_data_files)
 
-dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep ]
+dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, fidelityfx_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep ]
 
 if enable_rtxio
   dxvk_deps += rtxio_dep
