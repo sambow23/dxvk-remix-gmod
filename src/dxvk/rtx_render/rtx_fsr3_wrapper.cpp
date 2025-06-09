@@ -56,6 +56,14 @@ namespace dxvk {
       return false;
     }
 
+    // Setup Vulkan interface
+    setupVulkanInterface();
+    
+    if (!m_ffxInterface) {
+      m_fsr3NotSupportedReason = "Failed to create FidelityFX Vulkan interface";
+      return false;
+    }
+
     m_supportsFSR3 = true;
     m_initialized = true;
     
@@ -85,8 +93,53 @@ namespace dxvk {
       return;
     }
 
+    shutdownVulkanInterface();
     m_initialized = false;
     m_supportsFSR3 = false;
+  }
+
+  void FSR3Context::setupVulkanInterface() {
+    // Create VkDeviceContext for FidelityFX
+    VkDeviceContext vkDeviceContext = {};
+    vkDeviceContext.vkDevice = m_device->handle();
+    vkDeviceContext.vkPhysicalDevice = m_device->adapter()->handle();
+    vkDeviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
+    
+    // Create FfxDevice
+    m_ffxDevice = ffxGetDeviceVK(&vkDeviceContext);
+    
+    // Calculate scratch buffer size (max 4 contexts for FSR3 upscaler)
+    const size_t maxContexts = 4;
+    m_scratchBufferSize = ffxGetScratchMemorySizeVK(m_device->adapter()->handle(), maxContexts);
+    
+    // Allocate scratch buffer
+    m_scratchBuffer = std::make_unique<uint8_t[]>(m_scratchBufferSize);
+    
+    // Create FfxInterface
+    m_ffxInterface = std::make_unique<FfxInterface>();
+    
+    FfxErrorCode result = ffxGetInterfaceVK(
+      m_ffxInterface.get(),
+      m_ffxDevice,
+      m_scratchBuffer.get(),
+      m_scratchBufferSize,
+      maxContexts
+    );
+    
+    if (result != FFX_OK) {
+      Logger::err(str::format("[FSR3] Failed to create FidelityFX Vulkan interface: ", (int)result));
+      m_ffxInterface.reset();
+      m_scratchBuffer.reset();
+      m_scratchBufferSize = 0;
+    } else {
+      Logger::info(str::format("[FSR3] FidelityFX Vulkan interface created successfully (scratch buffer: ", m_scratchBufferSize, " bytes)"));
+    }
+  }
+  
+  void FSR3Context::shutdownVulkanInterface() {
+    m_ffxInterface.reset();
+    m_scratchBuffer.reset();
+    m_scratchBufferSize = 0;
   }
 
   std::unique_ptr<FSR3UpscalerContext> FSR3Context::createFSR3UpscalerContext() {
@@ -190,8 +243,12 @@ namespace dxvk {
     // Release any existing context
     releaseFSR3Feature();
 
-    // Setup Vulkan interface
-    setupVulkanInterface();
+    // Get FSR3Context from device
+    auto& fsr3Context = m_device->getCommon()->metaFSR3Context();
+    if (!fsr3Context.supportsFSR3()) {
+      Logger::err("[FSR3] Cannot initialize FSR3UpscalerContext - FSR3 not supported");
+      return;
+    }
 
     // Allocate FSR3 context
     m_fsr3Context = new FfxFsr3UpscalerContext();
@@ -213,8 +270,8 @@ namespace dxvk {
     contextDesc.maxUpscaleSize.width = displayOutSize[0];
     contextDesc.maxUpscaleSize.height = displayOutSize[1];
     
-    // TODO: Set up backend interface
-    // contextDesc.backendInterface = ...;
+    // Set up backend interface from FSR3Context
+    contextDesc.backendInterface = *fsr3Context.getFfxInterface();
     
     // Initialize FSR3 upscaler context
     FfxErrorCode errorCode = ffxFsr3UpscalerContextCreate(m_fsr3Context, &contextDesc);
@@ -263,11 +320,31 @@ namespace dxvk {
     // Set up FSR3 dispatch description
     FfxFsr3UpscalerDispatchDescription dispatchDesc = {};
     
-    // TODO: Convert Vulkan resources to FFX resources
-    // The resource conversion functions need to be implemented based on the actual
-    // FidelityFX Vulkan backend integration
+    // Convert DXVK resources to FidelityFX resources
+    if (buffers.pColorBuffer) {
+      dispatchDesc.color = convertDxvkResourceToFfx(buffers.pColorBuffer, FFX_RESOURCE_STATE_COMPUTE_READ);
+    }
     
-    // For now, we'll set up the basic parameters that don't require resource conversion
+    if (buffers.pDepthBuffer) {
+      dispatchDesc.depth = convertDxvkResourceToFfx(buffers.pDepthBuffer, FFX_RESOURCE_STATE_COMPUTE_READ);
+    }
+    
+    if (buffers.pMotionVectors) {
+      dispatchDesc.motionVectors = convertDxvkResourceToFfx(buffers.pMotionVectors, FFX_RESOURCE_STATE_COMPUTE_READ);
+    }
+    
+    if (buffers.pExposureBuffer) {
+      dispatchDesc.exposure = convertDxvkResourceToFfx(buffers.pExposureBuffer, FFX_RESOURCE_STATE_COMPUTE_READ);
+    }
+    
+    if (buffers.pOutputBuffer) {
+      dispatchDesc.output = convertDxvkResourceToFfx(buffers.pOutputBuffer, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    // Convert DXVK command buffer to FidelityFX command list
+    dispatchDesc.commandList = convertDxvkCommandList(renderContext);
+    
+    // Set up basic parameters
     dispatchDesc.jitterOffset.x = settings.jitterOffset[0];
     dispatchDesc.jitterOffset.y = settings.jitterOffset[1];
     dispatchDesc.motionVectorScale.x = settings.motionVectorScale[0];
@@ -282,28 +359,14 @@ namespace dxvk {
     dispatchDesc.upscaleSize.width = settings.displaySize[0];
     dispatchDesc.upscaleSize.height = settings.displaySize[1];
     
-    // TODO: Set up command list
-    // dispatchDesc.commandList = ...;
-    
-    // TODO: Set up resource handles
-    // dispatchDesc.color = ...;
-    // dispatchDesc.depth = ...;
-    // dispatchDesc.motionVectors = ...;
-    // dispatchDesc.output = ...;
-    
-    // For now, skip the actual dispatch since we don't have proper resource conversion
-    Logger::info("[FSR3] FSR3 evaluate called - implementation needs completion");
-    
-    /* TODO: Enable when resource conversion is implemented
     // Dispatch FSR3
     FfxErrorCode errorCode = ffxFsr3UpscalerContextDispatch(m_fsr3Context, &dispatchDesc);
     if (errorCode != FFX_OK) {
       Logger::err(str::format("[FSR3] FSR3 dispatch failed: ", (int)errorCode));
       return false;
     }
-    */
 
-    Logger::info(str::format("[FSR3] FSR3 evaluate completed - Render: ", settings.renderSize[0], "x", settings.renderSize[1],
+    Logger::info(str::format("[FSR3] FSR3 evaluate completed successfully - Render: ", settings.renderSize[0], "x", settings.renderSize[1],
                             ", Display: ", settings.displaySize[0], "x", settings.displaySize[1],
                             ", Sharpness: ", settings.sharpness));
     
@@ -320,8 +383,58 @@ namespace dxvk {
   }
 
   void FSR3UpscalerContext::setupVulkanInterface() {
-    // TODO: Set up Vulkan interface for FidelityFX SDK
-    // This will be implemented with the actual Vulkan backend setup
+    // No longer needed - interface comes from FSR3Context
+  }
+
+  // ===================================================================
+  // Resource Conversion Helper Methods
+  // ===================================================================
+
+  FfxResource FSR3UpscalerContext::convertDxvkResourceToFfx(const Resources::Resource* resource, FfxResourceStates state) const {
+    if (!resource || resource->image == nullptr) {
+      Logger::warn("[FSR3] Invalid resource for conversion");
+      return FfxResource{};
+    }
+
+    // Get VkImage handle from DXVK resource
+    VkImage vkImage = resource->image->handle();
+    
+    // Create VkImageCreateInfo from DXVK image info
+    VkImageCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    createInfo.imageType = VK_IMAGE_TYPE_2D;
+    createInfo.format = resource->image->info().format;
+    createInfo.extent = {
+      resource->image->info().extent.width,
+      resource->image->info().extent.height,
+      resource->image->info().extent.depth
+    };
+    createInfo.mipLevels = resource->image->info().mipLevels;
+    createInfo.arrayLayers = resource->image->info().numLayers;
+    createInfo.samples = VkSampleCountFlagBits(resource->image->info().sampleCount);
+    createInfo.tiling = resource->image->info().tiling;
+    createInfo.usage = resource->image->info().usage;
+    createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // Get resource description from FidelityFX
+    FfxResourceDescription ffxResDesc = ffxGetImageResourceDescriptionVK(vkImage, createInfo);
+    
+    // Convert to FfxResource
+    return ffxGetResourceVK(&vkImage, ffxResDesc, nullptr, state);
+  }
+
+  FfxCommandList FSR3UpscalerContext::convertDxvkCommandList(Rc<DxvkContext> dxvkContext) const {
+    if (dxvkContext == nullptr) {
+      Logger::warn("[FSR3] Invalid DxvkContext for command list conversion");
+      return FfxCommandList{};
+    }
+
+    // Get the current command buffer from DXVK context
+    VkCommandBuffer cmdBuffer = dxvkContext->getCmdBuffer(DxvkCmdBuffer::ExecBuffer);
+    
+    // Convert to FfxCommandList using FidelityFX Vulkan backend
+    return ffxGetCommandListVK(cmdBuffer);
   }
 
   // ===================================================================
@@ -380,4 +493,17 @@ namespace dxvk {
     }
   }
 
+} 
+
+// =======================================================================
+// Stub implementations for Frame Interpolation functions (not needed for FSR3 upscaling)
+// =======================================================================
+
+extern "C" {
+  // Stub implementation for frame generation configuration
+  // This is required by the FidelityFX Vulkan backend but not needed for basic FSR3 upscaling
+  FFX_API FfxErrorCode ffxSetFrameGenerationConfigToSwapchainVK(const FfxFrameGenerationConfig* config) {
+    // Not implemented - frame interpolation is not supported in this integration
+    return FFX_ERROR_INVALID_ARGUMENT;
+  }
 } 

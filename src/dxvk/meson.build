@@ -342,6 +342,8 @@ dxvk_src = files([
   '../../submodules/fidelityfx-sdk/sdk/src/shared/ffx_assert.cpp',
   '../../submodules/fidelityfx-sdk/sdk/src/shared/ffx_message.cpp',
   '../../submodules/fidelityfx-sdk/sdk/src/backends/shared/ffx_shader_blobs.cpp',
+  '../../submodules/fidelityfx-sdk/sdk/src/components/breadcrumbs/ffx_breadcrumbs.cpp',
+  '../../submodules/fidelityfx-sdk/sdk/src/shared/ffx_breadcrumbs_list.cpp',
 
   'platform/dxvk_win32_exts.cpp',
   

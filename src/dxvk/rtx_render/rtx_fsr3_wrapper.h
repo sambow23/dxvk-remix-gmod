@@ -67,14 +67,26 @@ namespace dxvk {
     
     std::unique_ptr<FSR3UpscalerContext> createFSR3UpscalerContext();
     
+    // Get the FidelityFX device
+    FfxDevice getFfxDevice() const { return m_ffxDevice; }
+    FfxInterface* getFfxInterface() const { return m_ffxInterface.get(); }
+    
   private:
     bool initialize();
     bool checkFSR3Support();
+    void setupVulkanInterface();
+    void shutdownVulkanInterface();
 
     DxvkDevice* m_device = nullptr;
     bool m_initialized = false;
     bool m_supportsFSR3 = false;
     std::string m_fsr3NotSupportedReason;
+    
+    // FidelityFX SDK backend interface
+    FfxDevice m_ffxDevice;
+    std::unique_ptr<FfxInterface> m_ffxInterface;
+    std::unique_ptr<uint8_t[]> m_scratchBuffer;
+    size_t m_scratchBufferSize = 0;
   };
 
   /**
@@ -172,6 +184,10 @@ namespace dxvk {
     
     // Vulkan-specific setup
     void setupVulkanInterface();
+    
+    // Resource conversion helpers
+    FfxResource convertDxvkResourceToFfx(const Resources::Resource* resource, FfxResourceStates state = FFX_RESOURCE_STATE_COMPUTE_READ) const;
+    FfxCommandList convertDxvkCommandList(Rc<DxvkContext> dxvkContext) const;
   };
 
   /**
