@@ -323,59 +323,13 @@ namespace dxvk {
 
 
   Rc<DxvkAdapter> DxvkInstance::findAdapterByLuid(const void* luid) const {
-    // Log the LUID we're searching for
-    if (luid != nullptr) {
-      const uint8_t* bytes = static_cast<const uint8_t*>(luid);
-      std::stringstream ss;
-      for (int i = 0; i < VK_LUID_SIZE; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(bytes[i]);
-        if (i < VK_LUID_SIZE - 1) ss << ":";
-      }
-      Logger::info(str::format("Looking for adapter with LUID: ", ss.str()));
-    }
-  
-    // Check our adapters
     for (const auto& adapter : m_adapters) {
       const auto& props = adapter->devicePropertiesExt().coreDeviceId;
-  
-      if (props.deviceLUIDValid && luid != nullptr) {
-        const uint8_t* adapterLuid = props.deviceLUID;
-        const uint8_t* searchLuid = static_cast<const uint8_t*>(luid);
-        
-        // Compare LUIDs
-        bool match = true;
-        for (int i = 0; i < VK_LUID_SIZE; i++) {
-          if (adapterLuid[i] != searchLuid[i]) {
-            match = false;
-            break;
-          }
-        }
-        
-        if (match) {
-          // Found a match - log and return
-          Logger::info(str::format("Found matching adapter by LUID: ", 
-                                 adapter->deviceProperties().deviceName));
-          return adapter;
-        }
-      }
-    }
-  
-    // If we didn't find a matching adapter but have adapters, return first AMD one
-    for (const auto& adapter : m_adapters) {
-      if (adapter->deviceProperties().vendorID == 0x1002) { // AMD
-        Logger::warn(str::format("No matching LUID found - forcing AMD adapter: ", 
-                               adapter->deviceProperties().deviceName));
+
+      if (props.deviceLUIDValid && !std::memcmp(luid, props.deviceLUID, VK_LUID_SIZE))
         return adapter;
-      }
     }
-  
-    // If no AMD adapter, return first adapter or null
-    if (!m_adapters.empty()) {
-      Logger::warn(str::format("No matching LUID or AMD adapter - using first available: ", 
-                             m_adapters[0]->deviceProperties().deviceName));
-      return m_adapters[0];
-    }
-  
+
     return nullptr;
   }
 
@@ -513,77 +467,47 @@ namespace dxvk {
     std::vector<VkPhysicalDevice> adapters(numAdapters);
     if (m_vki->vkEnumeratePhysicalDevices(m_vki->instance(), &numAdapters, adapters.data()) != VK_SUCCESS)
       throw DxvkError("DxvkInstance::enumAdapters: Failed to enumerate adapters");
-  
+
     std::vector<VkPhysicalDeviceProperties> deviceProperties(numAdapters);
     DxvkDeviceFilterFlags filterFlags = 0;
-  
-    // First pass: collect basic info and find NVIDIA GPU
-    VkPhysicalDeviceIDProperties nvidiaIdProps = {};
-    nvidiaIdProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
-    bool foundNvidiaGpu = false;
-  
+
     for (uint32_t i = 0; i < numAdapters; i++) {
       m_vki->vkGetPhysicalDeviceProperties(adapters[i], &deviceProperties[i]);
-  
+
       if (deviceProperties[i].deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU)
         filterFlags.set(DxvkDeviceFilterFlag::SkipCpuDevices);
-      
-      // Capture NVIDIA LUID info for later use
-      if (deviceProperties[i].vendorID == 0x10DE) { // NVIDIA
-        VkPhysicalDeviceProperties2 props2 = {};
-        props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        props2.pNext = &nvidiaIdProps;
-        m_vki->vkGetPhysicalDeviceProperties2(adapters[i], &props2);
-        
-        if (nvidiaIdProps.deviceLUIDValid) {
-          foundNvidiaGpu = true;
-          Logger::info(str::format("Found NVIDIA GPU: ", deviceProperties[i].deviceName, 
-                                  " - will use its LUID for compatibility"));
-        }
-      }
     }
-  
-    // Second pass: create and filter adapters
+
     DxvkDeviceFilter filter(filterFlags);
     std::vector<Rc<DxvkAdapter>> result;
-  
-    std::vector<Rc<DxvkAdapter>> amdAdapters;
-    std::vector<Rc<DxvkAdapter>> otherAdapters;
-  
+
     for (uint32_t i = 0; i < numAdapters; i++) {
-      if (filter.testAdapter(deviceProperties[i])) {
-        auto adapter = new DxvkAdapter(m_vki, adapters[i]);
-        
-        // Categorize adapters
-        if (deviceProperties[i].vendorID == 0x1002) { // AMD
-          amdAdapters.push_back(adapter);
-        } else {
-          otherAdapters.push_back(adapter);
+      if (filter.testAdapter(deviceProperties[i]))
+        result.push_back(new DxvkAdapter(m_vki, adapters[i]));
+    }
+    
+    std::stable_sort(result.begin(), result.end(),
+      [] (const Rc<DxvkAdapter>& a, const Rc<DxvkAdapter>& b) -> bool {
+        static const std::array<VkPhysicalDeviceType, 3> deviceTypes = {{
+          VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+          VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
+          VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU,
+        }};
+
+        uint32_t aRank = deviceTypes.size();
+        uint32_t bRank = deviceTypes.size();
+
+        for (uint32_t i = 0; i < std::min(aRank, bRank); i++) {
+          if (a->deviceProperties().deviceType == deviceTypes[i]) aRank = i;
+          if (b->deviceProperties().deviceType == deviceTypes[i]) bRank = i;
         }
-      }
-    }
-  
-    // Special handling for AMD GPUs
-    if (!amdAdapters.empty() && foundNvidiaGpu) {
-      // For each AMD adapter, inject the NVIDIA LUID
-      for (auto& adapter : amdAdapters) {
-        // Store the original adapter properties for reference
-        std::string adapterName = adapter->deviceProperties().deviceName;
-        
-        // Inject NVIDIA LUID into the AMD GPU's device ID properties
-        adapter->injectDeviceLuid(nvidiaIdProps.deviceLUID);
-        
-        Logger::info(str::format("Injected NVIDIA LUID into AMD adapter: ", adapterName));
-      }
-    }
-  
-    // Combine adapters with AMD first, others after
-    result.insert(result.end(), amdAdapters.begin(), amdAdapters.end());
-    result.insert(result.end(), otherAdapters.begin(), otherAdapters.end());
+
+        return aRank < bRank;
+      });
     
     if (result.size() == 0) {
       Logger::warn("DXVK: No adapters found. Please check your "
-                  "device filter settings and Vulkan setup.");
+                   "device filter settings and Vulkan setup.");
     }
     
     return result;

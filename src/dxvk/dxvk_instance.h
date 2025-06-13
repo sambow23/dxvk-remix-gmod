@@ -166,13 +166,6 @@ namespace dxvk {
     void initConfigs();
     template<Config::Type type>
     void initConfig();
-    // NVIDIA reference data for spoofing
-    bool m_nvidiaFound = false;
-    uint32_t m_nvidiaVendorId = 0;
-    uint32_t m_nvidiaDeviceId = 0;
-    uint32_t m_nvidiaDriverVersion = 0;
-    uint8_t m_nvidiaLuid[VK_LUID_SIZE] = {};
-    bool m_nvidiaLuidValid = false;
     // NV-DXVK end 
   };
   
