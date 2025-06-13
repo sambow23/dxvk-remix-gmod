@@ -156,8 +156,6 @@ public:
     return m_completeCapture;
   }
 
-  static std::string getCaptureInstanceStageNameWithTimestamp();
-
 private:
   GameCapturer() = delete;
   GameCapturer(const GameCapturer& other) = delete;
@@ -296,7 +294,7 @@ private:
   static Options getOptions() {
     return { RtxOptions::captureShowMenuOnHotkey(),
              RtxOptions::getCaptureInstances(),
-             getCaptureInstanceStageNameWithTimestamp(),
+             RtxOptions::captureInstanceStageName(),
              RtxOptions::captureEnableMultiframe(),
              RtxOptions::captureMaxFrames(),
              RtxOptions::captureFramesPerSecond(),

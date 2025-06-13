@@ -217,7 +217,6 @@ namespace dxvk {
     Logger::info(str::format("DXVK_Remix: ", DXVK_VERSION));
 
     // NV-DXVK start: Decomposed growing config initialization
-    // TODO[REMIX-4106] we need to avoid re-parsing the same config files when dxvk_instance is recreated.
     initConfigs();
     // NV-DXVK end 
 
@@ -521,7 +520,6 @@ namespace dxvk {
   
   // NV-DXVK start: Custom config loading/logging
   void DxvkInstance::initConfigs() {
-    
     // Load configurations
     // Note: Loading is done in the following order currently, each step overriding values in the previous
     // configuration values when a conflict exist, resulting in the combined "effective" configuration:
@@ -536,7 +534,7 @@ namespace dxvk {
     initConfig<Config::Type_RtxUser>();
     initConfig<Config::Type_RtxMod>();
 
-    RtxOption<bool>::initializeRtxOptions();
+    RtxOption<bool>::updateRtxOptions();
 
     m_config.logOptions("Effective (combined)");
 

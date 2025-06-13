@@ -351,7 +351,7 @@ namespace dxvk {
     // NV-DXVK start: DLFG integration
     if (RtxOptions::enableVsync() == EnableVsync::WaitingForImplicitSwapchain) {
       // save the vsync state when the first swapchain is created, to act as the default
-      RtxOptions::enableVsyncState = m_presentParams.PresentationInterval ? EnableVsync::On : EnableVsync::Off;
+      RtxOptions::enableVsync.set(m_presentParams.PresentationInterval ? EnableVsync::On : EnableVsync::Off);
     }
     // NV-DXVK end
 
@@ -470,7 +470,7 @@ namespace dxvk {
       presentInterval = options->presentInterval;
 
     // NV-DXVK start: Reflex integration
-    switch (RtxOptions::enableVsyncState) {
+    switch (RtxOptions::enableVsync()) {
     case EnableVsync::Off:
       presentInterval = 0;
       break;

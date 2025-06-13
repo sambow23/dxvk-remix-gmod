@@ -72,7 +72,8 @@ namespace dxvk {
       std::string_view m_invalidChars = "/<>:\"/\\|?*";
       std::vector<std::string> m_invalidKeywords = { "CON", "PRN", "AUX", "NUL",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
       std::string_view m_invalidKeywordDescription = "CON, PRN, AUX, NUL, COM[1-9], LPT[1-9]";
-      bool m_focused = false;
+      size_t m_timestampPos = std::string::npos;
+      bool m_focused = true;
     } m_stageNameInputBox;
 
     class Progress {

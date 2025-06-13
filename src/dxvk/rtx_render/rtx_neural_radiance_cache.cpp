@@ -312,14 +312,13 @@ namespace dxvk {
   }
 
   void NeuralRadianceCache::applyQualityPreset() {
-    uint8_t trainingMaxPathBounces = NrcOptions::trainingMaxPathBounces();
     if (NrcOptions::qualityPreset() == QualityPreset::Ultra) {
       Logger::info("[RTX Neural Radiance Cache] Selected Ultra preset mode.");
       NrcOptions::terminationHeuristicThreshold.setDeferred(0.1f);
       NrcOptions::smallestResolvableFeatureSizeMeters.setDeferred(0.01f);
       NrcOptions::targetNumTrainingIterations.setDeferred(4);
       // 9 and higher resulted in no scene illumination loss in Portal RTX
-      trainingMaxPathBounces = 9;
+      NrcOptions::trainingMaxPathBounces.set(9);
 
     } else if (NrcOptions::qualityPreset() == QualityPreset::High) {
       Logger::info("[RTX Neural Radiance Cache] Selected High preset mode.");
@@ -327,7 +326,7 @@ namespace dxvk {
       NrcOptions::smallestResolvableFeatureSizeMeters.setDeferred(0.04f);
       NrcOptions::targetNumTrainingIterations.setDeferred(3);
       // 7 results in tiny scene illumination decrease in comparison to 9
-      trainingMaxPathBounces = 7;
+      NrcOptions::trainingMaxPathBounces.set(7);
 
     } else if (NrcOptions::qualityPreset() == QualityPreset::Medium) {
       Logger::info("[RTX Neural Radiance Cache] Selected Medium preset mode.");
@@ -342,11 +341,11 @@ namespace dxvk {
       NrcOptions::targetNumTrainingIterations.setDeferred(2);
 
       // Longer training paths require more memory (~5-8+ MB per bounce) and have a slight performance impact (particularly when SER is disabled).
-      trainingMaxPathBounces = 6;
+      NrcOptions::trainingMaxPathBounces.set(6);
     }
 
-    NrcOptions::trainingMaxPathBounces.setDeferred(std::max<uint8_t>(
-      trainingMaxPathBounces + NrcOptions::trainingMaxPathBouncesBiasInQualityPresets(),
+    NrcOptions::trainingMaxPathBounces.set(std::max<uint8_t>(
+      NrcOptions::trainingMaxPathBounces() + NrcOptions::trainingMaxPathBouncesBiasInQualityPresets(),
       0));
   }
 
@@ -923,9 +922,7 @@ namespace dxvk {
 
   void NeuralRadianceCache::setQualityPreset(QualityPreset nrcQualityPreset) {
     if (nrcQualityPreset != NrcOptions::qualityPreset()) {
-      // TODO[REMIX-4105]: this is read immediately after being set, so it needs to be setImmediately.
-      // This should be addressed by REMIX-4109 if that is done before REMIX-4105 is fully cleaned up.
-      NrcOptions::qualityPreset.setImmediately(nrcQualityPreset);
+      NrcOptions::qualityPreset.set(nrcQualityPreset);
       applyQualityPreset();
     }
   }

@@ -1032,9 +1032,8 @@ namespace dxvk {
       const std::vector<uint32_t>& debugViewIndices = iter->second.getDebugViewIndices();
 
       if (!debugViewIndices.empty()) {
-        // Set the index for the next frame, since the RtxOption won't be updated until the end of the current frame.
-        uint32_t nextFrameIndex = ctx->getDevice()->getCurrentFrameId() + 1;
-        debugViewIdx.setDeferred(debugViewIndices[nextFrameIndex % debugViewIndices.size()]);
+        uint32_t frameIndex = ctx->getDevice()->getCurrentFrameId();
+        debugViewIdx.set(debugViewIndices[frameIndex % debugViewIndices.size()]);
       } else {
         debugViewIdx.setDeferred(DEBUG_VIEW_DISABLED);
       }
