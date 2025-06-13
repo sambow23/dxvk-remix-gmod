@@ -1004,6 +1004,9 @@ namespace dxvk {
         RtxOptions::enableReplacementMaterials.setDeferred(false);
         RtxOptions::enableReplacementMeshes.setDeferred(false);
         break;
+      case RtxQuickAction::kCount:
+        assert(false && "invalid RtxQuickAction::kCount in ImGUI::updateQuickActions");
+        break;
       }
     }
 #endif
@@ -1074,6 +1077,9 @@ namespace dxvk {
               break;
             case kTab_Development:
               showDevelopmentSettings(ctx);
+              break;
+            case kTab_Count:
+              assert(false && "kTab_Count hit in ImGUI::showMainMenu");
               break;
             }
             m_curTab = tab;
@@ -1347,6 +1353,9 @@ namespace dxvk {
 
           break;
         }
+        case UpscalerType::None:
+          // No custom UI here.
+          break;
       }
 
       ImGui::Unindent(static_cast<float>(subItemIndent));
@@ -1610,6 +1619,7 @@ namespace dxvk {
       case Mod::ProgressState::ProcessingMaterials: replacementLoadingSubtext += str::format("Processing Materials (", replacementState.progressCount, " processed)"); break;
       case Mod::ProgressState::ProcessingMeshes: replacementLoadingSubtext += str::format("Processing Meshes (", replacementState.progressCount, " processed)"); break;
       case Mod::ProgressState::ProcessingLights: replacementLoadingSubtext += str::format("Processing Lights (", replacementState.progressCount, " processed)"); break;
+      default: break;
       }
 
       if (
