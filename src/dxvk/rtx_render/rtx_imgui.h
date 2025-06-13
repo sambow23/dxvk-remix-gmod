@@ -390,7 +390,13 @@ namespace ImGui {
     const auto changed = IMGUI_ADD_TOOLTIP(InputText(label, textBuffer.data(), textBuffer.size(), std::forward<Args>(args)...), rtxOption->getDescription());
 
     if (changed) {
-      rtxOption->set(std::string(textBuffer.data()));
+      rtxOption->setDeferred(std::string(textBuffer.data()));
+    } else if (IsItemDeactivated()) {
+      // If the text box loses focus when `ImGuiInputTextFlags_EnterReturnsTrue` is set, the input value would be lost.
+      // This catches that case.
+      if (strcmp(textBuffer.data(), rtxOption->get().c_str()) != 0) {
+        rtxOption->setDeferred(std::string(textBuffer.data()));
+      }
     }
 
     return changed;

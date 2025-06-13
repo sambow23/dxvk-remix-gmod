@@ -1077,7 +1077,7 @@ namespace {
 
     dxvk::Config newSetting;
     newSetting.setOptionMove(std::move(strKey), std::string{ value });
-    found->second->readOption(newSetting, dxvk::RtxOptionImpl::ValueType::Value);
+    found->second->readOption(newSetting, dxvk::RtxOptionImpl::ValueType::PendingValue);
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
