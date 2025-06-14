@@ -644,6 +644,8 @@ namespace dxvk {
           m_common->metaAutoExposure().createResources(this);
           dispatchRayReconstruction(rtOutput, frameTimeMilliseconds);
         } else if (m_currentUpscaler == InternalUpscaler::XeSS) {
+          // XeSS may need exposure texture for proper tone mapping
+          m_common->metaAutoExposure().createResources(this);
           dispatchXeSS(rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::NIS) {
           dispatchNIS(rtOutput);
