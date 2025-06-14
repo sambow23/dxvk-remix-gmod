@@ -253,6 +253,24 @@ void geometryResolverOutputSurface(
     const vec2 motionVectorUVOffset = motionVectorNDC * vec2(0.5, -0.5);
     const vec2 motionVectorPixel = motionVectorUVOffset * cb.camera.resolution;
 
+    // Include jitter in motion vectors for XeSS if enabled
+    if (cb.enableXeSSJitteredMotionVectors != 0) {
+      // Get current frame jitter from jittered projection matrix
+      // The jitter is the difference between jittered and non-jittered NDC positions
+      vec4 jitteredNDC = mul(cb.camera.worldToProjectionJittered, vec4(virtualHitPosition, 1.0));
+      vec4 nonJitteredNDC = mul(cb.camera.worldToView, vec4(virtualHitPosition, 1.0));
+      nonJitteredNDC = mul(cb.camera.viewToProjection, nonJitteredNDC);
+      
+      jitteredNDC /= jitteredNDC.w;
+      nonJitteredNDC /= nonJitteredNDC.w;
+      
+      vec2 currentJitterNDC = jitteredNDC.xy - nonJitteredNDC.xy;
+      vec2 currentJitterPixel = currentJitterNDC * vec2(0.5, -0.5) * cb.camera.resolution;
+      
+      // Add current frame jitter to motion vector
+      motionVectorPixel += currentJitterPixel;
+    }
+
     // Write out screen-space motion.
     PrimaryScreenSpaceMotionVector[pixelCoordinate] = motionVectorPixel;
 
@@ -386,6 +404,24 @@ void geometryResolverDLSSRROutputSurface(
   vec2 motionVectorNDC = prevNDC.xy - ndc.xy;
   vec2 motionVectorUVOffset = motionVectorNDC * vec2(0.5, -0.5);
   vec2 motionVectorPixel = motionVectorUVOffset * cb.camera.resolution;
+
+  // Include jitter in motion vectors for XeSS if enabled
+  if (cb.enableXeSSJitteredMotionVectors != 0) {
+    // Get current frame jitter from jittered projection matrix
+    // The jitter is the difference between jittered and non-jittered NDC positions
+    vec4 jitteredNDC = mul(cb.camera.worldToProjectionJittered, vec4(virtualHitPosition, 1.0));
+    vec4 nonJitteredNDC = mul(cb.camera.worldToView, vec4(virtualHitPosition, 1.0));
+    nonJitteredNDC = mul(cb.camera.viewToProjection, nonJitteredNDC);
+    
+    jitteredNDC /= jitteredNDC.w;
+    nonJitteredNDC /= nonJitteredNDC.w;
+    
+    vec2 currentJitterNDC = jitteredNDC.xy - nonJitteredNDC.xy;
+    vec2 currentJitterPixel = currentJitterNDC * vec2(0.5, -0.5) * cb.camera.resolution;
+    
+    // Add current frame jitter to motion vector
+    motionVectorPixel += currentJitterPixel;
+  }
 
   // Write out screen-space motion.
   PrimaryScreenSpaceMotionVectorDLSSRR[pixelCoordinate] = motionVectorPixel;

@@ -332,6 +332,7 @@ namespace dxvk {
       {UpscalerType::None, "None"},
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
+      {UpscalerType::XeSS, "XeSS"},
   } });
 
   static auto upscalerDLSSCombo = ImGui::ComboWithKey<UpscalerType>(
@@ -341,6 +342,7 @@ namespace dxvk {
       {UpscalerType::DLSS, "DLSS"},
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
+      {UpscalerType::XeSS, "XeSS"},
   } });
 
   ImGui::ComboWithKey<DlssPreset> dlssPresetCombo{
@@ -382,6 +384,20 @@ namespace dxvk {
         {TaauPreset::Balanced, "Balanced"},
         {TaauPreset::Quality, "Quality"},
         {TaauPreset::Fullscreen, "Fullscreen"},
+    } }
+  };
+
+  ImGui::ComboWithKey<XeSSProfile> xessProfileCombo{
+    "XeSS Profile",
+    ImGui::ComboWithKey<XeSSProfile>::ComboEntries{ {
+        {XeSSProfile::UltraPerf, "Ultra Performance"},
+        {XeSSProfile::Performance, "Performance"},
+        {XeSSProfile::Balanced, "Balanced"},
+        {XeSSProfile::Quality, "Quality"},
+        {XeSSProfile::UltraQuality, "Ultra Quality"},
+        {XeSSProfile::UltraQualityPlus, "Ultra Quality Plus"},
+        {XeSSProfile::NativeAA, "Native Anti-Aliasing"},
+        {XeSSProfile::Custom, "Custom"},
     } }
   };
 
@@ -466,6 +482,7 @@ namespace dxvk {
       { RtxFramePassStage::DLSS, "DLSS" },
       { RtxFramePassStage::DLSSRR, "DLSSRR" },
       { RtxFramePassStage::NIS, "NIS" },
+      { RtxFramePassStage::XeSS, "XeSS" },
       { RtxFramePassStage::TAA, "TAA" },
       { RtxFramePassStage::DustParticles, "DustParticles" },
       { RtxFramePassStage::Bloom, "Bloom" },
@@ -1352,9 +1369,27 @@ namespace dxvk {
 
           break;
         }
-        case UpscalerType::None:
+        case UpscalerType::XeSS: {
+          m_userGraphicsSettingChanged |= xessProfileCombo.getKey(&RtxOptions::xessProfileObject());
+          RtxOptions::updateUpscalerFromXeSSPreset();
+
+          // Show resolution slider only for Custom preset
+          if (RtxOptions::xessProfile() == XeSSProfile::Custom) {
+            m_userGraphicsSettingChanged |= ImGui::SliderFloat("Resolution Scale", &RtxOptions::resolutionScaleObject(), 0.1f, 1.0f, "%.2f");
+          }
+
+          // Display XeSS internal resolution
+          auto& xess = ctx->getCommonObjects()->metaXeSS();
+          uint32_t inputWidth, inputHeight;
+          xess.getInputSize(inputWidth, inputHeight);
+          ImGui::TextWrapped(str::format("Internal Resolution: ", inputWidth, "x", inputHeight).c_str());
+
+          break;
+        }
+        case UpscalerType::None: {
           // No custom UI here.
           break;
+        }
       }
 
       ImGui::Unindent(static_cast<float>(subItemIndent));
@@ -3095,7 +3130,103 @@ namespace dxvk {
         ImGui::SliderFloat("Resolution scale", &RtxOptions::resolutionScaleObject(), 0.5f, 1.0f);
         ImGui::SliderFloat("Sharpness", &ctx->getCommonObjects()->metaNIS().m_sharpness, 0.1f, 1.0f);
         ImGui::Checkbox("Use FP16", &ctx->getCommonObjects()->metaNIS().m_useFp16);
-      } else if (RtxOptions::upscalerType() == UpscalerType::TAAU) {
+              } else if (RtxOptions::upscalerType() == UpscalerType::XeSS) {
+          xessProfileCombo.getKey(&RtxOptions::xessProfileObject());
+          RtxOptions::updateUpscalerFromXeSSPreset();
+
+          // Show resolution slider only for Custom preset
+          if (RtxOptions::xessProfile() == XeSSProfile::Custom) {
+            m_userGraphicsSettingChanged |= ImGui::SliderFloat("Resolution Scale", &RtxOptions::resolutionScaleObject(), 0.1f, 1.0f, "%.2f");
+          }
+
+          // Display XeSS internal resolution
+          auto& xess = ctx->getCommonObjects()->metaXeSS();
+          uint32_t inputWidth, inputHeight;
+          xess.getInputSize(inputWidth, inputHeight);
+          ImGui::TextWrapped(str::format("Internal Resolution: ", inputWidth, "x", inputHeight).c_str());
+
+          // Advanced XeSS Settings (collapsed by default)
+          if (ImGui::CollapsingHeader("Advanced XeSS Settings", ImGuiTreeNodeFlags_None)) {
+            ImGui::Indent();
+            
+            // XeSS Network Model Selection
+            const char* networkModelNames[] = {
+              "KPSS (Recommended)",
+              "SPLAT",
+              "Model 3",
+              "Model 4", 
+              "Model 5",
+              "Model 6"
+            };
+            int currentModel = (int)RtxOptions::xessNetworkModel();
+            if (ImGui::Combo("XeSS Network Model", &currentModel, networkModelNames, IM_ARRAYSIZE(networkModelNames))) {
+              RtxOptions::xessNetworkModel.setDeferred((XeSSNetworkModel)currentModel);
+            }
+            ImGui::SetTooltipToLastWidgetOnHover("Selects the XeSS neural network model. KPSS generally provides the best quality.");
+
+            // XeSS Auto-Exposure Mode Selection
+            const char* autoExposureModeNames[] = {
+              "Automatic",
+              "Use Remix Exposure",
+              "Use XeSS Internal"
+            };
+            int currentAutoExposureMode = (int)RtxOptions::xessAutoExposureMode();
+            if (ImGui::Combo("XeSS Auto-Exposure", &currentAutoExposureMode, autoExposureModeNames, IM_ARRAYSIZE(autoExposureModeNames))) {
+              RtxOptions::xessAutoExposureMode.setDeferred((XeSSAutoExposureMode)currentAutoExposureMode);
+            }
+            ImGui::SetTooltipToLastWidgetOnHover("Controls auto-exposure handling. Automatic uses Remix's exposure if available, otherwise XeSS internal.");
+
+            // XeSS Jitter Enhancement Options
+            ImGui::Separator();
+            ImGui::Text("XeSS Jitter Settings:");
+            
+            ImGui::Checkbox("Use XeSS Optimized Jitter", &RtxOptions::xessUseOptimizedJitterObject());
+            ImGui::SetTooltipToLastWidgetOnHover("Use XeSS-specific jitter patterns and scaling for better temporal stability.");
+            
+            ImGui::SliderFloat("Jitter Scale", &RtxOptions::xessJitterScaleObject(), 0.1f, 2.0f, "%.2f");
+            ImGui::SetTooltipToLastWidgetOnHover("Multiplier for jitter intensity. Lower values may reduce aliasing but can cause temporal artifacts. Higher values increase temporal anti-aliasing but may cause jitter artifacts.");
+
+            // XeSS Debug Options
+            if (ImGui::CollapsingHeader("XeSS Debug Options", ImGuiTreeNodeFlags_None)) {
+              ImGui::Indent();
+              
+              ImGui::Checkbox("Use Jittered Motion Vectors", &RtxOptions::xessUseJitteredMotionVectorsObject());
+              ImGui::SetTooltipToLastWidgetOnHover("Include jitter in motion vectors for XeSS instead of passing jitter separately. Can improve temporal stability but requires motion vector recalculation.");
+              
+              ImGui::Checkbox("Force Inverted Depth", &RtxOptions::xessForceInvertedDepthObject());
+              ImGui::SetTooltipToLastWidgetOnHover("Force XeSS to treat depth buffer as inverted (1.0 = near, 0.0 = far). Enable if depth-related artifacts occur.");
+              
+              ImGui::Checkbox("Force LDR Input", &RtxOptions::xessForceLDRInputObject());
+              ImGui::SetTooltipToLastWidgetOnHover("Force XeSS to treat input color as LDR instead of HDR. Enable if color artifacts occur.");
+              
+              ImGui::Checkbox("Force High-Res Motion Vectors", &RtxOptions::xessForceHighResMotionVectorsObject());
+              ImGui::SetTooltipToLastWidgetOnHover("Force XeSS to treat motion vectors as high resolution. Enable if motion vector scaling issues occur.");
+              
+              ImGui::Checkbox("Enable Motion Vector Debug", &RtxOptions::xessEnableMotionVectorDebugObject());
+              ImGui::SetTooltipToLastWidgetOnHover("Enable debug logging for XeSS motion vector validation and range checking.");
+              
+              ImGui::Unindent();
+            }
+
+            // Auto-Exposure Specific Jitter Options
+            if (RtxOptions::xessAutoExposureMode() == XeSSAutoExposureMode::UseXeSS || 
+                (RtxOptions::xessAutoExposureMode() == XeSSAutoExposureMode::Automatic && !ctx->getCommonObjects()->metaAutoExposure().enabled())) {
+              ImGui::Separator();
+              ImGui::Text("XeSS auto-exposure jitter optimization:");
+              
+              ImGui::Checkbox("Enable Temporal Optimization", &RtxOptions::xessAutoExposureTemporalOptimizationObject());
+              ImGui::SetTooltipToLastWidgetOnHover("Enables adaptive jitter scaling based on exposure changes to improve temporal stability when using XeSS internal auto-exposure.");
+              
+              if (RtxOptions::xessAutoExposureTemporalOptimization()) {
+                ImGui::SliderFloat("Exposure Jitter Damping", &RtxOptions::xessAutoExposureJitterDampingObject(), 0.3f, 1.0f, "%.2f");
+                ImGui::SetTooltipToLastWidgetOnHover("Reduces jitter intensity when using XeSS internal auto-exposure. Lower values provide more temporal stability but may increase aliasing.");
+              }
+            }
+
+            ImGui::Unindent();
+          }
+
+        } else if (RtxOptions::upscalerType() == UpscalerType::TAAU) {
         ImGui::SliderFloat("Resolution scale", &RtxOptions::resolutionScaleObject(), 0.5f, 1.0f);
       }
 

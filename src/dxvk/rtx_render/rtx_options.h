@@ -64,7 +64,8 @@ namespace dxvk {
     None = 0,
     DLSS,
     NIS,
-    TAAU
+    TAAU,
+    XeSS
   };
 
   enum class GraphicsPreset : int {
@@ -87,6 +88,34 @@ namespace dxvk {
     Off = 0,
     On,
     Custom
+  };
+
+  enum class XeSSProfile : int {
+    UltraPerf = 0,
+    Performance,
+    Balanced,
+    Quality,
+    UltraQuality,
+    UltraQualityPlus,
+    NativeAA,
+    Custom,
+    Invalid
+  };
+
+  enum class XeSSNetworkModel : int {
+    KPSS = 0,
+    SPLAT = 1,
+    Model3 = 2,
+    Model4 = 3,
+    Model5 = 4,
+    Model6 = 5,
+    Unknown = 0x7FFFFFFF
+  };
+
+  enum class XeSSAutoExposureMode : int {
+    Automatic = 0,    // Use Remix's exposure texture if available, otherwise XeSS internal
+    UseRemix = 1,     // Always use Remix's exposure texture
+    UseXeSS = 2       // Always use XeSS's internal auto-exposure
   };
 
   enum class NisPreset : int {
@@ -290,6 +319,18 @@ namespace dxvk {
     RTX_OPTION_ENV("rtx", DlssPreset, dlssPreset, DlssPreset::On, "RTX_DLSS_PRESET", "Combined DLSS Preset for quickly controlling Upscaling, Frame Interpolation and Latency Reduction.");
     RTX_OPTION("rtx", NisPreset, nisPreset, NisPreset::Balanced, "Adjusts NIS scaling factor, trades quality for performance.");
     RTX_OPTION("rtx", TaauPreset, taauPreset, TaauPreset::Balanced,  "Adjusts TAA-U scaling factor, trades quality for performance.");
+    RTX_OPTION("rtx", XeSSProfile, xessProfile, XeSSProfile::Balanced, "Adjusts XeSS scaling factor, trades quality for performance.");
+    RTX_OPTION("rtx", XeSSNetworkModel, xessNetworkModel, XeSSNetworkModel::KPSS, "Selects the XeSS neural network model to use. KPSS generally provides the best quality.");
+    RTX_OPTION("rtx", XeSSAutoExposureMode, xessAutoExposureMode, XeSSAutoExposureMode::UseRemix, "Controls whether to use Remix's exposure texture or XeSS's internal auto-exposure. Automatic uses Remix's exposure if available, otherwise XeSS internal.");
+    RTX_OPTION("rtx", float, xessJitterScale, 1.0f, "Multiplier for XeSS jitter intensity. Values > 1.0 increase jitter, < 1.0 reduce it. Can help reduce aliasing or temporal artifacts.");
+    RTX_OPTION("rtx", bool, xessUseOptimizedJitter, true, "Use XeSS-optimized jitter patterns and scaling. When disabled, uses the same jitter as other upscalers.");
+    RTX_OPTION("rtx", float, xessAutoExposureJitterDamping, 0.85f, "Reduces jitter intensity when using XeSS internal auto-exposure to improve temporal stability. Lower values = more damping.");
+    RTX_OPTION("rtx", bool, xessAutoExposureTemporalOptimization, true, "Enable temporal optimizations when using XeSS internal auto-exposure, including adaptive jitter scaling based on scene brightness changes.");
+    RTX_OPTION("rtx", bool, xessUseJitteredMotionVectors, false, "Include jitter in motion vectors for XeSS instead of passing jitter separately. Can improve temporal stability.");
+    RTX_OPTION("rtx", bool, xessForceInvertedDepth, false, "Force XeSS to treat depth buffer as inverted (1.0 = near, 0.0 = far). Enable if depth-related artifacts occur.");
+    RTX_OPTION("rtx", bool, xessForceLDRInput, false, "Force XeSS to treat input color as LDR instead of HDR. Enable if color artifacts occur.");
+    RTX_OPTION("rtx", bool, xessForceHighResMotionVectors, false, "Force XeSS to treat motion vectors as high resolution. Enable if motion vector scaling issues occur.");
+    RTX_OPTION("rtx", bool, xessEnableMotionVectorDebug, false, "Enable debug logging for XeSS motion vector validation and range checking.");
     RTX_OPTION_ENV("rtx", GraphicsPreset, graphicsPreset, GraphicsPreset::Auto, "DXVK_GRAPHICS_PRESET_TYPE", "Overall rendering preset, higher presets result in higher image quality, lower presets result in better performance.");
     RTX_OPTION_ENV("rtx", RaytraceModePreset, raytraceModePreset, RaytraceModePreset::Auto, "DXVK_RAYTRACE_MODE_PRESET_TYPE", "");
     RTX_OPTION("rtx", float, emissiveIntensity, 1.0f, "A general scale factor on all emissive intensity values globally. Generally per-material emissive intensities should be used, but this option may be useful for debugging without needing to author materials.");
@@ -1233,6 +1274,7 @@ namespace dxvk {
     static void updateUpscalerFromDlssPreset();
     static void updateUpscalerFromNisPreset();
     static void updateUpscalerFromTaauPreset();
+    static void updateUpscalerFromXeSSPreset();
     static void updatePresetFromUpscaler();
     static NV_GPU_ARCHITECTURE_ID getNvidiaArch();
     static NV_GPU_ARCH_IMPLEMENTATION_ID getNvidiaChipId();
@@ -1304,6 +1346,7 @@ namespace dxvk {
     }
     static bool isNISEnabled() { return upscalerType() == UpscalerType::NIS; }
     static bool isTAAEnabled() { return upscalerType() == UpscalerType::TAAU; }
+    static bool isXeSSEnabled() { return upscalerType() == UpscalerType::XeSS; }
     
     static float getUniqueObjectDistanceSqr() { return uniqueObjectDistance() * uniqueObjectDistance(); }
     static uint32_t getNumFramesToPutLightsToSleep() { return numFramesToKeepLights() /2; }
