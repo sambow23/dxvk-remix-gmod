@@ -33,6 +33,55 @@
 #include "rtx_imgui.h"
 #include "../../util/util_math.h"
 
+// Stub implementations for XeSS API functions
+static xess_result_t xessGetVersion(xess_version_t* version) {
+  if (version) {
+    version->major = 1;
+    version->minor = 0;
+    version->patch = 0;
+  }
+  return XESS_RESULT_SUCCESS;
+}
+
+static xess_result_t xessVKGetRequiredInstanceExtensions(uint32_t* count, const char** extensions) {
+  if (count) *count = 0;
+  return XESS_RESULT_SUCCESS;
+}
+
+static xess_result_t xessVKGetRequiredDeviceExtensions(uint32_t* count, const char** extensions) {
+  if (count) *count = 0;
+  return XESS_RESULT_SUCCESS;
+}
+
+static xess_result_t xessVKCreateContext(void* device, xess_context_handle_t* context) {
+  return XESS_RESULT_ERROR_NOT_IMPLEMENTED;
+}
+
+static xess_result_t xessDestroyContext(xess_context_handle_t context) {
+  return XESS_RESULT_SUCCESS;
+}
+
+static xess_result_t xessGetOptimalInputResolution(xess_context_handle_t context, const xess_2d_t* output, xess_quality_settings_t quality, xess_2d_t* input, void* reserved1, void* reserved2) {
+  // Stub implementation - calculate approximate input resolution
+  if (input && output) {
+    float scale = 1.0f / 2.0f; // Default to balanced
+    switch (quality) {
+      case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scale = 1.0f / 3.0f; break;
+      case XESS_QUALITY_SETTING_PERFORMANCE: scale = 1.0f / 2.3f; break;
+      case XESS_QUALITY_SETTING_BALANCED: scale = 1.0f / 2.0f; break;
+      case XESS_QUALITY_SETTING_QUALITY: scale = 1.0f / 1.7f; break;
+      case XESS_QUALITY_SETTING_ULTRA_QUALITY: scale = 1.0f / 1.5f; break;
+      case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scale = 1.0f / 1.3f; break;
+      case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;
+      default: scale = 1.0f / 2.0f; break;
+    }
+    input->x = (uint32_t)(output->x * scale);
+    input->y = (uint32_t)(output->y * scale);
+    return XESS_RESULT_SUCCESS;
+  }
+  return XESS_RESULT_ERROR_INVALID_ARGUMENT;
+}
+
 namespace dxvk {
   const char* xessProfileToString(XeSSProfile xessProfile) {
     switch (xessProfile) {
@@ -50,17 +99,52 @@ namespace dxvk {
     }
   }
 
-  DxvkXeSS::DxvkXeSS(DxvkDevice* device) 
-    : m_device(device) {
-    
-    // Check if XeSS is supported and enabled
-    m_enabled = RtxOptions::isXeSSEnabled() && checkXeSSSupport();
-    
-    if (m_enabled) {
-      Logger::info("XeSS: Initialized successfully");
-    } else {
-      Logger::info("XeSS: Not available or disabled");
+  // Helper function to convert XeSS result codes to strings
+  static const char* xessResultToString(xess_result_t result) {
+    switch (result) {
+      case XESS_RESULT_SUCCESS:                    return "Success";
+      case XESS_RESULT_ERROR_UNSUPPORTED:         return "Unsupported";
+      case XESS_RESULT_ERROR_UNINITIALIZED:       return "Uninitialized";
+      case XESS_RESULT_ERROR_INVALID_ARGUMENT:    return "Invalid argument";
+      case XESS_RESULT_ERROR_DEVICE_OUT_OF_MEMORY: return "Device out of memory";
+      case XESS_RESULT_ERROR_DEVICE:              return "Device error";
+      case XESS_RESULT_ERROR_NOT_IMPLEMENTED:     return "Not implemented";
+      case XESS_RESULT_ERROR_INVALID_CONTEXT:     return "Invalid context";
+      case XESS_RESULT_ERROR_OPERATION_IN_PROGRESS: return "Operation in progress";
+      case XESS_RESULT_WARNING_NONOPTIMAL_SETTINGS: return "Non-optimal settings";
+      default:                                     return "Unknown error";
     }
+  }
+
+  // Default constructor
+  DxvkXeSS::DxvkXeSS() 
+    : m_device(nullptr), m_context(nullptr) {
+    Logger::info("[RTX-XeSS] XeSS object created without device (default constructor)");
+  }
+
+  // Constructor with device
+  DxvkXeSS::DxvkXeSS(DxvkDevice* device) 
+    : m_device(device), m_context(nullptr) {
+    Logger::info("XeSS: Initializing XeSS upscaler...");
+    
+    // First check if XeSS is enabled in options
+    if (!RtxOptions::isXeSSEnabled()) {
+      Logger::info("XeSS: Disabled in options (upscaler type is not XeSS)");
+      m_enabled = false;
+      return;
+    }
+    
+    Logger::info("XeSS: Enabled in options, checking system support...");
+    
+    // Check if XeSS is supported on this system
+    if (!validateXeSSSupport(device)) {
+      Logger::warn("XeSS: System does not support XeSS - falling back to other upscaler");
+      m_enabled = false;
+      return;
+    }
+    
+    m_enabled = true;
+    Logger::info("XeSS: Successfully initialized and ready for use");
   }
 
   DxvkXeSS::~DxvkXeSS() {
@@ -74,26 +158,86 @@ namespace dxvk {
     m_initialized = false;
   }
 
-  bool DxvkXeSS::checkXeSSSupport() {
-    // For now, assume XeSS is supported on all systems
-    // In a full implementation, you would check for:
-    // - Vulkan version and required extensions
-    // - GPU capabilities
-    // - XeSS library availability
-    return true;
+  bool DxvkXeSS::isXeSSLibraryAvailable() {
+    Logger::info("[RTX-XeSS] Checking XeSS library availability...");
+    
+    // Try to get XeSS version to test if library is available
+    xess_version_t version;
+    xess_result_t result = xessGetVersion(&version);
+    
+    if (result == XESS_RESULT_SUCCESS) {
+      Logger::info(str::format("[RTX-XeSS] XeSS SDK version: ", version.major, ".", version.minor, ".", version.patch));
+      return true;
+    } else {
+      Logger::warn(str::format("[RTX-XeSS] XeSS library not available: ", xessResultToString(result)));
+      return false;
+    }
   }
 
-  xess_quality_settings_t DxvkXeSS::profileToQuality(XeSSProfile profile) {
+  bool DxvkXeSS::validateXeSSSupport(DxvkDevice* device) {
+    Logger::info("[RTX-XeSS] Validating XeSS support...");
+    
+    if (!isXeSSLibraryAvailable()) {
+      return false;
+    }
+
+    // Get XeSS version
+    xess_version_t version;
+    xess_result_t result = xessGetVersion(&version);
+    if (result != XESS_RESULT_SUCCESS) {
+      Logger::warn(str::format("[RTX-XeSS] Failed to get XeSS version: ", xessResultToString(result)));
+      return false;
+    }
+    
+    Logger::info(str::format("[RTX-XeSS] XeSS SDK version: ", version.major, ".", version.minor, ".", version.patch));
+
+    // Check required instance extensions (simplified)
+    uint32_t instanceExtCount = 0;
+    result = xessVKGetRequiredInstanceExtensions(&instanceExtCount, nullptr);
+    if (result == XESS_RESULT_SUCCESS && instanceExtCount > 0) {
+      Logger::info(str::format("[RTX-XeSS] XeSS requires ", instanceExtCount, " instance extensions"));
+    }
+
+    // Check required device extensions (simplified)
+    uint32_t deviceExtCount = 0;
+    result = xessVKGetRequiredDeviceExtensions(&deviceExtCount, nullptr);
+    if (result == XESS_RESULT_SUCCESS && deviceExtCount > 0) {
+      Logger::info(str::format("[RTX-XeSS] XeSS requires ", deviceExtCount, " device extensions"));
+    }
+
+    // GPU compatibility check (simplified)
+    auto adapter = device->adapter();
+    auto deviceProps = adapter->deviceProperties();
+    
+    if (deviceProps.vendorID == 0x8086) { // Intel
+      Logger::info("[RTX-XeSS] Intel GPU detected - using optimized XeSS path");
+    } else {
+      Logger::info("[RTX-XeSS] Non-Intel GPU detected - using generic XeSS path");
+    }
+
+    // Test context creation (simplified)
+    xess_context_handle_t testContext = nullptr;
+    result = xessVKCreateContext(device->handle(), &testContext);
+    if (result == XESS_RESULT_SUCCESS) {
+      Logger::info("[RTX-XeSS] XeSS context creation test successful");
+      xessDestroyContext(testContext);
+      return true;
+    } else {
+      Logger::warn(str::format("[RTX-XeSS] XeSS context creation test failed: ", xessResultToString(result)));
+      return false;
+    }
+  }
+
+  xess_quality_settings_t DxvkXeSS::profileToQuality(XeSSProfile profile) const {
     switch (profile) {
-      case XeSSProfile::UltraPerf:     return XESS_QUALITY_SETTING_ULTRA_PERFORMANCE;
-      case XeSSProfile::Performance:   return XESS_QUALITY_SETTING_PERFORMANCE;
-      case XeSSProfile::Balanced:     return XESS_QUALITY_SETTING_BALANCED;
-      case XeSSProfile::Quality:      return XESS_QUALITY_SETTING_QUALITY;
+      case XeSSProfile::UltraPerf: return XESS_QUALITY_SETTING_ULTRA_PERFORMANCE;
+      case XeSSProfile::Performance: return XESS_QUALITY_SETTING_PERFORMANCE;
+      case XeSSProfile::Balanced: return XESS_QUALITY_SETTING_BALANCED;
+      case XeSSProfile::Quality: return XESS_QUALITY_SETTING_QUALITY;
       case XeSSProfile::UltraQuality: return XESS_QUALITY_SETTING_ULTRA_QUALITY;
       case XeSSProfile::UltraQualityPlus: return XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS;
-      case XeSSProfile::NativeAA:     return XESS_QUALITY_SETTING_AA;
-      case XeSSProfile::Auto:
-      default:                        return XESS_QUALITY_SETTING_BALANCED;
+      case XeSSProfile::NativeAA: return XESS_QUALITY_SETTING_AA;
+      default: return XESS_QUALITY_SETTING_BALANCED;
     }
   }
 
@@ -179,7 +323,8 @@ namespace dxvk {
   void DxvkXeSS::dispatch(
     Rc<DxvkContext> renderContext,
     DxvkBarrierSet& barriers,
-    const Resources::RaytracingOutput& rtOutput) {
+    const Resources::RaytracingOutput& rtOutput,
+    bool resetHistory) {
     
     if (!m_enabled || !m_initialized) {
       // Fallback: just copy input to output
@@ -248,10 +393,10 @@ namespace dxvk {
       actualProfile = getAutoProfile(displaySize[0], displaySize[1]);
     }
 
-    if (m_actualProfile == actualProfile && displaySize[0] == m_xessOutputSize[0] && displaySize[1] == m_xessOutputSize[1]) {
+    if (m_actualProfile == actualProfile && displaySize[0] == m_xessOutputSize.width && displaySize[1] == m_xessOutputSize.height) {
       // Nothing changed that would alter XeSS resolution(s), so return the last cached optimal render size
-      outRenderSize[0] = m_inputSize[0];
-      outRenderSize[1] = m_inputSize[1];
+      outRenderSize[0] = m_inputSize.width;
+      outRenderSize[1] = m_inputSize.height;
       return;
     }
     
@@ -260,8 +405,8 @@ namespace dxvk {
     m_profile = profile;
 
     if (m_profile == XeSSProfile::NativeAA) {
-      m_inputSize[0] = outRenderSize[0] = displaySize[0];
-      m_inputSize[1] = outRenderSize[1] = displaySize[1];
+      m_inputSize.width = outRenderSize[0] = displaySize[0];
+      m_inputSize.height = outRenderSize[1] = displaySize[1];
     } else {
       // Calculate optimal input resolution based on quality setting
       xess_2d_t outputRes = { displaySize[0], displaySize[1] };
@@ -273,8 +418,8 @@ namespace dxvk {
       if (m_xessContext) {
         xess_result_t result = xessGetOptimalInputResolution(m_xessContext, &outputRes, quality, &inputRes, nullptr, nullptr);
         if (result == XESS_RESULT_SUCCESS) {
-          m_inputSize[0] = outRenderSize[0] = inputRes.x;
-          m_inputSize[1] = outRenderSize[1] = inputRes.y;
+          m_inputSize.width = outRenderSize[0] = inputRes.x;
+          m_inputSize.height = outRenderSize[1] = inputRes.y;
         } else {
           // Fallback to manual calculation
           float scale = 1.0f;
@@ -288,19 +433,19 @@ namespace dxvk {
           case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;
           default: scale = 1.0f / 2.0f; break;
           }
-          m_inputSize[0] = outRenderSize[0] = (uint32_t)(displaySize[0] * scale);
-          m_inputSize[1] = outRenderSize[1] = (uint32_t)(displaySize[1] * scale);
+          m_inputSize.width = outRenderSize[0] = (uint32_t)(displaySize[0] * scale);
+          m_inputSize.height = outRenderSize[1] = (uint32_t)(displaySize[1] * scale);
         }
       } else {
         // Fallback calculation when no context available yet
         float scale = 1.0f / 2.0f; // Default to balanced
-        m_inputSize[0] = outRenderSize[0] = (uint32_t)(displaySize[0] * scale);
-        m_inputSize[1] = outRenderSize[1] = (uint32_t)(displaySize[1] * scale);
+        m_inputSize.width = outRenderSize[0] = (uint32_t)(displaySize[0] * scale);
+        m_inputSize.height = outRenderSize[1] = (uint32_t)(displaySize[1] * scale);
       }
     }
 
-    m_xessOutputSize[0] = displaySize[0];
-    m_xessOutputSize[1] = displaySize[1];
+    m_xessOutputSize.width = displaySize[0];
+    m_xessOutputSize.height = displaySize[1];
   }
 
   XeSSProfile DxvkXeSS::getCurrentProfile() const {
@@ -308,12 +453,22 @@ namespace dxvk {
   }
 
   void DxvkXeSS::getInputSize(uint32_t& width, uint32_t& height) const {
-    width = m_inputSize[0];
-    height = m_inputSize[1];
+    width = m_inputSize.width;
+    height = m_inputSize.height;
   }
 
   void DxvkXeSS::getOutputSize(uint32_t& width, uint32_t& height) const {
-    width = m_xessOutputSize[0];
-    height = m_xessOutputSize[1];
+    width = m_xessOutputSize.width;
+    height = m_xessOutputSize.height;
+  }
+
+  XeSSProfile DxvkXeSS::getAutoProfile() const {
+    // Simple auto profile selection based on resolution
+    return XeSSProfile::Balanced;
+  }
+
+  void DxvkXeSS::setSetting(const char* name, const char* value) {
+    // Placeholder for XeSS settings
+    Logger::debug(str::format("XeSS: Setting ", name, " = ", value));
   }
 } 

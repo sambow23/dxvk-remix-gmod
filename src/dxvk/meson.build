@@ -403,8 +403,8 @@ dlss_dep = declare_dependency(
 )
 
 # XeSS dependency
-xess_include_dir = include_directories(join_paths('../../', 'OptiScaler/external/xess/inc'))
-xess_lib_path = join_paths(global_src_root_norm, 'OptiScaler/external/xess/lib')
+xess_include_dir = include_directories(join_paths('../../', 'external/xess/inc'))
+xess_lib_path = join_paths(global_src_root_norm, 'external/xess/lib')
 xess_lib = cc.find_library('libxess', dirs : xess_lib_path, required : false)
 xess_dep = declare_dependency(
   dependencies : [ xess_lib ],
