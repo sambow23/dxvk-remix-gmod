@@ -29,38 +29,9 @@
 #include "../util/rc/util_rc.h"
 #include "../util/rc/util_rc_ptr.h"
 
-// XeSS includes - temporarily disabled for build
-// TODO: Re-enable when include path issues are resolved
-// #include <xess/xess.h>
-// #include <xess/xess_vk.h>
-
-// Forward declarations for XeSS types
-typedef void* xess_context_handle_t;
-typedef int xess_result_t;
-typedef int xess_quality_settings_t;
-typedef struct { uint32_t x, y; } xess_2d_t;
-typedef struct { uint32_t major, minor, patch; } xess_version_t;
-
-// XeSS result constants
-#define XESS_RESULT_SUCCESS 0
-#define XESS_RESULT_ERROR_UNSUPPORTED 1
-#define XESS_RESULT_ERROR_UNINITIALIZED 2
-#define XESS_RESULT_ERROR_INVALID_ARGUMENT 3
-#define XESS_RESULT_ERROR_DEVICE_OUT_OF_MEMORY 4
-#define XESS_RESULT_ERROR_DEVICE 5
-#define XESS_RESULT_ERROR_NOT_IMPLEMENTED 6
-#define XESS_RESULT_ERROR_INVALID_CONTEXT 7
-#define XESS_RESULT_ERROR_OPERATION_IN_PROGRESS 8
-#define XESS_RESULT_WARNING_NONOPTIMAL_SETTINGS 9
-
-// XeSS quality settings constants
-#define XESS_QUALITY_SETTING_ULTRA_PERFORMANCE 0
-#define XESS_QUALITY_SETTING_PERFORMANCE 1
-#define XESS_QUALITY_SETTING_BALANCED 2
-#define XESS_QUALITY_SETTING_QUALITY 3
-#define XESS_QUALITY_SETTING_ULTRA_QUALITY 4
-#define XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS 5
-#define XESS_QUALITY_SETTING_AA 6
+// XeSS includes - using direct relative path
+#include "../../../external/xess/inc/xess/xess.h"
+#include "../../../external/xess/inc/xess/xess_vk.h"
 
 namespace dxvk {
 

@@ -402,14 +402,10 @@ dlss_dep = declare_dependency(
   include_directories : [ dlss_include_dir, dlfg_include_dir ]
 )
 
-# XeSS dependency
-xess_include_dir = include_directories(join_paths('../../', 'external/xess/inc'))
+# XeSS dependency - using direct library path
 xess_lib_path = join_paths(global_src_root_norm, 'external/xess/lib')
 xess_lib = cc.find_library('libxess', dirs : xess_lib_path, required : false)
-xess_dep = declare_dependency(
-  dependencies : [ xess_lib ],
-  include_directories : [ xess_include_dir ]
-)
+xess_dep = declare_dependency(dependencies : [ xess_lib ])
 
 nrc_include_path = include_directories(join_paths('../../', 'submodules/nrc/include'))
 nrc_dll_path = join_paths(meson.global_source_root(), 'submodules/nrc/bin/')

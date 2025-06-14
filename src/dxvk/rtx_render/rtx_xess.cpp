@@ -32,55 +32,12 @@
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx_imgui.h"
 #include "../../util/util_math.h"
+#include "../util/util_string.h"
+#include "../util/log/log.h"
 
-// Stub implementations for XeSS API functions
-static xess_result_t xessGetVersion(xess_version_t* version) {
-  if (version) {
-    version->major = 1;
-    version->minor = 0;
-    version->patch = 0;
-  }
-  return XESS_RESULT_SUCCESS;
-}
-
-static xess_result_t xessVKGetRequiredInstanceExtensions(uint32_t* count, const char** extensions) {
-  if (count) *count = 0;
-  return XESS_RESULT_SUCCESS;
-}
-
-static xess_result_t xessVKGetRequiredDeviceExtensions(uint32_t* count, const char** extensions) {
-  if (count) *count = 0;
-  return XESS_RESULT_SUCCESS;
-}
-
-static xess_result_t xessVKCreateContext(void* device, xess_context_handle_t* context) {
-  return XESS_RESULT_ERROR_NOT_IMPLEMENTED;
-}
-
-static xess_result_t xessDestroyContext(xess_context_handle_t context) {
-  return XESS_RESULT_SUCCESS;
-}
-
-static xess_result_t xessGetOptimalInputResolution(xess_context_handle_t context, const xess_2d_t* output, xess_quality_settings_t quality, xess_2d_t* input, void* reserved1, void* reserved2) {
-  // Stub implementation - calculate approximate input resolution
-  if (input && output) {
-    float scale = 1.0f / 2.0f; // Default to balanced
-    switch (quality) {
-      case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scale = 1.0f / 3.0f; break;
-      case XESS_QUALITY_SETTING_PERFORMANCE: scale = 1.0f / 2.3f; break;
-      case XESS_QUALITY_SETTING_BALANCED: scale = 1.0f / 2.0f; break;
-      case XESS_QUALITY_SETTING_QUALITY: scale = 1.0f / 1.7f; break;
-      case XESS_QUALITY_SETTING_ULTRA_QUALITY: scale = 1.0f / 1.5f; break;
-      case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scale = 1.0f / 1.3f; break;
-      case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;
-      default: scale = 1.0f / 2.0f; break;
-    }
-    input->x = (uint32_t)(output->x * scale);
-    input->y = (uint32_t)(output->y * scale);
-    return XESS_RESULT_SUCCESS;
-  }
-  return XESS_RESULT_ERROR_INVALID_ARGUMENT;
-}
+// XeSS includes - using direct relative path
+#include "../../../external/xess/inc/xess/xess.h"
+#include "../../../external/xess/inc/xess/xess_vk.h"
 
 namespace dxvk {
   const char* xessProfileToString(XeSSProfile xessProfile) {
@@ -99,20 +56,26 @@ namespace dxvk {
     }
   }
 
-  // Helper function to convert XeSS result codes to strings
+  // Helper function to convert XeSS result to string
   static const char* xessResultToString(xess_result_t result) {
     switch (result) {
-      case XESS_RESULT_SUCCESS:                    return "Success";
-      case XESS_RESULT_ERROR_UNSUPPORTED:         return "Unsupported";
-      case XESS_RESULT_ERROR_UNINITIALIZED:       return "Uninitialized";
-      case XESS_RESULT_ERROR_INVALID_ARGUMENT:    return "Invalid argument";
-      case XESS_RESULT_ERROR_DEVICE_OUT_OF_MEMORY: return "Device out of memory";
-      case XESS_RESULT_ERROR_DEVICE:              return "Device error";
-      case XESS_RESULT_ERROR_NOT_IMPLEMENTED:     return "Not implemented";
-      case XESS_RESULT_ERROR_INVALID_CONTEXT:     return "Invalid context";
-      case XESS_RESULT_ERROR_OPERATION_IN_PROGRESS: return "Operation in progress";
-      case XESS_RESULT_WARNING_NONOPTIMAL_SETTINGS: return "Non-optimal settings";
-      default:                                     return "Unknown error";
+      case XESS_RESULT_SUCCESS: return "Success";
+      case XESS_RESULT_WARNING_NONEXISTING_FOLDER: return "Warning: Nonexisting folder";
+      case XESS_RESULT_WARNING_OLD_DRIVER: return "Warning: Old driver";
+      case XESS_RESULT_ERROR_UNSUPPORTED_DEVICE: return "Error: Unsupported device";
+      case XESS_RESULT_ERROR_UNSUPPORTED_DRIVER: return "Error: Unsupported driver";
+      case XESS_RESULT_ERROR_UNINITIALIZED: return "Error: Uninitialized";
+      case XESS_RESULT_ERROR_INVALID_ARGUMENT: return "Error: Invalid argument";
+      case XESS_RESULT_ERROR_DEVICE_OUT_OF_MEMORY: return "Error: Device out of memory";
+      case XESS_RESULT_ERROR_DEVICE: return "Error: Device error";
+      case XESS_RESULT_ERROR_NOT_IMPLEMENTED: return "Error: Not implemented";
+      case XESS_RESULT_ERROR_INVALID_CONTEXT: return "Error: Invalid context";
+      case XESS_RESULT_ERROR_OPERATION_IN_PROGRESS: return "Error: Operation in progress";
+      case XESS_RESULT_ERROR_UNSUPPORTED: return "Error: Unsupported";
+      case XESS_RESULT_ERROR_CANT_LOAD_LIBRARY: return "Error: Can't load library";
+      case XESS_RESULT_ERROR_WRONG_CALL_ORDER: return "Error: Wrong call order";
+      case XESS_RESULT_ERROR_UNKNOWN: return "Error: Unknown";
+      default: return "Unknown result code";
     }
   }
 
@@ -195,21 +158,46 @@ namespace dxvk {
     
     Logger::info(str::format("[RTX-XeSS] XeSS SDK version: ", version.major, ".", version.minor, ".", version.patch));
 
-    // Check required instance extensions (simplified)
+    // Check required instance extensions
     uint32_t instanceExtCount = 0;
-    result = xessVKGetRequiredInstanceExtensions(&instanceExtCount, nullptr);
-    if (result == XESS_RESULT_SUCCESS && instanceExtCount > 0) {
-      Logger::info(str::format("[RTX-XeSS] XeSS requires ", instanceExtCount, " instance extensions"));
+    const char* const* instanceExtensions = nullptr;
+    uint32_t minVkApiVersion = 0;
+    
+    result = xessVKGetRequiredInstanceExtensions(&instanceExtCount, &instanceExtensions, &minVkApiVersion);
+    if (result == XESS_RESULT_SUCCESS) {
+      Logger::info(str::format("[RTX-XeSS] XeSS requires ", instanceExtCount, " instance extensions, min Vulkan API version: ", minVkApiVersion));
+      
+      // Log the required extensions
+      for (uint32_t i = 0; i < instanceExtCount; i++) {
+        Logger::info(str::format("[RTX-XeSS] Required instance extension: ", instanceExtensions[i]));
+      }
+    } else {
+      Logger::warn(str::format("[RTX-XeSS] Failed to get required instance extensions: ", xessResultToString(result)));
     }
 
-    // Check required device extensions (simplified)
+    // Check required device extensions
     uint32_t deviceExtCount = 0;
-    result = xessVKGetRequiredDeviceExtensions(&deviceExtCount, nullptr);
-    if (result == XESS_RESULT_SUCCESS && deviceExtCount > 0) {
+    const char* const* deviceExtensions = nullptr;
+    
+    result = xessVKGetRequiredDeviceExtensions(
+      device->instance()->handle(),
+      device->adapter()->handle(),
+      &deviceExtCount,
+      &deviceExtensions
+    );
+    
+    if (result == XESS_RESULT_SUCCESS) {
       Logger::info(str::format("[RTX-XeSS] XeSS requires ", deviceExtCount, " device extensions"));
+      
+      // Log the required extensions
+      for (uint32_t i = 0; i < deviceExtCount; i++) {
+        Logger::info(str::format("[RTX-XeSS] Required device extension: ", deviceExtensions[i]));
+      }
+    } else {
+      Logger::warn(str::format("[RTX-XeSS] Failed to get required device extensions: ", xessResultToString(result)));
     }
 
-    // GPU compatibility check (simplified)
+    // GPU compatibility check
     auto adapter = device->adapter();
     auto deviceProps = adapter->deviceProperties();
     
@@ -219,11 +207,18 @@ namespace dxvk {
       Logger::info("[RTX-XeSS] Non-Intel GPU detected - using generic XeSS path");
     }
 
-    // Test context creation (simplified)
+    // Test context creation
     xess_context_handle_t testContext = nullptr;
-    result = xessVKCreateContext(device->handle(), &testContext);
+    result = xessVKCreateContext(
+      device->instance()->handle(),
+      device->adapter()->handle(),
+      device->handle(),
+      &testContext
+    );
+    
     if (result == XESS_RESULT_SUCCESS) {
       Logger::info("[RTX-XeSS] XeSS context creation test successful");
+      // Clean up test context
       xessDestroyContext(testContext);
       return true;
     } else {
@@ -304,22 +299,61 @@ namespace dxvk {
   }
 
   void DxvkXeSS::createXeSSContext(const VkExtent3D& targetExtent) {
-    // For this simple implementation, we'll create a basic XeSS context
-    // In a full implementation, you would:
-    // 1. Create XeSS context with proper Vulkan integration
-    // 2. Set up input/output textures
-    // 3. Configure quality settings
+    Logger::info("XeSS: Creating XeSS context...");
     
-    Logger::info("XeSS: Creating context (placeholder implementation)");
+    if (!m_device) {
+      Logger::err("XeSS: Cannot create context - no device available");
+      return;
+    }
     
-    // Placeholder - in real implementation you would call XeSS SDK functions
-    m_xessContext = reinterpret_cast<xess_context_handle_t>(0x1); // Dummy handle
+    // Create XeSS context using real SDK
+    xess_result_t result = xessVKCreateContext(
+      m_device->instance()->handle(),
+      m_device->adapter()->handle(),
+      m_device->handle(),
+      &m_xessContext
+    );
+    
+    if (result != XESS_RESULT_SUCCESS) {
+      Logger::err(str::format("XeSS: Failed to create context: ", xessResultToString(result)));
+      m_xessContext = nullptr;
+      return;
+    }
+    
+    Logger::info("XeSS: Context created successfully");
+    
+    // Initialize XeSS with current settings
+    xess_vk_init_params_t initParams = {};
+    initParams.outputResolution.x = targetExtent.width;
+    initParams.outputResolution.y = targetExtent.height;
+    initParams.qualitySetting = profileToQuality(m_currentProfile);
+    initParams.initFlags = XESS_INIT_FLAG_NONE; // Can be extended with more flags as needed
+    initParams.creationNodeMask = 1;
+    initParams.visibleNodeMask = 1;
+    initParams.tempBufferHeap = VK_NULL_HANDLE;
+    initParams.bufferHeapOffset = 0;
+    initParams.tempTextureHeap = VK_NULL_HANDLE;
+    initParams.textureHeapOffset = 0;
+    initParams.pipelineCache = VK_NULL_HANDLE;
+    
+    result = xessVKInit(m_xessContext, &initParams);
+    if (result != XESS_RESULT_SUCCESS) {
+      Logger::err(str::format("XeSS: Failed to initialize context: ", xessResultToString(result)));
+      xessDestroyContext(m_xessContext);
+      m_xessContext = nullptr;
+      return;
+    }
+    
+    Logger::info("XeSS: Context initialized successfully");
   }
 
   void DxvkXeSS::destroyXeSSContext() {
     if (m_xessContext) {
-      Logger::info("XeSS: Destroying context");
-      // In real implementation: xessDestroyContext(m_xessContext);
+      Logger::info("XeSS: Destroying XeSS context");
+      xess_result_t result = xessDestroyContext(m_xessContext);
+      if (result != XESS_RESULT_SUCCESS) {
+        Logger::warn(str::format("XeSS: Warning during context destruction: ", xessResultToString(result)));
+      }
       m_xessContext = nullptr;
     }
   }
