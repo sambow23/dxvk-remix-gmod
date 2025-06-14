@@ -330,6 +330,7 @@ namespace dxvk {
       {UpscalerType::None, "None"},
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
+      {UpscalerType::XeSS, "XeSS"},
   } });
 
   static auto upscalerDLSSCombo = ImGui::ComboWithKey<UpscalerType>(
@@ -339,6 +340,7 @@ namespace dxvk {
       {UpscalerType::DLSS, "DLSS"},
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
+      {UpscalerType::XeSS, "XeSS"},
   } });
 
   ImGui::ComboWithKey<DlssPreset> dlssPresetCombo{
@@ -380,6 +382,20 @@ namespace dxvk {
         {TaauPreset::Balanced, "Balanced"},
         {TaauPreset::Quality, "Quality"},
         {TaauPreset::Fullscreen, "Fullscreen"},
+    } }
+  };
+
+  ImGui::ComboWithKey<XeSSProfile> xessProfileCombo{
+    "XeSS Profile",
+    ImGui::ComboWithKey<XeSSProfile>::ComboEntries{ {
+        {XeSSProfile::UltraPerf, "Ultra Performance"},
+        {XeSSProfile::Performance, "Performance"},
+        {XeSSProfile::Balanced, "Balanced"},
+        {XeSSProfile::Quality, "Quality"},
+        {XeSSProfile::UltraQuality, "Ultra Quality"},
+        {XeSSProfile::UltraQualityPlus, "Ultra Quality Plus"},
+        {XeSSProfile::NativeAA, "Native Anti-Aliasing"},
+        {XeSSProfile::Auto, "Auto"},
     } }
   };
 
@@ -464,6 +480,7 @@ namespace dxvk {
       { RtxFramePassStage::DLSS, "DLSS" },
       { RtxFramePassStage::DLSSRR, "DLSSRR" },
       { RtxFramePassStage::NIS, "NIS" },
+      { RtxFramePassStage::XeSS, "XeSS" },
       { RtxFramePassStage::TAA, "TAA" },
       { RtxFramePassStage::DustParticles, "DustParticles" },
       { RtxFramePassStage::Bloom, "Bloom" },
@@ -1350,6 +1367,15 @@ namespace dxvk {
           auto resolutionScale = RtxOptions::resolutionScale();
 
           ImGui::TextWrapped(str::format("TAA-U Resolution Scale: ", resolutionScale).c_str());
+
+          break;
+        }
+        case UpscalerType::XeSS: {
+          m_userGraphicsSettingChanged |= xessProfileCombo.getKey(&RtxOptions::xessProfileObject());
+          RtxOptions::updateUpscalerFromXeSSPreset();
+
+          // Display XeSS Information
+          ImGui::TextWrapped("XeSS Profile: Uses Intel's AI-based upscaling technology");
 
           break;
         }

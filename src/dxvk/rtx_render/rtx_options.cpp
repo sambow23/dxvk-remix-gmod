@@ -112,6 +112,12 @@ namespace dxvk {
     }
   }
 
+  void RtxOptions::updateUpscalerFromXeSSPreset() {
+    // Note: XeSS handles resolution scaling internally based on quality profile
+    // We don't need to set resolutionScale here as XeSS will calculate optimal input resolution
+    // The XeSS profile is used directly in the XeSS implementation
+  }
+
   void RtxOptions::updatePresetFromUpscaler() {
     if (RtxOptions::upscalerType() == UpscalerType::None &&
         reflexMode() == ReflexMode::None) {
@@ -155,6 +161,11 @@ namespace dxvk {
         } else {
           RtxOptions::taauPreset.setDeferred(TaauPreset::Fullscreen);
         }
+        break;
+      }
+      case UpscalerType::XeSS: {
+        // XeSS preset is handled directly by the XeSS implementation
+        // No need to update resolution scale here
         break;
       }
       default:

@@ -307,6 +307,8 @@ namespace dxvk {
       return InternalUpscaler::DLSS;
     } else if (shouldUseRayReconstruction() && m_common->metaRayReconstruction().isActive()) {
       return InternalUpscaler::DLSS_RR;
+    } else if (shouldUseXeSS() && m_common->metaXeSS().isEnabled()) {
+      return InternalUpscaler::XeSS;
     } else if (shouldUseNIS()) {
       return InternalUpscaler::NIS;
     } else if (shouldUseTAA()) {
@@ -412,6 +414,9 @@ namespace dxvk {
       } else if (m_previousUpscaler == InternalUpscaler::DLSS) {
         DxvkDLSS& dlss = m_common->metaDLSS();
         dlss.release();
+      } else if (m_previousUpscaler == InternalUpscaler::XeSS) {
+        DxvkXeSS& xess = m_common->metaXeSS();
+        xess.release();
       }
     }
 
@@ -630,6 +635,8 @@ namespace dxvk {
         } else if (m_currentUpscaler == InternalUpscaler::DLSS_RR) {
           m_common->metaAutoExposure().createResources(this);
           dispatchRayReconstruction(rtOutput, frameTimeMilliseconds);
+        } else if (m_currentUpscaler == InternalUpscaler::XeSS) {
+          dispatchXeSS(rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::NIS) {
           dispatchNIS(rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::TAAU){
@@ -1577,6 +1584,13 @@ namespace dxvk {
     m_common->metaNIS().dispatch(this, rtOutput);
   }
 
+  void RtxContext::dispatchXeSS(const Resources::RaytracingOutput& rtOutput) {
+    ScopedGpuProfileZone(this, "XeSS");
+    setFramePassStage(RtxFramePassStage::XeSS);
+    DxvkXeSS& xess = m_common->metaXeSS();
+    xess.dispatch(this, m_execBarriers, rtOutput, m_resetHistory);
+  }
+
   void RtxContext::dispatchTemporalAA(const Resources::RaytracingOutput& rtOutput) {
     ScopedGpuProfileZone(this, "TAA");
     setFramePassStage(RtxFramePassStage::TAA);
@@ -2113,6 +2127,10 @@ namespace dxvk {
 
   bool RtxContext::shouldUseTAA() const {
     return RtxOptions::isTAAEnabled();
+  }
+
+  bool RtxContext::shouldUseXeSS() const {
+    return RtxOptions::upscalerType() == UpscalerType::XeSS;
   }
 
   D3D9RtxVertexCaptureData& RtxContext::allocAndMapVertexCaptureConstantBuffer() {
