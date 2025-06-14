@@ -660,8 +660,33 @@ namespace dxvk {
   }
 
   XeSSProfile DxvkXeSS::getAutoProfile() const {
-    // Simple auto profile selection based on resolution
-    return XeSSProfile::Balanced;
+    // Use the resolution-based auto profile selection with current output size
+    uint32_t displayWidth = m_xessOutputSize.width > 0 ? m_xessOutputSize.width : 1920;
+    uint32_t displayHeight = m_xessOutputSize.height > 0 ? m_xessOutputSize.height : 1080;
+    
+    XeSSProfile desiredProfile = XeSSProfile::UltraPerf;
+
+    // Standard display resolution based XeSS config
+    if (displayHeight <= 1080) {
+      desiredProfile = XeSSProfile::Quality;
+    } else if (displayHeight < 2160) {
+      desiredProfile = XeSSProfile::Balanced;
+    } else if (displayHeight < 4320) {
+      desiredProfile = XeSSProfile::Performance;
+    } else {
+      // For > 4k (e.g. 8k)
+      desiredProfile = XeSSProfile::UltraPerf;
+    }
+
+    if (RtxOptions::graphicsPreset() == GraphicsPreset::Medium) {
+      // When using medium preset, bias XeSS more towards performance
+      desiredProfile = (XeSSProfile)std::max(0, (int) desiredProfile - 1);
+    } else if (RtxOptions::graphicsPreset() == GraphicsPreset::Low) {
+      // When using low preset, give me all the perf I can get!!!
+      desiredProfile = (XeSSProfile) std::max(0, (int) desiredProfile - 2);
+    }
+
+    return desiredProfile;
   }
 
   void DxvkXeSS::setSetting(const char* name, const char* value) {
