@@ -247,17 +247,17 @@ namespace dxvk {
 
     xess_quality_settings_t quality = profileToQuality(getProfile());
     
-    // Calculate input resolution based on XeSS quality setting
+    // Calculate input resolution based on XeSS quality setting using correct XeSS 1.3+ scaling factors
     float scaleFactor = 1.0f;
     switch (quality) {
-      case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 0.33f; break;
-      case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 0.5f;  break;
-      case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 0.67f; break;
-      case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 0.75f; break;
-      case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 0.85f; break;
-      case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 0.9f; break;
-      case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f;  break;
-      default:                                      scaleFactor = 0.67f; break;
+      case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 1.0f / 3.0f; break;   // 3.0x upscaling
+      case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 1.0f / 2.3f; break;   // 2.3x upscaling
+      case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 1.0f / 2.0f; break;   // 2.0x upscaling
+      case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 1.0f / 1.7f; break;   // 1.7x upscaling
+      case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 1.0f / 1.5f; break;   // 1.5x upscaling
+      case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.0f / 1.3f; break;  // 1.3x upscaling
+      case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f; break;          // 1.0x (native)
+      default:                                      scaleFactor = 1.0f / 2.0f; break;   // Default to balanced
     }
 
     VkExtent3D inputExtent;
@@ -608,36 +608,36 @@ namespace dxvk {
           m_inputSize.width = outRenderSize[0] = inputRes.x;
           m_inputSize.height = outRenderSize[1] = inputRes.y;
         } else {
-          // Fallback to manual calculation
+          // Fallback to manual calculation using correct XeSS 1.3+ scaling factors
           float scale = 1.0f;
           switch (quality) {
-          case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scale = 1.0f / 3.0f; break;
-          case XESS_QUALITY_SETTING_PERFORMANCE: scale = 1.0f / 2.3f; break;
-          case XESS_QUALITY_SETTING_BALANCED: scale = 1.0f / 2.0f; break;
-          case XESS_QUALITY_SETTING_QUALITY: scale = 1.0f / 1.7f; break;
-          case XESS_QUALITY_SETTING_ULTRA_QUALITY: scale = 1.0f / 1.5f; break;
-          case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scale = 1.0f / 1.3f; break;
-          case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;
-          default: scale = 1.0f / 2.0f; break;
+          case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scale = 1.0f / 3.0f; break;   // 3.0x upscaling
+          case XESS_QUALITY_SETTING_PERFORMANCE: scale = 1.0f / 2.3f; break;        // 2.3x upscaling
+          case XESS_QUALITY_SETTING_BALANCED: scale = 1.0f / 2.0f; break;           // 2.0x upscaling
+          case XESS_QUALITY_SETTING_QUALITY: scale = 1.0f / 1.7f; break;            // 1.7x upscaling
+          case XESS_QUALITY_SETTING_ULTRA_QUALITY: scale = 1.0f / 1.5f; break;      // 1.5x upscaling
+          case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scale = 1.0f / 1.3f; break; // 1.3x upscaling
+          case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;                        // 1.0x (native)
+          default: scale = 1.0f / 2.0f; break;                                      // Default to balanced
           }
-          m_inputSize.width = outRenderSize[0] = (uint32_t)(displaySize[0] * scale);
-          m_inputSize.height = outRenderSize[1] = (uint32_t)(displaySize[1] * scale);
+          m_inputSize.width = outRenderSize[0] = std::max(1u, (uint32_t)(displaySize[0] * scale));
+          m_inputSize.height = outRenderSize[1] = std::max(1u, (uint32_t)(displaySize[1] * scale));
         }
       } else {
-        // Fallback calculation when no context available yet
+        // Fallback calculation when no context available yet using correct XeSS 1.3+ scaling factors
         float scale = 1.0f;
         switch (quality) {
-        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scale = 1.0f / 3.0f; break;
-        case XESS_QUALITY_SETTING_PERFORMANCE: scale = 1.0f / 2.3f; break;
-        case XESS_QUALITY_SETTING_BALANCED: scale = 1.0f / 2.0f; break;
-        case XESS_QUALITY_SETTING_QUALITY: scale = 1.0f / 1.7f; break;
-        case XESS_QUALITY_SETTING_ULTRA_QUALITY: scale = 1.0f / 1.5f; break;
-        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scale = 1.0f / 1.3f; break;
-        case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;
-        default: scale = 1.0f / 2.0f; break;
+        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scale = 1.0f / 3.0f; break;   // 3.0x upscaling
+        case XESS_QUALITY_SETTING_PERFORMANCE: scale = 1.0f / 2.3f; break;        // 2.3x upscaling
+        case XESS_QUALITY_SETTING_BALANCED: scale = 1.0f / 2.0f; break;           // 2.0x upscaling
+        case XESS_QUALITY_SETTING_QUALITY: scale = 1.0f / 1.7f; break;            // 1.7x upscaling
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY: scale = 1.0f / 1.5f; break;      // 1.5x upscaling
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scale = 1.0f / 1.3f; break; // 1.3x upscaling
+        case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;                        // 1.0x (native)
+        default: scale = 1.0f / 2.0f; break;                                      // Default to balanced
         }
-        m_inputSize.width = outRenderSize[0] = (uint32_t)(displaySize[0] * scale);
-        m_inputSize.height = outRenderSize[1] = (uint32_t)(displaySize[1] * scale);
+        m_inputSize.width = outRenderSize[0] = std::max(1u, (uint32_t)(displaySize[0] * scale));
+        m_inputSize.height = outRenderSize[1] = std::max(1u, (uint32_t)(displaySize[1] * scale));
       }
     }
 
