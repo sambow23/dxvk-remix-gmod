@@ -98,7 +98,6 @@ namespace dxvk {
     UltraQuality,
     UltraQualityPlus,
     NativeAA,
-    Auto,
     Invalid
   };
 
@@ -302,7 +301,7 @@ namespace dxvk {
     RTX_OPTION_ENV("rtx", DlssPreset, dlssPreset, DlssPreset::On, "RTX_DLSS_PRESET", "Combined DLSS Preset for quickly controlling Upscaling, Frame Interpolation and Latency Reduction.");
     RTX_OPTION("rtx", NisPreset, nisPreset, NisPreset::Balanced, "Adjusts NIS scaling factor, trades quality for performance.");
     RTX_OPTION("rtx", TaauPreset, taauPreset, TaauPreset::Balanced,  "Adjusts TAA-U scaling factor, trades quality for performance.");
-    RTX_OPTION("rtx", XeSSProfile, xessProfile, XeSSProfile::Auto, "Adjusts XeSS scaling factor, trades quality for performance.");
+    RTX_OPTION("rtx", XeSSProfile, xessProfile, XeSSProfile::Balanced, "Adjusts XeSS scaling factor, trades quality for performance.");
     RTX_OPTION_ENV("rtx", GraphicsPreset, graphicsPreset, GraphicsPreset::Auto, "DXVK_GRAPHICS_PRESET_TYPE", "Overall rendering preset, higher presets result in higher image quality, lower presets result in better performance.");
     RTX_OPTION_ENV("rtx", RaytraceModePreset, raytraceModePreset, RaytraceModePreset::Auto, "DXVK_RAYTRACE_MODE_PRESET_TYPE", "");
     RTX_OPTION("rtx", float, emissiveIntensity, 1.0f, "A general scale factor on all emissive intensity values globally. Generally per-material emissive intensities should be used, but this option may be useful for debugging without needing to author materials.");

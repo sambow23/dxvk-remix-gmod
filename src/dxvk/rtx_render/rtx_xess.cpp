@@ -49,7 +49,6 @@ namespace dxvk {
     case XeSSProfile::UltraQuality: return "Ultra Quality";
     case XeSSProfile::UltraQualityPlus: return "Ultra Quality Plus";
     case XeSSProfile::NativeAA: return "Native Anti-Aliasing";
-    case XeSSProfile::Auto: return "Auto";
     default:
       assert(false);
     case XeSSProfile::Invalid: return "Invalid";
@@ -379,11 +378,25 @@ namespace dxvk {
 
     // Initialize XeSS if needed (similar to DLSS pattern)
     if (m_recreate || !m_initialized) {
-      VkExtent3D targetExtent = { 
-        rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image->info().extent.width,
-        rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image->info().extent.height,
-        1
-      };
+      // Use the target extent that was already calculated in setSetting()
+      // If setSetting() hasn't been called yet (e.g., Auto preset on first load), 
+      // fall back to the actual output texture resolution
+      VkExtent3D targetExtent;
+      if (m_xessOutputSize.width > 0 && m_xessOutputSize.height > 0) {
+        targetExtent = { 
+          m_xessOutputSize.width,
+          m_xessOutputSize.height,
+          1
+        };
+      } else {
+        // Fallback to actual output texture resolution
+        targetExtent = { 
+          rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image->info().extent.width,
+          rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image->info().extent.height,
+          1
+        };
+        Logger::warn("XeSS: setSetting() not called yet, using fallback resolution for initialization");
+      }
       initialize(renderContext, targetExtent);
       m_recreate = false;
     }
@@ -574,11 +587,8 @@ namespace dxvk {
   void DxvkXeSS::setSetting(const uint32_t displaySize[2], const XeSSProfile profile, uint32_t outRenderSize[2]) {
     ScopedCpuProfileZone();
     
-    // Handle the "auto" case
+    // Use the profile directly (Auto preset removed)
     XeSSProfile actualProfile = profile;
-    if (actualProfile == XeSSProfile::Auto) {
-      actualProfile = getAutoProfile(displaySize[0], displaySize[1]);
-    }
 
     if (m_actualProfile == actualProfile && displaySize[0] == m_xessOutputSize.width && displaySize[1] == m_xessOutputSize.height) {
       // Nothing changed that would alter XeSS resolution(s), so return the last cached optimal render size

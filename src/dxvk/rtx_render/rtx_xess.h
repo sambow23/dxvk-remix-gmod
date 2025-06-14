@@ -74,6 +74,7 @@ namespace dxvk {
 
     // Public methods needed by RTX context
     void setSetting(const uint32_t displaySize[2], const XeSSProfile profile, uint32_t outRenderSize[2]);
+    void getInputSize(uint32_t& width, uint32_t& height) const;
 
   private:
 
@@ -84,12 +85,12 @@ namespace dxvk {
     xess_context_handle_t m_xessContext = nullptr;
     VkExtent3D m_targetExtent = { 0, 0, 0 };
     VkExtent3D m_inputExtent = { 0, 0, 0 };
-    XeSSProfile m_currentProfile = XeSSProfile::Auto;
+    XeSSProfile m_currentProfile = XeSSProfile::Balanced;
 
     // Additional member variables needed by implementation
     xess_context_handle_t m_context = nullptr;
-    XeSSProfile m_profile = XeSSProfile::Auto;
-    XeSSProfile m_actualProfile = XeSSProfile::Auto;
+    XeSSProfile m_profile = XeSSProfile::Balanced;
+    XeSSProfile m_actualProfile = XeSSProfile::Balanced;
     VkExtent2D m_inputSize = { 0, 0 };
     VkExtent2D m_xessOutputSize = { 0, 0 };
     bool m_recreate = false;
@@ -103,7 +104,6 @@ namespace dxvk {
     XeSSProfile getAutoProfile(uint32_t displayWidth, uint32_t displayHeight);
     XeSSProfile getCurrentProfile() const;
     void setSetting(const char* name, const char* value);
-    void getInputSize(uint32_t& width, uint32_t& height) const;
     void getOutputSize(uint32_t& width, uint32_t& height) const;
     xess_quality_settings_t profileToQuality(XeSSProfile profile) const;
     
