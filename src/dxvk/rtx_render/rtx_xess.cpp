@@ -364,7 +364,7 @@ namespace dxvk {
     const Resources::RaytracingOutput& rtOutput,
     bool resetHistory) {
     
-    if (!m_enabled || !m_initialized) {
+    if (!m_enabled || !m_initialized || !m_xessContext) {
       // Fallback: just copy input to output
       renderContext->copyImage(
         rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
@@ -377,23 +377,148 @@ namespace dxvk {
       return;
     }
 
-    // Placeholder XeSS dispatch
-    // In a real implementation, you would:
-    // 1. Set up XeSS input textures (color, motion vectors, depth)
-    // 2. Call XeSS execute function
-    // 3. Handle output texture
+    Logger::debug("XeSS: Dispatching upscaling");
     
-    Logger::debug("XeSS: Dispatching upscaling (placeholder)");
+    // Set up image barriers for XeSS inputs and outputs
+    std::vector<Rc<DxvkImageView>> inputs = {
+      rtOutput.m_compositeOutput.view(Resources::AccessType::Read),
+      rtOutput.m_primaryScreenSpaceMotionVector.view,
+      rtOutput.m_primaryDepth.view
+    };
+
+    std::vector<Rc<DxvkImageView>> outputs = {
+      rtOutput.m_finalOutput.view(Resources::AccessType::Write)
+    };
+
+    // Set up barriers for input textures
+    for (auto input : inputs) {
+      if (input == nullptr) {
+        continue;
+      }
+      
+      barriers.accessImage(
+        input->image(),
+        input->imageSubresources(),
+        input->imageInfo().layout,
+        input->imageInfo().stages,
+        input->imageInfo().access,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+    }
+
+    // Set up barriers for output texture
+    for (auto output : outputs) {
+      barriers.accessImage(
+        output->image(),
+        output->imageSubresources(),
+        output->imageInfo().layout,
+        output->imageInfo().stages,
+        output->imageInfo().access,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT);
+    }
+
+    barriers.recordCommands(renderContext->getCommandList());
+
+    // Get jitter offset from camera
+    SceneManager& sceneManager = m_device->getCommon()->getSceneManager();
+    RtCamera& camera = sceneManager.getCamera();
+    float jitterOffset[2];
+    camera.getJittering(jitterOffset);
+
+    // Set up XeSS execution parameters
+    xess_vk_execute_params_t execParams = {};
     
-    // For now, just copy the input to output as a fallback
-    renderContext->copyImage(
-      rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
-      { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-      { 0, 0, 0 },
-      rtOutput.m_compositeOutput.image(Resources::AccessType::Read),
-      { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-      { 0, 0, 0 },
-      rtOutput.m_compositeOutputExtent);
+    // Input color texture
+    auto colorView = rtOutput.m_compositeOutput.view(Resources::AccessType::Read);
+    execParams.colorTexture.imageView = colorView->handle();
+    execParams.colorTexture.image = colorView->image()->handle();
+    execParams.colorTexture.subresourceRange = colorView->subresources();
+    execParams.colorTexture.format = colorView->info().format;
+    execParams.colorTexture.width = colorView->imageInfo().extent.width;
+    execParams.colorTexture.height = colorView->imageInfo().extent.height;
+
+    // Motion vector texture
+    auto motionView = rtOutput.m_primaryScreenSpaceMotionVector.view;
+    execParams.velocityTexture.imageView = motionView->handle();
+    execParams.velocityTexture.image = motionView->image()->handle();
+    execParams.velocityTexture.subresourceRange = motionView->subresources();
+    execParams.velocityTexture.format = motionView->info().format;
+    execParams.velocityTexture.width = motionView->imageInfo().extent.width;
+    execParams.velocityTexture.height = motionView->imageInfo().extent.height;
+
+    // Depth texture
+    auto depthView = rtOutput.m_primaryDepth.view;
+    execParams.depthTexture.imageView = depthView->handle();
+    execParams.depthTexture.image = depthView->image()->handle();
+    execParams.depthTexture.subresourceRange = depthView->subresources();
+    execParams.depthTexture.format = depthView->info().format;
+    execParams.depthTexture.width = depthView->imageInfo().extent.width;
+    execParams.depthTexture.height = depthView->imageInfo().extent.height;
+
+    // Output texture
+    auto outputView = rtOutput.m_finalOutput.view(Resources::AccessType::Write);
+    execParams.outputTexture.imageView = outputView->handle();
+    execParams.outputTexture.image = outputView->image()->handle();
+    execParams.outputTexture.subresourceRange = outputView->subresources();
+    execParams.outputTexture.format = outputView->info().format;
+    execParams.outputTexture.width = outputView->imageInfo().extent.width;
+    execParams.outputTexture.height = outputView->imageInfo().extent.height;
+
+    // Execution parameters
+    execParams.jitterOffsetX = jitterOffset[0];
+    execParams.jitterOffsetY = jitterOffset[1];
+    execParams.exposureScale = 1.0f; // Default exposure scale
+    execParams.resetHistory = resetHistory ? 1 : 0;
+    execParams.inputWidth = m_inputExtent.width;
+    execParams.inputHeight = m_inputExtent.height;
+    
+    // Base coordinates (default to 0,0)
+    execParams.inputColorBase = { 0, 0 };
+    execParams.inputMotionVectorBase = { 0, 0 };
+    execParams.inputDepthBase = { 0, 0 };
+    execParams.inputResponsiveMaskBase = { 0, 0 };
+    execParams.outputColorBase = { 0, 0 };
+
+    // Execute XeSS
+    VkCommandBuffer cmdBuffer = renderContext->getCommandList()->getCmdBuffer(DxvkCmdBuffer::ExecBuffer);
+    xess_result_t result = xessVKExecute(m_xessContext, cmdBuffer, &execParams);
+    
+    if (result != XESS_RESULT_SUCCESS) {
+      Logger::warn(str::format("XeSS: Execute failed: ", xessResultToString(result)));
+      
+      // Fallback to simple copy on failure
+      renderContext->copyImage(
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        rtOutput.m_compositeOutput.image(Resources::AccessType::Read),
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        rtOutput.m_compositeOutputExtent);
+    } else {
+      Logger::debug("XeSS: Execute successful");
+    }
+
+    // Restore barriers for output texture
+    for (auto output : outputs) {
+      barriers.accessImage(
+        output->image(),
+        output->imageSubresources(),
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        output->imageInfo().layout,
+        output->imageInfo().stages,
+        output->imageInfo().access);
+
+      renderContext->getCommandList()->trackResource<DxvkAccess::None>(output);
+      renderContext->getCommandList()->trackResource<DxvkAccess::Write>(output->image());
+    }
+    
+    barriers.recordCommands(renderContext->getCommandList());
   }
 
   XeSSProfile DxvkXeSS::getAutoProfile(uint32_t displayWidth, uint32_t displayHeight) {
