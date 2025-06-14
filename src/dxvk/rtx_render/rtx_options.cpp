@@ -113,8 +113,13 @@ namespace dxvk {
   }
 
   void RtxOptions::updateUpscalerFromXeSSPreset() {
-    // Note: XeSS handles resolution scaling internally based on quality profile
-    // We don't need to set resolutionScale here as XeSS will calculate optimal input resolution
+    // For Custom profile, we need to ensure the resolution scale is properly applied
+    if (RtxOptions::xessProfile() == XeSSProfile::Custom) {
+      // Force XeSS to recalculate with current resolution scale
+      // This will be handled by the XeSS setSetting method when called from the context
+      Logger::debug(str::format("XeSS Custom preset selected with resolution scale: ", RtxOptions::resolutionScale()));
+    }
+    // Note: Other XeSS profiles handle resolution scaling internally based on quality profile
     // The XeSS profile is used directly in the XeSS implementation
   }
 

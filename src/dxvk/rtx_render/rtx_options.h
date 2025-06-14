@@ -98,6 +98,7 @@ namespace dxvk {
     UltraQuality,
     UltraQualityPlus,
     NativeAA,
+    Custom,
     Invalid
   };
 

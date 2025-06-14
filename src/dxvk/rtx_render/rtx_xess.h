@@ -94,6 +94,7 @@ namespace dxvk {
     VkExtent2D m_inputSize = { 0, 0 };
     VkExtent2D m_xessOutputSize = { 0, 0 };
     bool m_recreate = false;
+    float m_lastResolutionScale = -1.0f; // Track resolution scale changes for Custom profile
 
     void createXeSSContext(const VkExtent3D& targetExtent);
     void destroyXeSSContext();

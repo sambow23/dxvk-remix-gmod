@@ -395,6 +395,7 @@ namespace dxvk {
         {XeSSProfile::UltraQuality, "Ultra Quality"},
         {XeSSProfile::UltraQualityPlus, "Ultra Quality Plus"},
         {XeSSProfile::NativeAA, "Native Anti-Aliasing"},
+        {XeSSProfile::Custom, "Custom"},
     } }
   };
 
@@ -1372,6 +1373,11 @@ namespace dxvk {
         case UpscalerType::XeSS: {
           m_userGraphicsSettingChanged |= xessProfileCombo.getKey(&RtxOptions::xessProfileObject());
           RtxOptions::updateUpscalerFromXeSSPreset();
+
+          // Show resolution slider only for Custom preset
+          if (RtxOptions::xessProfile() == XeSSProfile::Custom) {
+            m_userGraphicsSettingChanged |= ImGui::SliderFloat("Resolution Scale", &RtxOptions::resolutionScaleObject(), 0.1f, 1.0f, "%.2f");
+          }
 
           // Display XeSS internal resolution
           auto& xess = ctx->getCommonObjects()->metaXeSS();
@@ -3119,16 +3125,21 @@ namespace dxvk {
         ImGui::SliderFloat("Resolution scale", &RtxOptions::resolutionScaleObject(), 0.5f, 1.0f);
         ImGui::SliderFloat("Sharpness", &ctx->getCommonObjects()->metaNIS().m_sharpness, 0.1f, 1.0f);
         ImGui::Checkbox("Use FP16", &ctx->getCommonObjects()->metaNIS().m_useFp16);
-      } else if (RtxOptions::upscalerType() == UpscalerType::XeSS) {
-        xessProfileCombo.getKey(&RtxOptions::xessProfileObject());
-        RtxOptions::updateUpscalerFromXeSSPreset();
-        
-        // Display XeSS internal resolution
-        auto& xess = ctx->getCommonObjects()->metaXeSS();
-        uint32_t inputWidth, inputHeight;
-        xess.getInputSize(inputWidth, inputHeight);
-        ImGui::TextWrapped(str::format("Internal Resolution: ", inputWidth, "x", inputHeight).c_str());
-      } else if (RtxOptions::upscalerType() == UpscalerType::TAAU) {
+              } else if (RtxOptions::upscalerType() == UpscalerType::XeSS) {
+          xessProfileCombo.getKey(&RtxOptions::xessProfileObject());
+          RtxOptions::updateUpscalerFromXeSSPreset();
+
+          // Show resolution slider only for Custom preset
+          if (RtxOptions::xessProfile() == XeSSProfile::Custom) {
+            ImGui::SliderFloat("Resolution Scale", &RtxOptions::resolutionScaleObject(), 0.1f, 1.0f, "%.2f");
+          }
+
+          // Display XeSS internal resolution
+          auto& xess = ctx->getCommonObjects()->metaXeSS();
+          uint32_t inputWidth, inputHeight;
+          xess.getInputSize(inputWidth, inputHeight);
+          ImGui::TextWrapped(str::format("Internal Resolution: ", inputWidth, "x", inputHeight).c_str());
+        } else if (RtxOptions::upscalerType() == UpscalerType::TAAU) {
         ImGui::SliderFloat("Resolution scale", &RtxOptions::resolutionScaleObject(), 0.5f, 1.0f);
       }
 

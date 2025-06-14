@@ -49,6 +49,7 @@ namespace dxvk {
     case XeSSProfile::UltraQuality: return "Ultra Quality";
     case XeSSProfile::UltraQualityPlus: return "Ultra Quality Plus";
     case XeSSProfile::NativeAA: return "Native Anti-Aliasing";
+    case XeSSProfile::Custom: return "Custom";
     default:
       assert(false);
     case XeSSProfile::Invalid: return "Invalid";
@@ -235,6 +236,7 @@ namespace dxvk {
       case XeSSProfile::UltraQuality: return XESS_QUALITY_SETTING_ULTRA_QUALITY;
       case XeSSProfile::UltraQualityPlus: return XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS;
       case XeSSProfile::NativeAA: return XESS_QUALITY_SETTING_AA;
+      case XeSSProfile::Custom: return XESS_QUALITY_SETTING_BALANCED; // Use balanced as base for custom
       default: return XESS_QUALITY_SETTING_BALANCED;
     }
   }
@@ -244,19 +246,26 @@ namespace dxvk {
       return targetExtent;
     }
 
-    xess_quality_settings_t quality = profileToQuality(getProfile());
-    
-    // Calculate input resolution based on XeSS quality setting using correct XeSS 1.3+ scaling factors
+    XeSSProfile currentProfile = getProfile();
     float scaleFactor = 1.0f;
-    switch (quality) {
-      case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 1.0f / 3.0f; break;   // 3.0x upscaling
-      case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 1.0f / 2.3f; break;   // 2.3x upscaling
-      case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 1.0f / 2.0f; break;   // 2.0x upscaling
-      case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 1.0f / 1.7f; break;   // 1.7x upscaling
-      case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 1.0f / 1.5f; break;   // 1.5x upscaling
-      case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.0f / 1.3f; break;  // 1.3x upscaling
-      case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f; break;          // 1.0x (native)
-      default:                                      scaleFactor = 1.0f / 2.0f; break;   // Default to balanced
+    
+    if (currentProfile == XeSSProfile::Custom) {
+      // For Custom profile, use resolution scale directly
+      scaleFactor = RtxOptions::resolutionScale();
+    } else {
+      // For other profiles, use predefined scaling factors based on quality setting
+      xess_quality_settings_t quality = profileToQuality(currentProfile);
+      
+      switch (quality) {
+        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 1.0f / 3.0f; break;   // 3.0x upscaling
+        case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 1.0f / 2.3f; break;   // 2.3x upscaling
+        case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 1.0f / 2.0f; break;   // 2.0x upscaling
+        case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 1.0f / 1.7f; break;   // 1.7x upscaling
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 1.0f / 1.5f; break;   // 1.5x upscaling
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.0f / 1.3f; break;  // 1.3x upscaling
+        case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f; break;          // 1.0x (native)
+        default:                                      scaleFactor = 1.0f / 2.0f; break;   // Default to balanced
+      }
     }
 
     VkExtent3D inputExtent;
@@ -509,8 +518,14 @@ namespace dxvk {
     execParams.jitterOffsetY = jitterOffset[1];
     execParams.exposureScale = 1.0f; // Default exposure scale
     execParams.resetHistory = resetHistory ? 1 : 0;
-    execParams.inputWidth = m_inputExtent.width;
-    execParams.inputHeight = m_inputExtent.height;
+    // Use the input size from setSetting for Custom profile, or m_inputExtent for other profiles
+    if (getProfile() == XeSSProfile::Custom) {
+      execParams.inputWidth = m_inputSize.width;
+      execParams.inputHeight = m_inputSize.height;
+    } else {
+      execParams.inputWidth = m_inputExtent.width;
+      execParams.inputHeight = m_inputExtent.height;
+    }
     
     // Base coordinates (default to 0,0)
     execParams.inputColorBase = { 0, 0 };
@@ -590,7 +605,18 @@ namespace dxvk {
     // Use the profile directly (Auto preset removed)
     XeSSProfile actualProfile = profile;
 
-    if (m_actualProfile == actualProfile && displaySize[0] == m_xessOutputSize.width && displaySize[1] == m_xessOutputSize.height) {
+    // For Custom profile, also check if resolution scale has changed
+    bool resolutionScaleChanged = false;
+    if (actualProfile == XeSSProfile::Custom) {
+      float currentScale = RtxOptions::resolutionScale();
+      resolutionScaleChanged = (currentScale != m_lastResolutionScale);
+      m_lastResolutionScale = currentScale;
+    }
+    
+    if (m_actualProfile == actualProfile && 
+        displaySize[0] == m_xessOutputSize.width && 
+        displaySize[1] == m_xessOutputSize.height &&
+        !resolutionScaleChanged) {
       // Nothing changed that would alter XeSS resolution(s), so return the last cached optimal render size
       outRenderSize[0] = m_inputSize.width;
       outRenderSize[1] = m_inputSize.height;
@@ -604,6 +630,12 @@ namespace dxvk {
     if (m_profile == XeSSProfile::NativeAA) {
       m_inputSize.width = outRenderSize[0] = displaySize[0];
       m_inputSize.height = outRenderSize[1] = displaySize[1];
+    } else if (m_profile == XeSSProfile::Custom) {
+      // Use resolution scale for custom profile
+      float scale = RtxOptions::resolutionScale();
+      m_inputSize.width = outRenderSize[0] = std::max(1u, (uint32_t)(displaySize[0] * scale));
+      m_inputSize.height = outRenderSize[1] = std::max(1u, (uint32_t)(displaySize[1] * scale));
+      Logger::debug(str::format("XeSS Custom: Using resolution scale ", scale, ", input: ", m_inputSize.width, "x", m_inputSize.height, ", output: ", displaySize[0], "x", displaySize[1]));
     } else {
       // Calculate optimal input resolution based on quality setting
       xess_2d_t outputRes = { displaySize[0], displaySize[1] };
