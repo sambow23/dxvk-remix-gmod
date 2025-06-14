@@ -148,7 +148,11 @@ namespace dxvk {
   }
 
   DxvkXeSS::~DxvkXeSS() {
-    release();
+    destroyXeSSContext();
+  }
+
+  void DxvkXeSS::onDestroy() {
+    destroyXeSSContext();
   }
 
   void DxvkXeSS::release() {

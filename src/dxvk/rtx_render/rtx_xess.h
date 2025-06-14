@@ -83,11 +83,13 @@ namespace dxvk {
 
     ~DxvkXeSS();
 
+    void onDestroy();
+    void release();
+
     bool isEnabled() const { return m_enabled; }
     bool isActive() const { return m_enabled && m_device != nullptr; }
 
     void initialize(Rc<DxvkContext> renderContext, const VkExtent3D& targetExtent);
-    void release();
 
     VkExtent3D getInputSize(const VkExtent3D& targetExtent) const;
     
