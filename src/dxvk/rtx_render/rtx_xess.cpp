@@ -364,7 +364,31 @@ namespace dxvk {
     const Resources::RaytracingOutput& rtOutput,
     bool resetHistory) {
     
-    if (!m_enabled || !m_initialized || !m_xessContext) {
+    if (!m_enabled) {
+      // Fallback: just copy input to output
+      renderContext->copyImage(
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        rtOutput.m_compositeOutput.image(Resources::AccessType::Read),
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        rtOutput.m_compositeOutputExtent);
+      return;
+    }
+
+    // Initialize XeSS if needed (similar to DLSS pattern)
+    if (m_recreate || !m_initialized) {
+      VkExtent3D targetExtent = { 
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image->info().extent.width,
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image->info().extent.height,
+        1
+      };
+      initialize(renderContext, targetExtent);
+      m_recreate = false;
+    }
+
+    if (!m_initialized || !m_xessContext) {
       // Fallback: just copy input to output
       renderContext->copyImage(
         rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
@@ -601,7 +625,17 @@ namespace dxvk {
         }
       } else {
         // Fallback calculation when no context available yet
-        float scale = 1.0f / 2.0f; // Default to balanced
+        float scale = 1.0f;
+        switch (quality) {
+        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scale = 1.0f / 3.0f; break;
+        case XESS_QUALITY_SETTING_PERFORMANCE: scale = 1.0f / 2.3f; break;
+        case XESS_QUALITY_SETTING_BALANCED: scale = 1.0f / 2.0f; break;
+        case XESS_QUALITY_SETTING_QUALITY: scale = 1.0f / 1.7f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY: scale = 1.0f / 1.5f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scale = 1.0f / 1.3f; break;
+        case XESS_QUALITY_SETTING_AA: scale = 1.0f; break;
+        default: scale = 1.0f / 2.0f; break;
+        }
         m_inputSize.width = outRenderSize[0] = (uint32_t)(displaySize[0] * scale);
         m_inputSize.height = outRenderSize[1] = (uint32_t)(displaySize[1] * scale);
       }

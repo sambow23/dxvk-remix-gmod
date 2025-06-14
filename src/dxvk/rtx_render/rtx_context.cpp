@@ -250,6 +250,14 @@ namespace dxvk {
       downscaleExtent.width = renderSize[0];
       downscaleExtent.height = renderSize[1];
       downscaleExtent.depth = 1;
+    } else if (shouldUseXeSS()) {
+      DxvkXeSS& xess = m_common->metaXeSS();
+      uint32_t displaySize[2] = { upscaleExtent.width, upscaleExtent.height };
+      uint32_t renderSize[2];
+      xess.setSetting(displaySize, RtxOptions::xessProfile(), renderSize);
+      downscaleExtent.width = renderSize[0];
+      downscaleExtent.height = renderSize[1];
+      downscaleExtent.depth = 1;
     } else if (shouldUseNIS() || shouldUseTAA()) {
       auto resolutionScale = RtxOptions::resolutionScale();
       downscaleExtent.width = uint32_t(std::roundf(upscaleExtent.width * resolutionScale));

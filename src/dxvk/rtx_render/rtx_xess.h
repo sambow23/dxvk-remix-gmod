@@ -72,6 +72,9 @@ namespace dxvk {
 
     static XeSSProfile getProfile() { return RtxOptions::xessProfile(); }
 
+    // Public methods needed by RTX context
+    void setSetting(const uint32_t displaySize[2], const XeSSProfile profile, uint32_t outRenderSize[2]);
+
   private:
 
     DxvkDevice* m_device = nullptr;
@@ -100,7 +103,6 @@ namespace dxvk {
     XeSSProfile getAutoProfile(uint32_t displayWidth, uint32_t displayHeight);
     XeSSProfile getCurrentProfile() const;
     void setSetting(const char* name, const char* value);
-    void setSetting(const uint32_t displaySize[2], const XeSSProfile profile, uint32_t outRenderSize[2]);
     void getInputSize(uint32_t& width, uint32_t& height) const;
     void getOutputSize(uint32_t& width, uint32_t& height) const;
     xess_quality_settings_t profileToQuality(XeSSProfile profile) const;
