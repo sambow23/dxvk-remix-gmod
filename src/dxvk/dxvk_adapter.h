@@ -116,9 +116,7 @@ namespace dxvk {
     
     DxvkAdapter(
       const Rc<vk::InstanceFn>& vki,
-      VkPhysicalDevice handle,
-      const VkPhysicalDeviceProperties* nvidiaProps = nullptr,
-      const VkPhysicalDeviceIDProperties* nvidiaIdProps = nullptr);
+            VkPhysicalDevice    handle);
     ~DxvkAdapter();
     
     /**
@@ -310,41 +308,37 @@ namespace dxvk {
      * \returns \c true if the system has unified memory.
      */
     bool isUnifiedMemoryArchitecture() const;
-    void injectDeviceLuid(const uint8_t* luid);
     
   private:
     
-  Rc<vk::InstanceFn>  m_vki;
-  VkPhysicalDevice    m_handle;
+    Rc<vk::InstanceFn>  m_vki;
+    VkPhysicalDevice    m_handle;
 
-  DxvkNameSet         m_extraExtensions;
-  DxvkNameSet         m_deviceExtensions;
-  DxvkDeviceInfo      m_deviceInfo;
-  DxvkDeviceFeatures  m_deviceFeatures;
+    DxvkNameSet         m_extraExtensions;
+    DxvkNameSet         m_deviceExtensions;
+    DxvkDeviceInfo      m_deviceInfo;
+    DxvkDeviceFeatures  m_deviceFeatures;
 
-  bool                m_hasMemoryBudget;
-  
-  std::vector<VkQueueFamilyProperties> m_queueFamilies;
+    bool                m_hasMemoryBudget;
+    
+    std::vector<VkQueueFamilyProperties> m_queueFamilies;
 
-  std::array<std::atomic<VkDeviceSize>, VK_MAX_MEMORY_HEAPS> m_heapAlloc;
+    std::array<std::atomic<VkDeviceSize>, VK_MAX_MEMORY_HEAPS> m_heapAlloc;
 
-  void initHeapAllocInfo();
-  void queryExtensions();
-  void queryDeviceInfo(
-    const VkPhysicalDeviceProperties* nvidiaProps = nullptr,
-    const VkPhysicalDeviceIDProperties* nvidiaIdProps = nullptr);
-  void queryDeviceFeatures();
-  void queryDeviceQueues();
+    void initHeapAllocInfo();
+    void queryExtensions();
+    void queryDeviceInfo();
+    void queryDeviceFeatures();
+    void queryDeviceQueues();
 
-  uint32_t findQueueFamily(
-          VkQueueFlags          mask,
-          VkQueueFlags          flags
-    ) const;
-  
-  static void logNameList(const DxvkNameList& names);
-  static void logFeatures(const DxvkDeviceFeatures& features);
-  static void logQueueFamilies(const DxvkAdapterQueueIndices& queues);
-  uint32_t m_originalVendorId = 0;
+    uint32_t findQueueFamily(
+            VkQueueFlags          mask,
+            VkQueueFlags          flags
+      ) const;
+    
+    static void logNameList(const DxvkNameList& names);
+    static void logFeatures(const DxvkDeviceFeatures& features);
+    static void logQueueFamilies(const DxvkAdapterQueueIndices& queues);
     
   };
 

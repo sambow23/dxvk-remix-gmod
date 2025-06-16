@@ -276,6 +276,7 @@ namespace dxvk {
   }
 
   void Resources::AliasedResource::registerAccess(AccessType accessType, bool isAccessedByGPU) const {
+
     if (isAccessedByGPU) {
       switch (accessType) {
       case AccessType::Write:
@@ -290,8 +291,8 @@ namespace dxvk {
         break;
       }
     }
-  
-    #ifdef REMIX_DEVELOPMENT   
+
+#ifdef REMIX_DEVELOPMENT   
     if (isAccessedByGPU) {
       switch (accessType) {
       case AccessType::Write:
@@ -299,8 +300,7 @@ namespace dxvk {
         break;
       case AccessType::ReadWrite:
       case AccessType::Read:
-        // Skip AMD assertion - check if vendor is AMD (0x1002)
-        if (!ownsResource() && m_device->properties().core.properties.vendorID != 0x1002) {
+        if (!ownsResource()) {
           std::string errorMessage = str::format("AliasedResource WAR hazard detected:",
                  "\nNew access type: ", accessType == AccessType::Read ? "Read" : "ReadWrite",
                  "\nNew owner: \"", name() ? name() : "name unknown", "\""
@@ -309,8 +309,8 @@ namespace dxvk {
                                        : (*m_sharedResource->owner.lock().get())->name()
                                           ? (*m_sharedResource->owner.lock().get())->name()
                                           : "name unknown", "\"");
-          ONCE(Logger::warn(errorMessage));
-          // Don't assert - just log a warning
+          ONCE(Logger::err(errorMessage));
+          assert(0 && "[AliasedResource] WAR hazard detected");
         }
         break;
       default:
