@@ -1709,4 +1709,9 @@ namespace dxvk {
     }
   }
 
-}  // namespace nvvk
+  void SceneManager::enqueueClearForNextFrame() {
+    Logger::info("Manual scene clear enqueued for next frame");
+    m_enqueueDelayedClear = true;
+  }
+
+}  // namespace dxvk
