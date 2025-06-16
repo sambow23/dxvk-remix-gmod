@@ -38,6 +38,7 @@
 #include <pxr/usd/sdf/types.h>
 #include <pxr/usd/usd/tokens.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usd/stageCache.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/primCompositionQuery.h>
 #include <pxr/usd/usd/attribute.h>
@@ -95,6 +96,7 @@ public:
   void load(const Rc<DxvkContext>& context);
   void unload();
   bool checkForChanges(const Rc<DxvkContext>& context);
+  void clearUsdCaches();
 
   // Track all USD files and their modification times
   std::unordered_map<std::string, std::filesystem::file_time_type> m_trackedFiles;
@@ -125,7 +127,6 @@ private:
   void collectAllUsdFiles(const std::string& usdFilePath, const std::filesystem::path& baseDirectory, std::unordered_set<std::string>& visitedFiles);
   void updateTrackedFiles();
   void forceFullReload(const Rc<DxvkContext>& context);
-  void clearUsdCaches();
   void collectAvailableLayers();
   void initializeLayerSelection();
   pxr::UsdStageRefPtr createFilteredStage(const std::string& rootPath);
@@ -914,9 +915,9 @@ void UsdMod::Impl::clearUsdCaches() {
       }
     }
     
-    // Clear the USD stage cache to ensure fresh stages are created
-    pxr::UsdStageCache::Get().Clear();
-    Logger::info("Cleared USD stage cache");
+    // Note: USD stage caches are typically managed per-context, not globally
+    // Individual stages will be recreated as needed when layers are reloaded
+    Logger::info("USD layer reloading completed");
     
   } catch (const std::exception& e) {
     Logger::warn(str::format("Error during USD cache clearing: ", e.what()));
