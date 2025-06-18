@@ -24,7 +24,8 @@
 #include "rtx/pass/tonemap/tonemapping.h"
 #include "rtx/utility/color.slangh"
 
-#include "Tonemappers.hlsl"
+#include "ACES.hlsl"
+#include "AgX.hlsl"
 
 static const uint kHistogramFixedPointScale = 0x100;
 
@@ -71,8 +72,8 @@ float3 ACESFilm(float3 color, bool useLegacyACES, bool suppressBlackLevelClamp =
 }
 
 // Unified tone mapping function that handles ACES, AgX, or no tonemapping
-float3 applyToneMapping(float3 color, bool useAgX, bool useLegacyACES, float agxGamma = 2.0, float agxSaturation = 1.1, 
-                        float agxExposureOffset = 0.0, uint agxLook = 0, float agxContrast = 1.0, float agxSlope = 1.0, 
+float3 applyToneMapping(float3 color, bool useAgX, bool useLegacyACES, float agxGamma = 0.8, float agxSaturation = 1.0, 
+                        float agxExposureOffset = 0.0, uint agxLook = 0, float agxContrast = 0.8, float agxSlope = 1.2, 
                         float agxPower = 1.0, bool suppressBlackLevelClamp = false)
 {
   if (useAgX)
