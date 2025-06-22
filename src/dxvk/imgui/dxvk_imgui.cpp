@@ -2533,7 +2533,7 @@ namespace dxvk {
       ImGui::Separator();
       ImGui::Text("Manual Controls:");
       
-      if (ImGui::Button("🔄 Invalidate Cache & Reload USD Mods")) {
+      if (ImGui::Button("Invalidate Cache & Reload USD Mods")) {
         // Get the scene manager and trigger a manual reload
         auto& sceneManager = m_device->getCommon()->getSceneManager();
         if (sceneManager.getAssetReplacer()) {
@@ -2549,6 +2549,25 @@ namespace dxvk {
       
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Force reload all USD mod files and clear all caches.\nUse this if mods appear stuck or incomplete after changes.");
+      }
+
+      // Add full rescan and reload button
+      if (ImGui::Button("Rescan Mods & Reload USD Stage")) {
+        // Get the scene manager and trigger a full mods refresh and reload
+        auto& sceneManager = m_device->getCommon()->getSceneManager();
+        if (sceneManager.getAssetReplacer()) {
+          Logger::info("Manual mods rescan and USD stage reload triggered from ImGui");
+          
+          // Perform full refresh of mods directory and reload all USD stages
+          sceneManager.getAssetReplacer()->refreshModsAndReloadStage(ctx);
+          
+          // Also log this action for debugging
+          Logger::info("Full mods directory rescan and USD stage reload completed by user");
+        }
+      }
+      
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Rescan the mods directory for new/removed mods and reload all USD stages.\nUse this after adding, removing, or significantly changing mod files.");
       }
     }
 

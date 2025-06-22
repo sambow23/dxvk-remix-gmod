@@ -112,6 +112,9 @@ public:
   // Layer hierarchy
   std::unordered_map<std::string, LayerInfo> m_layerHierarchy;
 
+  // Check if all async mesh loading operations are complete
+  bool areAsyncOperationsComplete() const;
+
 private:
   UsdMod& m_owner;
 
@@ -771,6 +774,18 @@ void UsdMod::Impl::unload() {
     
     m_usdChangeWatchdog.stop();
 
+    // CRITICAL: Wait for all async mesh loading threads to complete before clearing data
+    Logger::info("Waiting for async mesh loading threads to complete...");
+    for (auto& [cmdList, thread] : m_cmdListSyncThreads) {
+      if (thread.joinable()) {
+        Logger::info(str::format("Joining thread for command list: ", reinterpret_cast<uintptr_t>(cmdList)));
+        thread.join();
+      }
+    }
+    m_cmdListSyncThreads.clear();
+    m_meshReplacementsToAdd.clear();
+    Logger::info("All async mesh loading threads completed");
+
     // Clear USD layer caches for a cleaner unload
     clearUsdCaches();
 
@@ -953,34 +968,58 @@ void UsdMod::Impl::validateLayerSelection() {
   }
 }
 
+bool UsdMod::Impl::areAsyncOperationsComplete() const {
+  // Check if there are any active async mesh loading threads
+  for (const auto& [cmdList, thread] : m_cmdListSyncThreads) {
+    if (thread.joinable()) {
+      return false; // Still have active threads
+    }
+  }
+  
+  // Check if there are any pending mesh replacements to add
+  return m_meshReplacementsToAdd.empty();
+}
+
 void UsdMod::Impl::forceFullReload(const Rc<DxvkContext>& context) {
   Logger::info("Starting force full reload of USD mod...");
   
   // Step 1: Stop the watchdog to prevent interference
   m_usdChangeWatchdog.stop();
   
-  // Step 2: Clear USD layer caches to ensure fresh loading
+  // Step 2: Wait for all async mesh loading threads to complete
+  Logger::info("Waiting for async mesh loading threads to complete before reload...");
+  for (auto& [cmdList, thread] : m_cmdListSyncThreads) {
+    if (thread.joinable()) {
+      Logger::info(str::format("Joining thread for command list: ", reinterpret_cast<uintptr_t>(cmdList)));
+      thread.join();
+    }
+  }
+  m_cmdListSyncThreads.clear();
+  m_meshReplacementsToAdd.clear();
+  Logger::info("All async mesh loading threads completed before reload");
+  
+  // Step 3: Clear USD layer caches to ensure fresh loading
   clearUsdCaches();
   
-  // Step 3: Clear all replacements and asset data
+  // Step 4: Clear all replacements and asset data
   m_owner.m_replacements->clear();
   AssetDataManager::get().clearSearchPaths();
   
-  // Step 4: Clear tracked files
+  // Step 5: Clear tracked files
   m_trackedFiles.clear();
   
-  // Step 5: Reset state
+  // Step 6: Reset state
       m_owner.setState(ProgressState::Unloaded);
   
-  // Step 6: Force a small delay to ensure all operations complete
+  // Step 7: Force a small delay to ensure all operations complete
   // This helps with any potential race conditions
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
   
-  // Step 7: Reload everything from scratch
+  // Step 8: Reload everything from scratch
   Logger::info("Reloading USD mod from scratch...");
   processUSD(context);
   
-  // Step 8: Restart the watchdog
+  // Step 9: Restart the watchdog
   m_usdChangeWatchdog.start();
   
   Logger::info("Force full reload completed successfully");
@@ -1841,6 +1880,10 @@ std::vector<std::string> UsdMod::getTrackedFiles() const {
     files.push_back(filePath);
   }
   return files;
+}
+
+bool UsdMod::areAsyncOperationsComplete() const {
+  return m_impl->areAsyncOperationsComplete();
 }
 
 std::vector<std::string> UsdMod::getAvailableLayers() const {

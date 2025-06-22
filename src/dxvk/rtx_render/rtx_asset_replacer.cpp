@@ -278,6 +278,46 @@ void AssetReplacer::setUsdLayerEnabled(const std::string& modPath, const std::st
   Logger::warn(str::format("Could not find USD mod for path: ", modPath));
 }
 
+void AssetReplacer::refreshModsAndReloadStage(const Rc<DxvkContext>& context) {
+  Logger::info("Starting full mods refresh and USD stage reload...");
+  
+  // Step 1: Force completion of any pending GPU operations
+  Logger::info("Flushing GPU command list and waiting for device idle...");
+  if (context.ptr()) {
+    context->flushCommandList();
+  }
+  context->getDevice()->waitForIdle();
+  
+  // Step 2: Unload all current mods (this now properly waits for async operations)
+  Logger::info("Unloading all current mods...");
+  for (auto& mod : m_modManager.mods()) {
+    mod->unload();
+  }
+  
+  // Step 3: Clear all replacements
+  Logger::info("Clearing all replacement data...");
+  for (auto& mod : m_modManager.mods()) {
+    mod->replacements().clear();
+  }
+  
+  // Step 4: Refresh the mods directory to discover new/removed mods
+  Logger::info("Refreshing mods directory...");
+  m_modManager.refreshMods();
+  Logger::info("Mods directory refreshed - rescanned for new/removed mods");
+  
+  // Step 5: Reload all mods (including any newly discovered ones)
+  Logger::info("Reloading all mods...");
+  for (auto& mod : m_modManager.mods()) {
+    mod->load(context);
+  }
+  
+  // Step 6: Update secret replacements
+  Logger::info("Updating secret replacements...");
+  updateSecretReplacements();
+  
+  Logger::info("Full mods refresh and USD stage reload completed successfully");
+}
+
 std::vector<std::pair<std::string, std::vector<UsdModTypes::LayerInfo>>> AssetReplacer::getUsdLayerHierarchy() const {
   std::vector<std::pair<std::string, std::vector<UsdModTypes::LayerInfo>>> result;
   

@@ -46,6 +46,9 @@ namespace dxvk {
     // Get tracked USD files for debugging/display purposes
     std::vector<std::string> getTrackedFiles() const;
     
+    // Check if all async mesh loading operations are complete
+    bool areAsyncOperationsComplete() const;
+    
     // Layer selection functionality
     std::vector<std::string> getAvailableLayers() const;
     std::vector<std::string> getEnabledLayers() const;

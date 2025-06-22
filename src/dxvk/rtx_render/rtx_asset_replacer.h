@@ -253,6 +253,9 @@ namespace dxvk {
     void setUsdLayerEnabled(const std::string& modPath, const std::string& layerPath, bool enabled);
     std::vector<std::pair<std::string, std::vector<UsdModTypes::LayerInfo>>> getUsdLayerHierarchy() const;
 
+    // Refresh mods directory and reload all USD stages
+    void refreshModsAndReloadStage(const Rc<DxvkContext>& context);
+
   private:
     void updateSecretReplacements();
 
