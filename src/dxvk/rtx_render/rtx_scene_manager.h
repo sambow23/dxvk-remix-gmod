@@ -131,9 +131,6 @@ public:
   bool areAllReplacementsLoaded() const;
   std::vector<Mod::State> getReplacementStates() const;
 
-  uint64_t getGameTimeSinceStartMS() const;
-  uint64_t getRealTimeSinceStartMS() const;
-
   RtxGlobals& getGlobals() { return m_globals; }
 
   Rc<DxvkBuffer> getSurfaceMaterialBuffer() { return m_surfaceMaterialBuffer; }
@@ -190,7 +187,7 @@ public:
   // ISceneManager but not really
   void clear(Rc<DxvkContext> ctx, bool needWfi);
   void garbageCollection();
-  void prepareSceneData(Rc<RtxContext> ctx, class DxvkBarrierSet& execBarriers, const float frameTimeMilliseconds);
+  void prepareSceneData(Rc<RtxContext> ctx, class DxvkBarrierSet& execBarriers);
 
   void onFrameEnd(Rc<DxvkContext> ctx);
   void onFrameEndNoRTX();
@@ -242,7 +239,7 @@ private:
   ObjectCacheState processGeometryInfo(Rc<DxvkContext> ctx, const DrawCallState& drawCallState, RaytraceGeometry& modifiedGeometryData);
 
   // Consumes a draw call state and updates the scene state accordingly
-  uint64_t processDrawCallState(Rc<DxvkContext> ctx, const DrawCallState& blasInput, const MaterialData* replacementMaterialData);
+  RtInstance* processDrawCallState(Rc<DxvkContext> ctx, const DrawCallState& blasInput, const MaterialData* replacementMaterialData);
 
   const RtSurfaceMaterial& createSurfaceMaterial( Rc<DxvkContext> ctx, 
                                                   const MaterialData& renderMaterialData,
@@ -266,7 +263,7 @@ private:
   // Called whenever an instance has been removed from the database
   void onInstanceDestroyed(RtInstance& instance);
 
-  uint64_t drawReplacements(Rc<DxvkContext> ctx, const DrawCallState* input, const std::vector<AssetReplacement>* pReplacements, const MaterialData* overrideMaterialData);
+  RtInstance* drawReplacements(Rc<DxvkContext> ctx, const DrawCallState* input, const std::vector<AssetReplacement>* pReplacements, const MaterialData* overrideMaterialData);
 
   void createEffectLight(Rc<DxvkContext> ctx, const DrawCallState& input, const RtInstance* instance);
 
@@ -302,9 +299,6 @@ private:
   Rc<DxvkBuffer> m_surfaceMaterialExtensionBuffer;
   Rc<DxvkBuffer> m_volumeMaterialBuffer;
 
-  uint32_t m_currentFrameIdx = -1;
-  bool m_useFixedFrameTime = false;
-  std::chrono::time_point<std::chrono::steady_clock> m_startTime;
   uint32_t m_activePOMCount = 0;
   
   float m_uniqueObjectSearchDistance = 1.f;

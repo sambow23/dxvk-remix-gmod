@@ -45,6 +45,9 @@
 #include "dxvk_scoped_annotation.h"
 #include "rtx_lights_data.h"
 #include "rtx_light_utils.h"
+#include "rtx_particle_system.h"
+
+#include "../util/util_globaltime.h"
 
 namespace dxvk {
   SceneManager::SceneManager(DxvkDevice* device)
@@ -58,7 +61,6 @@ namespace dxvk {
     , m_pReplacer(new AssetReplacer())
     , m_terrainBaker(new TerrainBaker())
     , m_cameraManager(device)
-    , m_startTime(std::chrono::steady_clock::now())
     , m_uniqueObjectSearchDistance(RtxOptions::uniqueObjectDistance()) {
     InstanceEventHandler instanceEvents(this);
     instanceEvents.onInstanceAddedCallback = [this](RtInstance& instance) { onInstanceAdded(instance); };
@@ -68,9 +70,6 @@ namespace dxvk {
     
     if (env::getEnvVar("DXVK_RTX_CAPTURE_ENABLE_ON_FRAME") != "") {
       m_beginUsdExportFrameNum = stoul(env::getEnvVar("DXVK_RTX_CAPTURE_ENABLE_ON_FRAME"));
-    }
-    if (env::getEnvVar("DXVK_DENOISER_NRD_FRAME_TIME_MS") != "") {
-      m_useFixedFrameTime = true;
     }
   }
 
@@ -83,30 +82,6 @@ namespace dxvk {
 
   std::vector<Mod::State> SceneManager::getReplacementStates() const {
     return m_pReplacer->getReplacementStates();
-  }
-
-  // Returns wall time between start of app and current time.
-  uint64_t SceneManager::getGameTimeSinceStartMS() const {
-    // Used in testing
-    if (m_useFixedFrameTime) {
-      const double deltaTimeMS = 1000.0 / 60.0; // Assume 60 fps
-
-      return static_cast<uint64_t>(static_cast<double>(m_device->getCurrentFrameId()) * deltaTimeMS);
-    }
-
-    // TODO(TREX-1004) find a way to 'pause' this when a game is paused.
-    return getRealTimeSinceStartMS();
-  }
-
-  // Returns the actual time since the start of the app, with no mutations.  Should be used for metrics and performance logging.
-  uint64_t SceneManager::getRealTimeSinceStartMS() const {
-    // Note: steady_clock used here rather than system_clock as on Windows at least it uses a higher precision time source
-    // (QueryPerformanceCounter rather than GetSystemTimePreciseAsFileTime), and additionally it is monotonic which is better
-    // for this sort of game-based timekeeping (we don't care about NTP adjustments or other things that'd cause discontinuities).
-    const auto currTime = std::chrono::steady_clock::now();
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(currTime - m_startTime);
-
-    return elapsedMs.count();
   }
 
   void SceneManager::initialize(Rc<DxvkContext> ctx) {
@@ -623,11 +598,10 @@ namespace dxvk {
       overrideMaterialData = &sHighlightMaterialData;
     }
 
-    uint64_t instanceId = UINT64_MAX;
     if (pReplacements != nullptr) {
-      instanceId = drawReplacements(ctx, &input, pReplacements, overrideMaterialData);
+      drawReplacements(ctx, &input, pReplacements, overrideMaterialData);
     } else {
-      instanceId = processDrawCallState(ctx, input, overrideMaterialData);
+      processDrawCallState(ctx, input, overrideMaterialData);
     }
   }
 
@@ -672,7 +646,7 @@ namespace dxvk {
     Vector3 lightRadiance;
     if (RtxOptions::effectLightPlasmaBall()) {
       // Todo: Make these options more configurable via config options.
-      const double timeMilliseconds = static_cast<double>(getGameTimeSinceStartMS());
+      const double timeMilliseconds = static_cast<double>(GlobalTime::get().absoluteTimeMs());
       const double animationPhase = sin(timeMilliseconds * 0.006) * 0.5 + 0.5;
       lightRadiance = lerp(Vector3(1.f, 0.921f, 0.738f), Vector3(1.f, 0.521f, 0.238f), animationPhase);
     } else {
@@ -689,9 +663,9 @@ namespace dxvk {
     m_lightManager.addLight(rtLight, input, RtLightAntiCullingType::MeshReplacement);
   }
 
-  uint64_t SceneManager::drawReplacements(Rc<DxvkContext> ctx, const DrawCallState* input, const std::vector<AssetReplacement>* pReplacements, const MaterialData* overrideMaterialData) {
+  RtInstance* SceneManager::drawReplacements(Rc<DxvkContext> ctx, const DrawCallState* input, const std::vector<AssetReplacement>* pReplacements, const MaterialData* overrideMaterialData) {
     ScopedCpuProfileZone();
-    uint64_t rootInstanceId = UINT64_MAX;
+    RtInstance* pRootInstance = nullptr;
     // Detect replacements of meshes that would have unstable hashes due to the vertex hash using vertex data from a shared vertex buffer.
     // TODO: Once the vertex hash only uses vertices referenced by the index buffer, this should be removed.
     const bool highlightUnsafeReplacement = RtxOptions::useHighlightUnsafeReplacementMode() &&
@@ -699,7 +673,7 @@ namespace dxvk {
     if (!pReplacements->empty() && (*pReplacements)[0].includeOriginal) {
       DrawCallState newDrawCallState(*input);
       newDrawCallState.categories = (*pReplacements)[0].categories.applyCategoryFlags(newDrawCallState.categories);
-      rootInstanceId = processDrawCallState(ctx, newDrawCallState, overrideMaterialData);
+      pRootInstance = processDrawCallState(ctx, newDrawCallState, overrideMaterialData);
     }
     for (auto&& replacement : *pReplacements) {
       if (replacement.type == AssetReplacement::eMesh) {
@@ -731,19 +705,28 @@ namespace dxvk {
           static MaterialData sHighlightMaterialData(OpaqueMaterialData(TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(),
               0.f, 1.f, Vector3(0.2f, 0.2f, 0.2f), 1.f, 0.1f, 0.1f, Vector3(1.f, 0.f, 0.f), true, 1, 1, 0, false, false, 200.f, true, false, BlendType::kAlpha, false, AlphaTestType::kAlways, 0, 0.0f, 0.0f, Vector3(), 0.0f, Vector3(), 0.0f, false, Vector3(), 0.0f, 0.0f,
               lss::Mdl::Filter::Nearest, lss::Mdl::WrapMode::Repeat, lss::Mdl::WrapMode::Repeat));
-          if (getGameTimeSinceStartMS() / 200 % 2 == 0) {
+          if ((GlobalTime::get().absoluteTimeMs()) / 200 % 2 == 0) {
             overrideMaterialData = &sHighlightMaterialData;
           }
         }
-        uint64_t instanceId = processDrawCallState(ctx, newDrawCallState, overrideMaterialData);
-        if (rootInstanceId == UINT64_MAX) {
-          rootInstanceId = instanceId;
+
+        RtInstance* pInstance = processDrawCallState(ctx, newDrawCallState, overrideMaterialData);
+
+        const bool isParticleSystem = replacement.particleSystem.has_value();
+        if (pInstance && isParticleSystem) {
+          // We dont draw the mesh emitters for particle systems
+          pInstance->setHidden(true);
+
+          RtxParticleSystemManager& particleSystem = device()->getCommon()->metaParticleSystem();
+          particleSystem.spawnParticles(ctx.ptr(), replacement.particleSystem.value(), pInstance->getVectorIdx(), newDrawCallState, overrideMaterialData);
+        } else if (pRootInstance == nullptr) {
+          pRootInstance = pInstance;
         }
       }
     }
     for (auto&& replacement : *pReplacements) {
       if (replacement.type == AssetReplacement::eLight) {
-        if (rootInstanceId == UINT64_MAX) {
+        if (pRootInstance == nullptr) {
           // TODO(TREX-1141) if we refactor instancing to depend on the pre-replacement drawcall instead
           // of the fully processed draw call, we can remove this requirement.
           Logger::err(str::format(
@@ -754,14 +737,14 @@ namespace dxvk {
         }
         if (replacement.lightData.has_value()) {
           RtLight localLight = replacement.lightData->toRtLight();
-          localLight.setRootInstanceId(rootInstanceId);
+          localLight.setRootInstanceId(pRootInstance == nullptr ? UINT64_MAX : pRootInstance->getId());
           localLight.applyTransform(input->getTransformData().objectToWorld);
           m_lightManager.addLight(localLight, *input, RtLightAntiCullingType::MeshReplacement);
         }
       }
     }
 
-    return rootInstanceId;
+    return pRootInstance;
   }
 
   void SceneManager::clearFogState() {
@@ -899,13 +882,13 @@ namespace dxvk {
     textureManager.addTexture(inputTexture, samplerFeedbackStamp, async, textureIndex);
   }
 
-  uint64_t SceneManager::processDrawCallState(Rc<DxvkContext> ctx, const DrawCallState& drawCallState, const MaterialData* overrideMaterialData) {
+  RtInstance* SceneManager::processDrawCallState(Rc<DxvkContext> ctx, const DrawCallState& drawCallState, const MaterialData* overrideMaterialData) {
     ScopedCpuProfileZone();
     const bool usingOverrideMaterial = overrideMaterialData != nullptr;
     const MaterialData& renderMaterialData =
       usingOverrideMaterial ? *overrideMaterialData : drawCallState.getMaterialData();
     if (renderMaterialData.getIgnored()) {
-      return UINT64_MAX;
+      return nullptr;
     }
     ObjectCacheState result = ObjectCacheState::kInvalid;
     BlasEntry* pBlas = nullptr;
@@ -964,7 +947,12 @@ namespace dxvk {
       }
     }
 
-    return instance ? instance->getId() : UINT64_MAX;
+    if (instance && drawCallState.getCategoryFlags().test(InstanceCategories::ParticleEmitter)) {
+      RtxParticleSystemManager& particleSystem = device()->getCommon()->metaParticleSystem();
+      particleSystem.spawnParticles(ctx.ptr(), RtxParticleSystemManager::createGlobalParticleSystemDesc(), instance->getVectorIdx(), drawCallState, nullptr);
+    }
+
+    return instance; 
   }
 
   const RtSurfaceMaterial& SceneManager::createSurfaceMaterial( Rc<DxvkContext> ctx, 
@@ -1417,7 +1405,7 @@ namespace dxvk {
     }
   }
 
-  void SceneManager::prepareSceneData(Rc<RtxContext> ctx, DxvkBarrierSet& execBarriers, const float frameTimeMilliseconds) {
+  void SceneManager::prepareSceneData(Rc<RtxContext> ctx, DxvkBarrierSet& execBarriers) {
     ScopedGpuProfileZone(ctx, "Build Scene");
 
     // Needs to happen before garbageCollection to avoid destroying dynamic lights
@@ -1427,7 +1415,6 @@ namespace dxvk {
 
     m_terrainBaker->prepareSceneData(ctx);
 
-    
     auto& textureManager = m_device->getCommon()->getTextureManager();
     m_bindlessResourceManager.prepareSceneData(ctx, textureManager.getTextureTable(), getBufferTable(), getSamplerTable());
 
@@ -1438,7 +1425,7 @@ namespace dxvk {
       return;
     }
 
-    m_rayPortalManager.prepareSceneData(ctx, frameTimeMilliseconds);
+    m_rayPortalManager.prepareSceneData(ctx);
     // Note: only main camera needs to be teleportation corrected as only that one is used for ray tracing & denoising
     m_rayPortalManager.fixCameraInBetweenPortals(m_cameraManager.getCamera(CameraType::Main));
     m_rayPortalManager.fixCameraInBetweenPortals(m_cameraManager.getCamera(CameraType::ViewModel));
@@ -1473,11 +1460,14 @@ namespace dxvk {
       Logger::info("[RTX] Opacity Micromap: disabled");
     }
 
+    RtxParticleSystemManager& particles = m_device->getCommon()->metaParticleSystem();
+    particles.simulate(ctx.ptr());
+
     m_instanceManager.findPortalForVirtualInstances(m_cameraManager, m_rayPortalManager);
     m_instanceManager.createViewModelInstances(ctx, m_cameraManager, m_rayPortalManager);
     m_instanceManager.createPlayerModelVirtualInstances(ctx, m_cameraManager, m_rayPortalManager);
 
-    m_accelManager.mergeInstancesIntoBlas(ctx, execBarriers, textureManager.getTextureTable(), m_cameraManager, m_instanceManager, m_opacityMicromapManager.get(), frameTimeMilliseconds);
+    m_accelManager.mergeInstancesIntoBlas(ctx, execBarriers, textureManager.getTextureTable(), m_cameraManager, m_instanceManager, m_opacityMicromapManager.get());
 
     // Call on the other managers to prepare their GPU data for the current scene
     m_accelManager.prepareSceneData(ctx, execBarriers, m_instanceManager);
@@ -1604,7 +1594,7 @@ namespace dxvk {
     if (m_device->getCurrentFrameId() == m_beginUsdExportFrameNum) {
       capturer->triggerNewCapture();
     }
-    capturer->step(ctx, frameTimeMilliseconds, ctx->getCommonObjects()->getLastKnownWindowHandle());
+    capturer->step(ctx, ctx->getCommonObjects()->getLastKnownWindowHandle());
 
     // Clear the ray portal data before the next frame
     m_rayPortalManager.clear();

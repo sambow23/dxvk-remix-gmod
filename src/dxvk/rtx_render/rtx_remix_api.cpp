@@ -1317,7 +1317,9 @@ namespace {
       }
 
       assert(srcImage.ptr());
-      dxvk::RtxContext::blitImageHelper(ctx, srcImage, cDest, VkFilter::VK_FILTER_NEAREST);
+      if (srcImage.ptr()) {
+        dxvk::RtxContext::blitImageHelper(ctx, srcImage, cDest, VkFilter::VK_FILTER_NEAREST);
+      }
     });
 
 #pragma warning(pop)

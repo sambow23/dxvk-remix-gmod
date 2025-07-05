@@ -388,8 +388,7 @@ namespace dxvk {
                                             const std::vector<TextureRef>& textures,
                                             const CameraManager& cameraManager,
                                             InstanceManager& instanceManager,
-                                            OpacityMicromapManager* opacityMicromapManager,
-                                            float frameTimeMilliseconds) {
+                                            OpacityMicromapManager* opacityMicromapManager) {
     ScopedGpuProfileZone(ctx, "buildBLAS");
 
     auto& instances = instanceManager.getInstanceTable();
@@ -441,6 +440,10 @@ namespace dxvk {
     std::unordered_map<BlasEntry*, std::vector<RtInstance*>> uniqueBlas;
 
     for (RtInstance* instance : instances) {
+      if (instance->isHidden()) {
+        continue;
+      }
+
       // If the instance has zero mask, do not build BLAS for it: no ray can intersect this instance.
       if (instance->getVkInstance().mask == 0) {
         
@@ -600,7 +603,15 @@ namespace dxvk {
       // Try to reuse our dynamic BLAS if it exists
       Rc<PooledBlas>& selectedBlas = blasEntry->dynamicBlas;
 
-      const bool build = forceRebuild || !selectedBlas.ptr() || selectedBlas->accelStructure->info().size != sizeInfo.accelerationStructureSize;
+      bool build = forceRebuild || !selectedBlas.ptr() || selectedBlas->accelStructure->info().size != sizeInfo.accelerationStructureSize;
+
+      // Validate that the selected blas is compatible with the current build info for update purposes
+      bool update = blasEntry->frameLastUpdated == currentFrame;
+      if (update && !build && !validateUpdateMode(selectedBlas->buildInfo, buildInfo)) {
+        // If an update is requested but the BLAS is not compatible with the current build info then force a rebuild
+        update = false;
+        build = true;
+      }
 
       // There is no such BLAS - create one
       if (build) {
@@ -615,12 +626,6 @@ namespace dxvk {
       assert(selectedBlas.ptr());
       selectedBlas->frameLastTouched = currentFrame;
       blasEntry->dynamicBlas->opacityMicromapSourceHash = boundOpacityMicromapHash;
-
-      // Validate that the selected blas is compatible with the current build info for update purposes
-      bool update = blasEntry->frameLastUpdated == currentFrame;
-      if (update && !build && !validateUpdateMode(selectedBlas->buildInfo, buildInfo)) {
-        update = false;
-      }
 
       if (update || build) {
         if (update && !build) {
@@ -721,7 +726,7 @@ namespace dxvk {
     }
 
     buildBlases(ctx, execBarriers, cameraManager, opacityMicromapManager, instanceManager, 
-                textures, instances, blasBuckets, blasToBuild, blasRangesToBuild, frameTimeMilliseconds, totalScratchMemory);
+                textures, instances, blasBuckets, blasToBuild, blasRangesToBuild, totalScratchMemory);
   }
 
   void AccelManager::addBlas(RtInstance* instance, BlasEntry* blasEntry, const Matrix4* instanceToObject) {
@@ -1191,7 +1196,6 @@ namespace dxvk {
                                  const std::vector<std::unique_ptr<BlasBucket>>& blasBuckets,
                                  std::vector<VkAccelerationStructureBuildGeometryInfoKHR>& blasToBuild,
                                  std::vector<VkAccelerationStructureBuildRangeInfoKHR*>& blasRangesToBuild,
-                                 float frameTimeMilliseconds,
                                  size_t& totalScratchMemory) {
     ScopedGpuProfileZone(ctx, "buildBLAS");
     // Upload surfaces before opacity micromap generation which reads the surface data on the GPU
@@ -1199,7 +1203,7 @@ namespace dxvk {
 
     // Build and bind opacity micromaps
     if (opacityMicromapManager && opacityMicromapManager->isActive()) {
-      opacityMicromapManager->buildOpacityMicromaps(ctx, textures, cameraManager.getLastCameraCutFrameId(), frameTimeMilliseconds);
+      opacityMicromapManager->buildOpacityMicromaps(ctx, textures, cameraManager.getLastCameraCutFrameId());
 
       // Bind opacity micromaps
       for (auto& blasBucket : blasBuckets) {
