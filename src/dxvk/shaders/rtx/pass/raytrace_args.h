@@ -383,5 +383,9 @@ struct RaytraceArgs {
   float vertexColorStrength;
   bool vertexColorIsBakedLighting;
 
+  // XeSS motion vector mode control
+  uint enableXeSSJitteredMotionVectors;
+  uint3 pad_xess;
+
   // NOTE: Add structs to the top section of RaytraceArgs, not the bottom.
 };

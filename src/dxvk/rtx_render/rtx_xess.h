@@ -29,7 +29,6 @@
 #include "../util/rc/util_rc.h"
 #include "../util/rc/util_rc_ptr.h"
 
-// XeSS includes - using direct relative path
 #include "../../../external/xess/inc/xess/xess.h"
 #include "../../../external/xess/inc/xess/xess_vk.h"
 
@@ -90,6 +89,14 @@ namespace dxvk {
     VkExtent3D m_targetExtent = { 0, 0, 0 };
     VkExtent3D m_inputExtent = { 0, 0, 0 };
     XeSSProfile m_currentProfile = XeSSProfile::Balanced;
+    XeSSNetworkModel m_currentNetworkModel = XeSSNetworkModel::KPSS;
+    XeSSAutoExposureMode m_currentAutoExposureMode = XeSSAutoExposureMode::Automatic;
+    
+    // Temporal state for XeSS auto-exposure jitter optimization
+    float m_previousExposureScale = 1.0f;
+    float m_exposureChangeVelocity = 0.0f;
+    uint32_t m_framesSinceExposureChange = 0;
+    bool m_isUsingInternalAutoExposure = false;
 
     // Additional member variables needed by implementation
     xess_context_handle_t m_context = nullptr;

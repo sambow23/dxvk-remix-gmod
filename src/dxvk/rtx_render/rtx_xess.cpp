@@ -31,13 +31,18 @@
 #include "dxvk_scoped_annotation.h"
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx_imgui.h"
+#include "rtx_auto_exposure.h"
 #include "../../util/util_math.h"
 #include "../util/util_string.h"
 #include "../util/log/log.h"
 
-// XeSS includes - using direct relative path
+#if defined(_WIN32) && !defined(DXVK_NATIVE)
+#pragma comment(lib, "libxess.lib")
+#endif
+
 #include "../../../external/xess/inc/xess/xess.h"
 #include "../../../external/xess/inc/xess/xess_vk.h"
+#include "../../../external/xess/inc/xess/xess_debug.h"
 
 namespace dxvk {
   const char* xessProfileToString(XeSSProfile xessProfile) {
@@ -76,6 +81,19 @@ namespace dxvk {
       case XESS_RESULT_ERROR_WRONG_CALL_ORDER: return "Error: Wrong call order";
       case XESS_RESULT_ERROR_UNKNOWN: return "Error: Unknown";
       default: return "Unknown result code";
+    }
+  }
+
+  // Helper function to convert network model enum to XeSS SDK enum
+  static xess_network_model_t networkModelToXeSS(XeSSNetworkModel model) {
+    switch (model) {
+      case XeSSNetworkModel::KPSS: return XESS_NETWORK_MODEL_KPSS;
+      case XeSSNetworkModel::SPLAT: return XESS_NETWORK_MODEL_SPLAT;
+      case XeSSNetworkModel::Model3: return XESS_NETWORK_MODEL_3;
+      case XeSSNetworkModel::Model4: return XESS_NETWORK_MODEL_4;
+      case XeSSNetworkModel::Model5: return XESS_NETWORK_MODEL_5;
+      case XeSSNetworkModel::Model6: return XESS_NETWORK_MODEL_6;
+      default: return XESS_NETWORK_MODEL_KPSS; // Default to KPSS
     }
   }
 
@@ -317,10 +335,14 @@ namespace dxvk {
 
     // Check if we need to recreate the context
     XeSSProfile currentProfile = getProfile();
+    XeSSNetworkModel currentNetworkModel = RtxOptions::xessNetworkModel();
+    XeSSAutoExposureMode currentAutoExposureMode = RtxOptions::xessAutoExposureMode();
     if (m_initialized && 
         m_targetExtent.width == targetExtent.width &&
         m_targetExtent.height == targetExtent.height &&
-        m_currentProfile == currentProfile) {
+        m_currentProfile == currentProfile &&
+        m_currentNetworkModel == currentNetworkModel &&
+        m_currentAutoExposureMode == currentAutoExposureMode) {
       return; // Already initialized with correct settings
     }
 
@@ -332,6 +354,8 @@ namespace dxvk {
     m_targetExtent = targetExtent;
     m_inputExtent = getInputSize(targetExtent);
     m_currentProfile = currentProfile;
+    m_currentNetworkModel = currentNetworkModel;
+    m_currentAutoExposureMode = currentAutoExposureMode;
 
     createXeSSContext(targetExtent);
     m_initialized = true;
@@ -364,12 +388,96 @@ namespace dxvk {
     
     Logger::info("XeSS: Context created successfully");
     
+    // Select the best network model (KPSS)
+    xess_network_model_t network_model = networkModelToXeSS(RtxOptions::xessNetworkModel());
+    result = xessSelectNetworkModel(m_xessContext, network_model);
+    if (result == XESS_RESULT_SUCCESS) {
+      Logger::info(str::format("XeSS: Selected network model ", (int)RtxOptions::xessNetworkModel()));
+    } else {
+      Logger::warn(str::format("XeSS: Failed to select network model: ", xessResultToString(result)));
+    }
+    
+    // Get and log XeSS jitter scale for debugging
+    float jitterScaleX, jitterScaleY;
+    result = xessGetJitterScale(m_xessContext, &jitterScaleX, &jitterScaleY);
+    if (result == XESS_RESULT_SUCCESS) {
+      Logger::info(str::format("XeSS: Default jitter scale: ", jitterScaleX, "x", jitterScaleY));
+    }
+    
+    // Get and log XeSS velocity scale for debugging  
+    float velocityScaleX, velocityScaleY;
+    result = xessGetVelocityScale(m_xessContext, &velocityScaleX, &velocityScaleY);
+    if (result == XESS_RESULT_SUCCESS) {
+      Logger::info(str::format("XeSS: Default velocity scale: ", velocityScaleX, "x", velocityScaleY));
+    }
+    
     // Initialize XeSS with current settings
     xess_vk_init_params_t initParams = {};
     initParams.outputResolution.x = targetExtent.width;
     initParams.outputResolution.y = targetExtent.height;
     initParams.qualitySetting = profileToQuality(m_currentProfile);
-    initParams.initFlags = XESS_INIT_FLAG_NONE; // Can be extended with more flags as needed
+
+    // Set initialization flags based on renderer state and user options
+    initParams.initFlags = XESS_INIT_FLAG_NONE;
+    
+    // Handle jittered motion vectors option
+    if (RtxOptions::xessUseJitteredMotionVectors()) {
+      initParams.initFlags |= XESS_INIT_FLAG_JITTERED_MV;
+      Logger::info("XeSS: Using jittered motion vectors");
+    } else {
+      Logger::info("XeSS: Using non-jittered motion vectors");
+    }
+    
+    // Handle inverted depth option
+    if (RtxOptions::xessForceInvertedDepth()) {
+      initParams.initFlags |= XESS_INIT_FLAG_INVERTED_DEPTH;
+      Logger::info("XeSS: Using inverted depth buffer");
+    }
+    
+    // Handle LDR input option  
+    if (RtxOptions::xessForceLDRInput()) {
+      initParams.initFlags |= XESS_INIT_FLAG_LDR_INPUT_COLOR;
+      Logger::info("XeSS: Using LDR input color");
+    } else {
+      Logger::info("XeSS: Using HDR input color");
+    }
+    
+    // Handle high-resolution motion vectors option
+    if (RtxOptions::xessForceHighResMotionVectors()) {
+      initParams.initFlags |= XESS_INIT_FLAG_HIGH_RES_MV;
+      Logger::info("XeSS: Using high-resolution motion vectors");
+    }
+
+    // Handle auto-exposure based on user preference
+    XeSSAutoExposureMode autoExposureMode = RtxOptions::xessAutoExposureMode();
+    const DxvkAutoExposure& autoExposure = m_device->getCommon()->metaAutoExposure();
+    
+    bool useXeSSAutoExposure = false;
+    switch (autoExposureMode) {
+      case XeSSAutoExposureMode::Automatic:
+        // Use XeSS auto-exposure only if Remix's auto-exposure is disabled
+        useXeSSAutoExposure = !autoExposure.enabled();
+        break;
+      case XeSSAutoExposureMode::UseRemix:
+        // Never use XeSS auto-exposure, always use Remix's exposure texture
+        useXeSSAutoExposure = false;
+        break;
+      case XeSSAutoExposureMode::UseXeSS:
+        // Always use XeSS auto-exposure
+        useXeSSAutoExposure = true;
+        break;
+    }
+    
+    if (useXeSSAutoExposure) {
+      initParams.initFlags |= XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE;
+      Logger::info("XeSS: Using XeSS internal auto-exposure");
+    } else {
+      Logger::info("XeSS: Using Remix exposure texture");
+    }
+    
+    // Store auto-exposure mode for jitter optimization
+    m_isUsingInternalAutoExposure = useXeSSAutoExposure;
+    
     initParams.creationNodeMask = 1;
     initParams.visibleNodeMask = 1;
     initParams.tempBufferHeap = VK_NULL_HANDLE;
@@ -466,6 +574,11 @@ namespace dxvk {
       rtOutput.m_primaryDepth.view
     };
 
+    const DxvkAutoExposure& autoExposure = m_device->getCommon()->metaAutoExposure();
+    if (autoExposure.enabled() && autoExposure.getExposureTexture().image != nullptr) {
+      inputs.push_back(autoExposure.getExposureTexture().view);
+    }
+
     std::vector<Rc<DxvkImageView>> outputs = {
       rtOutput.m_finalOutput.view(Resources::AccessType::Write)
     };
@@ -508,6 +621,89 @@ namespace dxvk {
     float jitterOffset[2];
     camera.getJittering(jitterOffset);
 
+    // XeSS expects jitter in the range [-0.5, 0.5] in pixel units
+    // The camera jitter is already in pixel units, so we can use it directly
+    // However, we need to ensure it's properly scaled for XeSS
+    float xessJitterX = jitterOffset[0];
+    float xessJitterY = jitterOffset[1];
+    
+    if (RtxOptions::xessUseOptimizedJitter()) {
+      // Get XeSS jitter scale to understand expected range
+      float jitterScaleX, jitterScaleY;
+      xess_result_t scaleResult = xessGetJitterScale(m_xessContext, &jitterScaleX, &jitterScaleY);
+      if (scaleResult == XESS_RESULT_SUCCESS) {
+        // Apply XeSS jitter scale if available
+        xessJitterX *= jitterScaleX;
+        xessJitterY *= jitterScaleY;
+        
+        Logger::debug(str::format("XeSS: Applied jitter scale ", jitterScaleX, "x", jitterScaleY, 
+                                " to jitter ", jitterOffset[0], ",", jitterOffset[1], 
+                                " -> ", xessJitterX, ",", xessJitterY));
+      }
+    }
+    
+    // Apply user jitter scale multiplier
+    xessJitterX *= RtxOptions::xessJitterScale();
+    xessJitterY *= RtxOptions::xessJitterScale();
+
+    // Debug motion vector validation if enabled
+    if (RtxOptions::xessEnableMotionVectorDebug()) {
+      auto motionView = rtOutput.m_primaryScreenSpaceMotionVector.view;
+      auto depthView = rtOutput.m_primaryDepth.view;
+      auto colorView = rtOutput.m_compositeOutput.view(Resources::AccessType::Read);
+      
+      Logger::debug(str::format("XeSS Debug: Motion Vector Format=", motionView->info().format, 
+                                " Size=", motionView->imageInfo().extent.width, "x", motionView->imageInfo().extent.height));
+      Logger::debug(str::format("XeSS Debug: Depth Format=", depthView->info().format, 
+                                " Size=", depthView->imageInfo().extent.width, "x", depthView->imageInfo().extent.height));
+      Logger::debug(str::format("XeSS Debug: Color Format=", colorView->info().format, 
+                                " Size=", colorView->imageInfo().extent.width, "x", colorView->imageInfo().extent.height));
+      Logger::debug(str::format("XeSS Debug: Jitter=[", xessJitterX, ",", xessJitterY, "] Mode=", 
+                                RtxOptions::xessUseJitteredMotionVectors() ? "Jittered" : "Separate"));
+    }
+    
+    // Apply exposure-aware jitter optimizations when using XeSS internal auto-exposure
+    if (m_isUsingInternalAutoExposure && RtxOptions::xessAutoExposureTemporalOptimization()) {
+      // Get current exposure scale that XeSS will calculate internally
+      float currentExposureScale = 1.0f; // XeSS calculates this internally, so we estimate
+      
+      // Calculate exposure change velocity for temporal adaptation
+      float exposureChange = std::abs(currentExposureScale - m_previousExposureScale);
+      m_exposureChangeVelocity = m_exposureChangeVelocity * 0.9f + exposureChange * 0.1f; // Smooth the velocity
+      
+      // Apply damping based on exposure stability
+      float exposureDamping = RtxOptions::xessAutoExposureJitterDamping();
+      
+      // Increase damping during rapid exposure changes to improve temporal stability
+      if (m_exposureChangeVelocity > 0.1f) {
+        float adaptiveDamping = std::max(0.5f, exposureDamping - (m_exposureChangeVelocity * 2.0f));
+        xessJitterX *= adaptiveDamping;
+        xessJitterY *= adaptiveDamping;
+        m_framesSinceExposureChange = 0;
+        
+        Logger::debug(str::format("XeSS: Applied adaptive exposure damping ", adaptiveDamping, 
+                                " due to exposure velocity ", m_exposureChangeVelocity));
+      } else {
+        // Stable exposure - apply standard damping
+        xessJitterX *= exposureDamping;
+        xessJitterY *= exposureDamping;
+        m_framesSinceExposureChange++;
+      }
+      
+      // Gradually reduce jitter for the first few frames after exposure change
+      if (m_framesSinceExposureChange < 10) {
+        float stabilizationFactor = std::max(0.3f, float(m_framesSinceExposureChange) / 10.0f);
+        xessJitterX *= stabilizationFactor;
+        xessJitterY *= stabilizationFactor;
+      }
+      
+      m_previousExposureScale = currentExposureScale;
+    }
+    
+    // Clamp jitter to XeSS expected range [-0.5, 0.5]
+    xessJitterX = std::clamp(xessJitterX, -0.5f, 0.5f);
+    xessJitterY = std::clamp(xessJitterY, -0.5f, 0.5f);
+
     // Set up XeSS execution parameters
     xess_vk_execute_params_t execParams = {};
     
@@ -519,6 +715,20 @@ namespace dxvk {
     execParams.colorTexture.format = colorView->info().format;
     execParams.colorTexture.width = colorView->imageInfo().extent.width;
     execParams.colorTexture.height = colorView->imageInfo().extent.height;
+
+    // Optional Exposure texture
+    if (autoExposure.enabled() && autoExposure.getExposureTexture().image != nullptr) {
+      auto exposureView = autoExposure.getExposureTexture().view;
+      execParams.exposureScaleTexture.imageView = exposureView->handle();
+      execParams.exposureScaleTexture.image = exposureView->image()->handle();
+      execParams.exposureScaleTexture.subresourceRange = exposureView->subresources();
+      execParams.exposureScaleTexture.format = exposureView->info().format;
+      execParams.exposureScaleTexture.width = exposureView->imageInfo().extent.width;
+      execParams.exposureScaleTexture.height = exposureView->imageInfo().extent.height;
+    } else {
+      // Zero out the struct if not used
+      memset(&execParams.exposureScaleTexture, 0, sizeof(execParams.exposureScaleTexture));
+    }
 
     // Motion vector texture
     auto motionView = rtOutput.m_primaryScreenSpaceMotionVector.view;
@@ -547,9 +757,25 @@ namespace dxvk {
     execParams.outputTexture.width = outputView->imageInfo().extent.width;
     execParams.outputTexture.height = outputView->imageInfo().extent.height;
 
-    // Execution parameters
-    execParams.jitterOffsetX = jitterOffset[0];
-    execParams.jitterOffsetY = jitterOffset[1];
+    // Execution parameters - handle jitter based on motion vector mode
+    if (RtxOptions::xessUseJitteredMotionVectors()) {
+      // When using jittered motion vectors, XeSS expects zero jitter offset
+      // since the jitter is already included in the motion vectors
+      execParams.jitterOffsetX = 0.0f;
+      execParams.jitterOffsetY = 0.0f;
+      
+      if (RtxOptions::xessEnableMotionVectorDebug()) {
+        Logger::debug("XeSS: Using jittered motion vectors - setting jitter offset to 0");
+      }
+    } else {
+      // Standard mode: pass jitter separately from motion vectors
+      execParams.jitterOffsetX = xessJitterX;
+      execParams.jitterOffsetY = xessJitterY;
+      
+      if (RtxOptions::xessEnableMotionVectorDebug()) {
+        Logger::debug(str::format("XeSS: Using separate jitter offset [", xessJitterX, ",", xessJitterY, "]"));
+      }
+    }
     execParams.exposureScale = 1.0f; // Default exposure scale
     execParams.resetHistory = resetHistory ? 1 : 0;
     // Use the input size from setSetting for Custom profile, or m_inputExtent for other profiles
@@ -647,10 +873,20 @@ namespace dxvk {
       m_lastResolutionScale = currentScale;
     }
     
+    // Check if network model has changed
+    XeSSNetworkModel currentNetworkModel = RtxOptions::xessNetworkModel();
+    bool networkModelChanged = (m_currentNetworkModel != currentNetworkModel);
+    
+    // Check if auto-exposure mode has changed
+    XeSSAutoExposureMode currentAutoExposureMode = RtxOptions::xessAutoExposureMode();
+    bool autoExposureModeChanged = (m_currentAutoExposureMode != currentAutoExposureMode);
+    
     if (m_actualProfile == actualProfile && 
         displaySize[0] == m_xessOutputSize.width && 
         displaySize[1] == m_xessOutputSize.height &&
-        !resolutionScaleChanged) {
+        !resolutionScaleChanged &&
+        !networkModelChanged &&
+        !autoExposureModeChanged) {
       // Nothing changed that would alter XeSS resolution(s), so return the last cached optimal render size
       outRenderSize[0] = m_inputSize.width;
       outRenderSize[1] = m_inputSize.height;
@@ -660,6 +896,18 @@ namespace dxvk {
     m_actualProfile = actualProfile;
     m_recreate = true;
     m_profile = profile;
+    
+    // Log network model change but don't update m_currentNetworkModel yet
+    // (it will be updated in initialize() after the context is actually recreated)
+    if (networkModelChanged) {
+      Logger::info(str::format("XeSS: Network model changed to ", (int)currentNetworkModel, ", will recreate context"));
+    }
+    
+    // Log auto-exposure mode change but don't update m_currentAutoExposureMode yet
+    // (it will be updated in initialize() after the context is actually recreated)
+    if (autoExposureModeChanged) {
+      Logger::info(str::format("XeSS: Auto-exposure mode changed to ", (int)currentAutoExposureMode, ", will recreate context"));
+    }
 
     if (m_profile == XeSSProfile::NativeAA) {
       m_inputSize.width = outRenderSize[0] = displaySize[0];
