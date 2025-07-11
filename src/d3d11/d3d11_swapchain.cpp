@@ -372,6 +372,22 @@ namespace dxvk {
     if (m_presenter->recreateSwapChain(presenterDesc) != VK_SUCCESS)
       throw DxvkError("D3D11SwapChain: Failed to recreate swap chain");
     
+    // Set HDR metadata if HDR is enabled
+    try {
+      auto common = m_device->getCommon();
+      bool hdrEnabled = common->metaToneMapping().enableHDR();
+      if (hdrEnabled) {
+        uint32_t hdrFormat = static_cast<uint32_t>(common->metaToneMapping().hdrFormat());
+        float maxLuminance = common->metaToneMapping().hdrMaxLuminance();
+        float minLuminance = common->metaToneMapping().hdrMinLuminance();
+        float paperWhiteLuminance = common->metaToneMapping().hdrPaperWhiteLuminance();
+        
+        m_presenter->setHdrMetadata(hdrEnabled, hdrFormat, maxLuminance, minLuminance, paperWhiteLuminance);
+      }
+    } catch (...) {
+      Logger::warn("D3D11SwapChain: Failed to set HDR metadata");
+    }
+    
     CreateRenderTargetViews();
   }
 
@@ -594,28 +610,104 @@ namespace dxvk {
           VkSurfaceFormatKHR*       pDstFormats) {
     uint32_t n = 0;
 
+    // Check if HDR is enabled in RTX context and get format
+    bool hdrEnabled = false;
+    uint32_t hdrFormat = 0; // 0=Linear, 1=PQ, 2=HLG
+    try {
+      // Access HDR setting through the device's common objects
+      auto common = m_device->getCommon();
+      hdrEnabled = common->metaToneMapping().enableHDR();
+      hdrFormat = static_cast<uint32_t>(common->metaToneMapping().hdrFormat());
+    } catch (...) {
+      // Fallback if cast fails
+      hdrEnabled = false;
+      hdrFormat = 0;
+    }
+
     switch (Format) {
       default:
         Logger::warn(str::format("D3D11SwapChain: Unexpected format: ", m_desc.Format));
         
       case DXGI_FORMAT_R8G8B8A8_UNORM:
       case DXGI_FORMAT_B8G8R8A8_UNORM: {
+        if (hdrEnabled && hdrFormat == 1) {
+          // PQ/HDR10 format - prioritize 16-bit float for better precision
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+        } else if (hdrEnabled && hdrFormat == 2) {
+          // HLG format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+        } else if (hdrEnabled && hdrFormat == 0) {
+          // Linear HDR format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+        }
+        // Standard SDR formats (always included as fallback)
         pDstFormats[n++] = { VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
         pDstFormats[n++] = { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
       } break;
       
       case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
       case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: {
+        if (hdrEnabled && hdrFormat == 1) {
+          // PQ/HDR10 format - prioritize 16-bit float
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+        } else if (hdrEnabled && hdrFormat == 2) {
+          // HLG format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+        } else if (hdrEnabled && hdrFormat == 0) {
+          // Linear HDR format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+        }
+        // Standard sRGB formats (always included as fallback)
         pDstFormats[n++] = { VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
         pDstFormats[n++] = { VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
       } break;
       
       case DXGI_FORMAT_R10G10B10A2_UNORM: {
+        if (hdrEnabled && hdrFormat == 1) {
+          // PQ/HDR10 format - prioritize 16-bit float for better precision
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+        } else if (hdrEnabled && hdrFormat == 2) {
+          // HLG format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+        } else if (hdrEnabled && hdrFormat == 0) {
+          // Linear HDR format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+        }
+        // Standard 10-bit format (always included as fallback)
         pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
         pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
       } break;
       
       case DXGI_FORMAT_R16G16B16A16_FLOAT: {
+        if (hdrEnabled && hdrFormat == 1) {
+          // PQ/HDR10 format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+        } else if (hdrEnabled && hdrFormat == 2) {
+          // HLG format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT };
+        } else if (hdrEnabled && hdrFormat == 0) {
+          // Linear HDR format
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
+        }
+        // Standard 16-bit float format (always included as fallback)
         pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
       } break;
     }
