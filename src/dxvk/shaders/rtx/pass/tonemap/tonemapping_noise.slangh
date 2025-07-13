@@ -76,7 +76,8 @@ float3 ditherToHDR(
   const uint frameIndex,
   const bool enableDithering,
   const bool enableTemporalDithering,
-  const uint hdrFormat // 0=Linear, 1=PQ, 2=HLG
+  const uint hdrFormat, // 0=Linear, 1=PQ, 2=HLG
+  const float ditherAmplitude // Multiplier on format-appropriate base amplitude
 )
 {
   // Early out if dithering is not enabled
@@ -92,18 +93,22 @@ float3 ditherToHDR(
   // Get high-quality blue noise sample
   const float blueNoise = getNextSampleBlueNoise(rng) - 0.5f; // [-0.5, 0.5)
 
-  float ditherAmplitude;
+  // Calculate format-appropriate base amplitude (similar to SDR's 1/255 approach)
+  float baseAmplitude;
   
   if (hdrFormat == 1) {
-    // PQ (HDR10): Increased amplitude for testing - should be visible
-    ditherAmplitude = 1.0f / 512.0f; // Was 1/2048, now 4x stronger for testing
+    // PQ (HDR10): 10-bit quantization in PQ space
+    baseAmplitude = 1.0f / 1024.0f; // ≈ 0.00098
   } else if (hdrFormat == 2) {
-    // HLG: Increased amplitude for testing
-    ditherAmplitude = 1.0f / 384.0f; // Was 1/1536, now 4x stronger for testing
+    // HLG: 10-bit quantization in HLG space  
+    baseAmplitude = 1.0f / 1024.0f; // ≈ 0.00098
   } else {
-    // Linear HDR: Increased amplitude for testing
-    ditherAmplitude = 1.0f / 256.0f; // Was 1/1024, now 4x stronger for testing
+    // Linear HDR: Use SDR-like amplitude since linear values can vary widely
+    baseAmplitude = 1.0f / 512.0f; // ≈ 0.00195, slightly stronger for linear
   }
 
-  return value + float3(blueNoise * ditherAmplitude);
+  // Apply user-configurable multiplier to the base amplitude
+  const float finalAmplitude = baseAmplitude * ditherAmplitude;
+  
+  return value + float3(blueNoise * finalAmplitude);
 }

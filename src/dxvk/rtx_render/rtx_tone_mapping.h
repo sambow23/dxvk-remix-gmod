@@ -52,6 +52,7 @@ namespace dxvk {
     float hdrShadows;
     float hdrMidtones;
     float hdrHighlights;
+    float hdrBlueNoiseAmplitude;
   };
 
   // HDR Processing shader binding constants are defined in the shader header
@@ -195,6 +196,7 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap", HDRFormat, hdrFormat, HDRFormat::PQ, "HDR output format: 0=Linear (compatibility), 1=PQ/HDR10 (most displays), 2=HLG (broadcast standard).");
     RTX_OPTION("rtx.tonemap", HDRToneMapper, hdrToneMapper, HDRToneMapper::None, "HDR tone mapping method: 0=None, 1=ACES_HDR.");
     RTX_OPTION("rtx.tonemap", bool, hdrEnableDithering, true, "Enable dithering for HDR output to reduce banding artifacts.");
+    RTX_OPTION("rtx.tonemap", float, hdrBlueNoiseAmplitude, 100.0f, "HDR blue noise dithering amplitude multiplier. 1.0 = optimal dithering, 0.0 = no dithering. Range [0.0, 10.0].");
     RTX_OPTION("rtx.tonemap", float, hdrExposureBias, 0.0f, "HDR exposure adjustment in EV stops. Positive values brighten the image. Range [-3.0, 3.0].");
     RTX_OPTION("rtx.tonemap", float, hdrBrightness, 1.0f, "HDR brightness multiplier. Higher values increase overall brightness. Range [0.1, 3.0].");
     RTX_OPTION("rtx.tonemap", float, hdrMaxLuminance, 1000.0f, "Maximum display brightness in nits for HDR output (typically 1000-4000 for consumer displays).");

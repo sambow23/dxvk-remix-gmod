@@ -432,6 +432,7 @@ namespace dxvk {
     pushArgs.hdrShadows = hdrShadows();
     pushArgs.hdrMidtones = hdrMidtones();
     pushArgs.hdrHighlights = hdrHighlights();
+    pushArgs.hdrBlueNoiseAmplitude = hdrBlueNoiseAmplitude();
 
     ctx->bindResourceView(HDR_PROCESSING_BLUE_NOISE_TEXTURE, ctx->getResourceManager().getBlueNoiseTexture(ctx), nullptr);
     ctx->bindResourceView(HDR_PROCESSING_INPUT_BUFFER, inputColorBuffer.view, nullptr);

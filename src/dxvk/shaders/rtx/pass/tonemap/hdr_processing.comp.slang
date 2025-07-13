@@ -57,6 +57,7 @@ struct HDRProcessingArgs {
   float hdrShadows;
   float hdrMidtones;
   float hdrHighlights;
+  float hdrBlueNoiseAmplitude;
 };
 
 layout(push_constant)
@@ -311,17 +312,9 @@ float3 processHDR(float3 inputColor, uint2 pixelPosition)
     cb.frameIndex,
     cb.hdrEnableDithering != 0,
     true, // Enable temporal dithering for smoothest results
-    cb.hdrFormat
+    cb.hdrFormat,
+    cb.hdrBlueNoiseAmplitude
   );
-  
-  // TEMP DEBUG: Test if blue noise texture is accessible
-  if (cb.hdrEnableDithering != 0) {
-    // Create a RNG to test blue noise access
-    RNG rng = createRNG(pixelPosition, cb.frameIndex);
-    float testNoise = getNextSampleBlueNoise(rng);
-    // Make noise very obvious (but not as jarring as red tint)
-    color += float3(testNoise * 0.3f - 0.15f); // Should create obvious moving noise pattern
-  }
   
   // Note: UI brightness adjustment would be applied in composite pass
   // based on detection of UI textures

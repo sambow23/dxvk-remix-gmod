@@ -3823,6 +3823,14 @@ namespace dxvk {
           const char* hdrToneMappers[] = { "None (Linear)", "ACES HDR" };
           ImGui::Combo("HDR Tone Mapper", &common->metaToneMapping().hdrToneMapperObject(), hdrToneMappers, IM_ARRAYSIZE(hdrToneMappers));
           ImGui::Checkbox("Enable HDR Dithering", &common->metaToneMapping().hdrEnableDitheringObject());
+          if (common->metaToneMapping().hdrEnableDithering()) {
+            ImGui::Indent();
+            ImGui::DragFloat("Blue Noise Amplitude", &common->metaToneMapping().hdrBlueNoiseAmplitudeObject(), 0.01f, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("Multiplier for blue noise dithering strength.\n1.0 = optimal for reducing banding\n0.0 = no dithering\n>1.0 = stronger dithering for testing");
+            }
+            ImGui::Unindent();
+          }
           ImGui::Separator();
           
           // HDR Brightness Controls
