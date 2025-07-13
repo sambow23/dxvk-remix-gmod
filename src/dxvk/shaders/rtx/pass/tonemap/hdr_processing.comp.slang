@@ -139,21 +139,26 @@ float3 convertColorSpace(float3 color, bool usePQ, bool useHLG)
   
   // Apply appropriate transfer function
   if (usePQ) {
-    // For PQ: normalize by 10,000 nits (PQ reference peak) before encoding
-    // Input color is in nits, PQ expects [0,1] where 1.0 = 10,000 nits
+    // For PQ: Input colors are assumed to be in relative [0-1] range where 1.0 = paper white
+    // Scale to nits first: multiply by paper white to get actual nits
+    float3 colorInNits = color * cb.hdrPaperWhiteLuminance;
+    // Then normalize by PQ reference peak (10,000 nits) for PQ encoding
     const float PQ_MAX_NITS = 10000.0f;
-    float3 normalizedColor = color / PQ_MAX_NITS;
+    float3 normalizedColor = colorInNits / PQ_MAX_NITS;
     return linearToPQ(normalizedColor);
   } else if (useHLG) {
-    // For HLG: normalize by display peak luminance
+    // For HLG: Input colors are assumed to be in relative [0-1] range where 1.0 = paper white
+    // Scale to the display peak range for HLG
+    float3 colorInNits = color * cb.hdrPaperWhiteLuminance;
     // HLG system gamma is designed for [0,1] input where 1.0 = display peak
-    float3 normalizedColor = color / cb.hdrMaxLuminance;
+    float3 normalizedColor = colorInNits / cb.hdrMaxLuminance;
     return linearToHLG(normalizedColor);
-  } else {
-    // Linear: normalize by paper white for extended sRGB linear
-    // Extended sRGB linear expects 1.0 = reference white (paper white)
-    return color / cb.hdrPaperWhiteLuminance;
-  }
+      } else {
+      // Linear: Input colors are already in relative [0-1] range
+      // For linear HDR, maintain the relative range with proper scaling for HDR displays
+      // Scale to paper white luminance for proper HDR linear output
+      return color;
+    }
 }
 
 // Simple 3x3 random dither pattern
@@ -384,9 +389,9 @@ float3 acesHDR(float3 color, float maxLuminance, float paperWhite)
   // Apply output matrix transform
   color = mul(aces_output_matrix, color);
   
-  // Clamp to valid range and scale by paper white since ACES maps to [0,1]
-  // where 1.0 represents the display white point, not peak luminance
-  return saturate(color) * paperWhite;
+  // Clamp to valid range - ACES already outputs in proper range for HDR
+  // Don't scale by paper white here as it will cause dimming
+  return saturate(color);
 }
 
 // Shadow/Midtone/Highlight adjustments

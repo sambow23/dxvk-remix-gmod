@@ -196,7 +196,7 @@ namespace dxvk {
     // HDR Options
     RTX_OPTION("rtx.tonemap", bool, enableHDR, false, "Enable HDR output mode. Requires HDR-capable display and driver support.");
     RTX_OPTION("rtx.tonemap", HDRFormat, hdrFormat, HDRFormat::PQ, "HDR output format: 0=Linear (compatibility), 1=PQ/HDR10 (most displays), 2=HLG (broadcast standard).");
-    RTX_OPTION("rtx.tonemap", HDRToneMapper, hdrToneMapper, HDRToneMapper::ACES_HDR, "HDR tone mapping method: 0=None, 1=ACES_HDR.");
+    RTX_OPTION("rtx.tonemap", HDRToneMapper, hdrToneMapper, HDRToneMapper::None, "HDR tone mapping method: 0=None, 1=ACES_HDR.");
     RTX_OPTION("rtx.tonemap", bool, hdrEnableDithering, true, "Enable dithering for HDR output to reduce banding artifacts.");
     RTX_OPTION("rtx.tonemap", float, hdrExposureBias, 0.0f, "HDR exposure adjustment in EV stops. Positive values brighten the image. Range [-3.0, 3.0].");
     RTX_OPTION("rtx.tonemap", float, hdrBrightness, 1.0f, "HDR brightness multiplier. Higher values increase overall brightness. Range [0.1, 3.0].");
