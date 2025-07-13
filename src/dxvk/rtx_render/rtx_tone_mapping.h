@@ -54,10 +54,7 @@ namespace dxvk {
     float hdrHighlights;
   };
 
-  // HDR Processing shader binding constants
-  constexpr uint32_t HDR_PROCESSING_INPUT_BUFFER = 0;
-  constexpr uint32_t HDR_PROCESSING_OUTPUT_BUFFER = 1;
-  constexpr uint32_t HDR_PROCESSING_EXPOSURE_INPUT = 2;
+  // HDR Processing shader binding constants are defined in the shader header
 
   class DxvkToneMapping: public CommonDeviceObject {
   public:

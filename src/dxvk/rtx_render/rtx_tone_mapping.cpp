@@ -97,6 +97,7 @@ namespace dxvk {
       PUSH_CONSTANTS(HDRProcessingArgs)
 
       BEGIN_PARAMETER()
+        TEXTURE2DARRAY(HDR_PROCESSING_BLUE_NOISE_TEXTURE)
         RW_TEXTURE2D(HDR_PROCESSING_INPUT_BUFFER)
         RW_TEXTURE2D(HDR_PROCESSING_OUTPUT_BUFFER)
         RW_TEXTURE1D_READONLY(HDR_PROCESSING_EXPOSURE_INPUT)
@@ -432,6 +433,7 @@ namespace dxvk {
     pushArgs.hdrMidtones = hdrMidtones();
     pushArgs.hdrHighlights = hdrHighlights();
 
+    ctx->bindResourceView(HDR_PROCESSING_BLUE_NOISE_TEXTURE, ctx->getResourceManager().getBlueNoiseTexture(ctx), nullptr);
     ctx->bindResourceView(HDR_PROCESSING_INPUT_BUFFER, inputColorBuffer.view, nullptr);
     ctx->bindResourceView(HDR_PROCESSING_OUTPUT_BUFFER, outputColorBuffer.view, nullptr);
     ctx->bindResourceView(HDR_PROCESSING_EXPOSURE_INPUT, exposureView, nullptr);
@@ -465,13 +467,18 @@ namespace dxvk {
 
     const Resources::Resource& inputColorBuffer = rtOutput.m_finalOutput.resource(Resources::AccessType::Read);
     
-    // Always apply traditional tonemapping (HDR processing will be applied separately if needed)
-    if (tonemappingEnabled()) {
-      dispatchHistogram(ctx, exposureView, inputColorBuffer, autoExposureEnabled);
-      dispatchToneCurve(ctx);
-    }
+    if (enableHDR()) {
+      // HDR mode: Apply custom HDR processing with blue noise dithering
+      dispatchHDRProcessing(ctx, linearSampler, exposureView, inputColorBuffer, rtOutput.m_finalOutput.resource(Resources::AccessType::Write), frameTimeMilliseconds, autoExposureEnabled);
+    } else {
+      // SDR mode: Apply traditional tonemapping
+      if (tonemappingEnabled()) {
+        dispatchHistogram(ctx, exposureView, inputColorBuffer, autoExposureEnabled);
+        dispatchToneCurve(ctx);
+      }
 
-    dispatchApplyToneMapping(ctx, linearSampler, exposureView, inputColorBuffer, rtOutput.m_finalOutput.resource(Resources::AccessType::Write), performSRGBConversion, autoExposureEnabled);
+      dispatchApplyToneMapping(ctx, linearSampler, exposureView, inputColorBuffer, rtOutput.m_finalOutput.resource(Resources::AccessType::Write), performSRGBConversion, autoExposureEnabled);
+    }
 
     m_resetState = false;
   }

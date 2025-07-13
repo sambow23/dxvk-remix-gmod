@@ -20,13 +20,15 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx/pass/tonemap/tonemapping.slangh"
+#include "rtx/pass/tonemap/tonemapping_noise.slangh"
 #include "rtx/utility/math.slangh"
 #include "rtx/utility/color.slangh"
+#include "rtx/utility/noise.slangh"
 
-// HDR Processing binding indices (using unique values)
-#define HDR_PROCESSING_INPUT_BUFFER           0
-#define HDR_PROCESSING_OUTPUT_BUFFER          1  
-#define HDR_PROCESSING_EXPOSURE_INPUT         2
+// HDR Processing binding indices are now defined in tonemapping.h
+
+layout(uint, binding = HDR_PROCESSING_BLUE_NOISE_TEXTURE)
+Texture2DArray BlueNoise;
 
 layout(rgba32f, binding = HDR_PROCESSING_INPUT_BUFFER)
 RWTexture2D<float4> InColorBuffer;
@@ -161,206 +163,15 @@ float3 convertColorSpace(float3 color, bool usePQ, bool useHLG)
     }
 }
 
-// Simple 3x3 random dither pattern
-float getDitherValue(uint2 pixelCoord, uint frameIndex)
-{
-  // Blue noise would be better, but this simple pattern reduces banding
-  const float3x3 ditherPattern = float3x3(
-    0.0f, 0.75f, 0.25f,
-    0.5f, 0.875f, 0.625f,
-    0.125f, 0.375f, 1.0f
-  );
-  
-  uint2 coord = (pixelCoord + frameIndex) % 3;
-  return ditherPattern[coord.y][coord.x] / 1023.0f; // 10-bit dither range
-}
+// Note: Old dithering functions removed - now using high-quality blue noise dithering
 
-// Improved dithering function with perceptually uniform distribution
-float3 getPQDitherValue(uint2 pixelCoord, uint frameIndex, float3 color)
-{
-  // Use a larger dither pattern for better distribution
-  const float dither8x8[64] = {
-    0.0f / 64.0f, 32.0f / 64.0f, 8.0f / 64.0f, 40.0f / 64.0f, 2.0f / 64.0f, 34.0f / 64.0f, 10.0f / 64.0f, 42.0f / 64.0f,
-    48.0f / 64.0f, 16.0f / 64.0f, 56.0f / 64.0f, 24.0f / 64.0f, 50.0f / 64.0f, 18.0f / 64.0f, 58.0f / 64.0f, 26.0f / 64.0f,
-    12.0f / 64.0f, 44.0f / 64.0f, 4.0f / 64.0f, 36.0f / 64.0f, 14.0f / 64.0f, 46.0f / 64.0f, 6.0f / 64.0f, 38.0f / 64.0f,
-    60.0f / 64.0f, 28.0f / 64.0f, 52.0f / 64.0f, 20.0f / 64.0f, 62.0f / 64.0f, 30.0f / 64.0f, 54.0f / 64.0f, 22.0f / 64.0f,
-    3.0f / 64.0f, 35.0f / 64.0f, 11.0f / 64.0f, 43.0f / 64.0f, 1.0f / 64.0f, 33.0f / 64.0f, 9.0f / 64.0f, 41.0f / 64.0f,
-    51.0f / 64.0f, 19.0f / 64.0f, 59.0f / 64.0f, 27.0f / 64.0f, 49.0f / 64.0f, 17.0f / 64.0f, 57.0f / 64.0f, 25.0f / 64.0f,
-    15.0f / 64.0f, 47.0f / 64.0f, 7.0f / 64.0f, 39.0f / 64.0f, 13.0f / 64.0f, 45.0f / 64.0f, 5.0f / 64.0f, 37.0f / 64.0f,
-    63.0f / 64.0f, 31.0f / 64.0f, 55.0f / 64.0f, 23.0f / 64.0f, 61.0f / 64.0f, 29.0f / 64.0f, 53.0f / 64.0f, 21.0f / 64.0f
-  };
-  
-  uint2 coord = (pixelCoord + frameIndex) % 8;
-  float ditherValue = dither8x8[coord.y * 8 + coord.x] - 0.5f;
-  
-  // Scale dither based on luminance - more dithering in darker areas where PQ is most sensitive
-  float luminance = calcBt709Luminance(color);
-  float adaptiveScale = 1.0f / (1.0f + luminance * 10.0f); // Reduce dithering in bright areas
-  
-  // For 10-bit output, use 1/1024 as base amplitude
-  float3 dither = float3(ditherValue) * adaptiveScale / 1024.0f;
-  
-  return dither;
-}
+// Note: Complex Bayer pattern dithering functions removed - using superior blue noise approach
 
-// Enhanced PQ-aware dithering with improved luminance sensitivity
-float3 getEnhancedPQDither(uint2 pixelCoord, uint frameIndex, float3 color)
-{
-  // Use multiple dither patterns for temporal variation
-  const float dither8x8_pattern1[64] = {
-    0.0f / 64.0f, 32.0f / 64.0f, 8.0f / 64.0f, 40.0f / 64.0f, 2.0f / 64.0f, 34.0f / 64.0f, 10.0f / 64.0f, 42.0f / 64.0f,
-    48.0f / 64.0f, 16.0f / 64.0f, 56.0f / 64.0f, 24.0f / 64.0f, 50.0f / 64.0f, 18.0f / 64.0f, 58.0f / 64.0f, 26.0f / 64.0f,
-    12.0f / 64.0f, 44.0f / 64.0f, 4.0f / 64.0f, 36.0f / 64.0f, 14.0f / 64.0f, 46.0f / 64.0f, 6.0f / 64.0f, 38.0f / 64.0f,
-    60.0f / 64.0f, 28.0f / 64.0f, 52.0f / 64.0f, 20.0f / 64.0f, 62.0f / 64.0f, 30.0f / 64.0f, 54.0f / 64.0f, 22.0f / 64.0f,
-    3.0f / 64.0f, 35.0f / 64.0f, 11.0f / 64.0f, 43.0f / 64.0f, 1.0f / 64.0f, 33.0f / 64.0f, 9.0f / 64.0f, 41.0f / 64.0f,
-    51.0f / 64.0f, 19.0f / 64.0f, 59.0f / 64.0f, 27.0f / 64.0f, 49.0f / 64.0f, 17.0f / 64.0f, 57.0f / 64.0f, 25.0f / 64.0f,
-    15.0f / 64.0f, 47.0f / 64.0f, 7.0f / 64.0f, 39.0f / 64.0f, 13.0f / 64.0f, 45.0f / 64.0f, 5.0f / 64.0f, 37.0f / 64.0f,
-    63.0f / 64.0f, 31.0f / 64.0f, 55.0f / 64.0f, 23.0f / 64.0f, 61.0f / 64.0f, 29.0f / 64.0f, 53.0f / 64.0f, 21.0f / 64.0f
-  };
-  
-  const float dither8x8_pattern2[64] = {
-    1.0f / 64.0f, 33.0f / 64.0f, 9.0f / 64.0f, 41.0f / 64.0f, 3.0f / 64.0f, 35.0f / 64.0f, 11.0f / 64.0f, 43.0f / 64.0f,
-    49.0f / 64.0f, 17.0f / 64.0f, 57.0f / 64.0f, 25.0f / 64.0f, 51.0f / 64.0f, 19.0f / 64.0f, 59.0f / 64.0f, 27.0f / 64.0f,
-    13.0f / 64.0f, 45.0f / 64.0f, 5.0f / 64.0f, 37.0f / 64.0f, 15.0f / 64.0f, 47.0f / 64.0f, 7.0f / 64.0f, 39.0f / 64.0f,
-    61.0f / 64.0f, 29.0f / 64.0f, 53.0f / 64.0f, 21.0f / 64.0f, 63.0f / 64.0f, 31.0f / 64.0f, 55.0f / 64.0f, 23.0f / 64.0f,
-    2.0f / 64.0f, 34.0f / 64.0f, 10.0f / 64.0f, 42.0f / 64.0f, 0.0f / 64.0f, 32.0f / 64.0f, 8.0f / 64.0f, 40.0f / 64.0f,
-    50.0f / 64.0f, 18.0f / 64.0f, 58.0f / 64.0f, 26.0f / 64.0f, 48.0f / 64.0f, 16.0f / 64.0f, 56.0f / 64.0f, 24.0f / 64.0f,
-    14.0f / 64.0f, 46.0f / 64.0f, 6.0f / 64.0f, 38.0f / 64.0f, 12.0f / 64.0f, 44.0f / 64.0f, 4.0f / 64.0f, 36.0f / 64.0f,
-    62.0f / 64.0f, 30.0f / 64.0f, 54.0f / 64.0f, 22.0f / 64.0f, 60.0f / 64.0f, 28.0f / 64.0f, 52.0f / 64.0f, 20.0f / 64.0f
-  };
-  
-  // Choose pattern based on frame index for temporal variation
-  uint2 coord = (pixelCoord + frameIndex) % 8;
-  bool usePattern2 = (frameIndex % 2) == 1;
-  float ditherValue = usePattern2 ? 
-    dither8x8_pattern2[coord.y * 8 + coord.x] - 0.5f :
-    dither8x8_pattern1[coord.y * 8 + coord.x] - 0.5f;
-  
-  // Calculate luminance for PQ curve sensitivity analysis
-  float luminance = calcBt709Luminance(color);
-  float normalizedLuminance = luminance / cb.hdrMaxLuminance;
-  
-  // PQ curve sensitivity analysis - the curve is most sensitive at different points
-  // Low luminance (shadows): Very sensitive to small changes
-  // Mid luminance (midtones): Moderately sensitive  
-  // High luminance (highlights): Less sensitive but still needs dithering for smooth gradients
-  
-  float pqSensitivity;
-  if (normalizedLuminance < 0.1f) {
-    // Shadows: High sensitivity, more dithering needed
-    pqSensitivity = 2.5f;
-  } else if (normalizedLuminance < 0.5f) {
-    // Midtones: Moderate sensitivity but critical for visual quality
-    pqSensitivity = 1.8f;
-  } else if (normalizedLuminance < 0.8f) {
-    // Upper midtones/highlights: Still needs significant dithering
-    pqSensitivity = 1.5f;
-  } else {
-    // Bright highlights: Lower sensitivity but smooth gradients still important
-    pqSensitivity = 1.2f;
-  }
-  
-  // Base dither amplitude for 10-bit precision
-  float baseAmplitude = 1.0f / 1024.0f;
-  
-  // Apply PQ sensitivity scaling
-  float3 dither = float3(ditherValue) * baseAmplitude * pqSensitivity;
-  
-  return dither;
-}
+// Note: Removed complex PQ-specific dithering - blue noise handles this better
 
-// Enhanced linear HDR dithering to match PQ quality
-float3 getEnhancedLinearDither(uint2 pixelCoord, uint frameIndex, float3 color)
-{
-  // Use the same high-quality patterns as PQ mode
-  const float dither8x8_pattern1[64] = {
-    0.0f / 64.0f, 32.0f / 64.0f, 8.0f / 64.0f, 40.0f / 64.0f, 2.0f / 64.0f, 34.0f / 64.0f, 10.0f / 64.0f, 42.0f / 64.0f,
-    48.0f / 64.0f, 16.0f / 64.0f, 56.0f / 64.0f, 24.0f / 64.0f, 50.0f / 64.0f, 18.0f / 64.0f, 58.0f / 64.0f, 26.0f / 64.0f,
-    12.0f / 64.0f, 44.0f / 64.0f, 4.0f / 64.0f, 36.0f / 64.0f, 14.0f / 64.0f, 46.0f / 64.0f, 6.0f / 64.0f, 38.0f / 64.0f,
-    60.0f / 64.0f, 28.0f / 64.0f, 52.0f / 64.0f, 20.0f / 64.0f, 62.0f / 64.0f, 30.0f / 64.0f, 54.0f / 64.0f, 22.0f / 64.0f,
-    3.0f / 64.0f, 35.0f / 64.0f, 11.0f / 64.0f, 43.0f / 64.0f, 1.0f / 64.0f, 33.0f / 64.0f, 9.0f / 64.0f, 41.0f / 64.0f,
-    51.0f / 64.0f, 19.0f / 64.0f, 59.0f / 64.0f, 27.0f / 64.0f, 49.0f / 64.0f, 17.0f / 64.0f, 57.0f / 64.0f, 25.0f / 64.0f,
-    15.0f / 64.0f, 47.0f / 64.0f, 7.0f / 64.0f, 39.0f / 64.0f, 13.0f / 64.0f, 45.0f / 64.0f, 5.0f / 64.0f, 37.0f / 64.0f,
-    63.0f / 64.0f, 31.0f / 64.0f, 55.0f / 64.0f, 23.0f / 64.0f, 61.0f / 64.0f, 29.0f / 64.0f, 53.0f / 64.0f, 21.0f / 64.0f
-  };
-  
-  const float dither8x8_pattern2[64] = {
-    1.0f / 64.0f, 33.0f / 64.0f, 9.0f / 64.0f, 41.0f / 64.0f, 3.0f / 64.0f, 35.0f / 64.0f, 11.0f / 64.0f, 43.0f / 64.0f,
-    49.0f / 64.0f, 17.0f / 64.0f, 57.0f / 64.0f, 25.0f / 64.0f, 51.0f / 64.0f, 19.0f / 64.0f, 59.0f / 64.0f, 27.0f / 64.0f,
-    13.0f / 64.0f, 45.0f / 64.0f, 5.0f / 64.0f, 37.0f / 64.0f, 15.0f / 64.0f, 47.0f / 64.0f, 7.0f / 64.0f, 39.0f / 64.0f,
-    61.0f / 64.0f, 29.0f / 64.0f, 53.0f / 64.0f, 21.0f / 64.0f, 63.0f / 64.0f, 31.0f / 64.0f, 55.0f / 64.0f, 23.0f / 64.0f,
-    2.0f / 64.0f, 34.0f / 64.0f, 10.0f / 64.0f, 42.0f / 64.0f, 0.0f / 64.0f, 32.0f / 64.0f, 8.0f / 64.0f, 40.0f / 64.0f,
-    50.0f / 64.0f, 18.0f / 64.0f, 58.0f / 64.0f, 26.0f / 64.0f, 48.0f / 64.0f, 16.0f / 64.0f, 56.0f / 64.0f, 24.0f / 64.0f,
-    14.0f / 64.0f, 46.0f / 64.0f, 6.0f / 64.0f, 38.0f / 64.0f, 12.0f / 64.0f, 44.0f / 64.0f, 4.0f / 64.0f, 36.0f / 64.0f,
-    62.0f / 64.0f, 30.0f / 64.0f, 54.0f / 64.0f, 22.0f / 64.0f, 60.0f / 64.0f, 28.0f / 64.0f, 52.0f / 64.0f, 20.0f / 64.0f
-  };
-  
-  // Choose pattern based on frame index for temporal variation
-  uint2 coord = (pixelCoord + frameIndex) % 8;
-  bool usePattern2 = (frameIndex % 2) == 1;
-  float ditherValue = usePattern2 ? 
-    dither8x8_pattern2[coord.y * 8 + coord.x] - 0.5f :
-    dither8x8_pattern1[coord.y * 8 + coord.x] - 0.5f;
-  
-  // For linear mode, use appropriate precision scaling
-  // Even though it's linear, we still need good dithering for smooth gradients
-  float luminance = calcBt709Luminance(color);
-  float normalizedLuminance = luminance / cb.hdrMaxLuminance;
-  
-  // Linear mode sensitivity - less aggressive than PQ but still significant
-  float linearSensitivity;
-  if (normalizedLuminance < 0.1f) {
-    // Shadows: Still sensitive in linear mode
-    linearSensitivity = 1.5f;
-  } else if (normalizedLuminance < 0.5f) {
-    // Midtones: Important for smooth gradients
-    linearSensitivity = 1.2f;
-  } else if (normalizedLuminance < 0.8f) {
-    // Upper midtones/highlights: Moderate dithering
-    linearSensitivity = 1.0f;
-  } else {
-    // Bright highlights: Light dithering
-    linearSensitivity = 0.8f;
-  }
-  
-  // Base dither amplitude - use higher precision for linear mode
-  float baseAmplitude = 1.0f / 2048.0f; // 11-bit precision for linear
-  
-  // Apply linear sensitivity scaling
-  float3 dither = float3(ditherValue) * baseAmplitude * linearSensitivity;
-  
-  return dither;
-}
+// Note: All complex manual dithering removed - using professional blue noise approach
 
-// Apply enhanced intermediate dithering before tone mapping
-float3 applyPreToneMappingDither(float3 color, uint2 pixelPosition, uint frameIndex)
-{
-  // Enhanced precision-preserving dithering before tone mapping
-  uint2 coord = (pixelPosition + frameIndex * 3) % 8;
-  
-  // Use triangular distribution for better perceptual quality
-  float noise1 = getDitherValue(pixelPosition, frameIndex);
-  float noise2 = getDitherValue(pixelPosition + uint2(1, 1), frameIndex + 1);
-  float triangularNoise = (noise1 + noise2) * 0.5f - 0.5f;
-  
-  // Apply luminance-adaptive dithering amplitude
-  float luminance = calcBt709Luminance(color);
-  float normalizedLuminance = luminance / cb.hdrMaxLuminance;
-  
-  // More aggressive pre-dithering for gradient preservation
-  float adaptiveAmplitude;
-  if (normalizedLuminance < 0.1f) {
-    adaptiveAmplitude = 1.0f / 2048.0f; // Higher precision for shadows
-  } else if (normalizedLuminance < 0.5f) {
-    adaptiveAmplitude = 1.0f / 3072.0f; // Good precision for midtones
-  } else {
-    adaptiveAmplitude = 1.0f / 4096.0f; // Fine precision for highlights
-  }
-  
-  float3 preDither = float3(triangularNoise) * adaptiveAmplitude;
-  
-  return color + preDither;
-}
+// Note: Pre-tone-mapping dithering removed - blue noise handles this optimally
 
 // Precision-enhanced ACES modified for HDR range preservation
 float3 acesHDR(float3 color, float maxLuminance, float paperWhite)
@@ -469,10 +280,7 @@ float3 processHDR(float3 inputColor, uint2 pixelPosition)
 {
   float3 color = inputColor;
   
-  // Apply pre-tone mapping dithering to prevent quantization artifacts
-  if (cb.hdrEnableDithering != 0) {
-    color = applyPreToneMappingDither(color, pixelPosition, cb.frameIndex);
-  }
+  // Note: Pre-tone mapping dithering removed - now using high-quality blue noise dithering after processing
   
   // Apply HDR tone mapping
   color = hdrToneMapping(color, cb.hdrMaxLuminance, cb.hdrPaperWhiteLuminance);
@@ -495,17 +303,24 @@ float3 processHDR(float3 inputColor, uint2 pixelPosition)
   bool useHLG = (cb.hdrFormat == 2); // HLG
   color = convertColorSpace(color, usePQ, useHLG);
   
-  // Apply dithering AFTER color space conversion for PQ
+  // Apply high-quality blue noise dithering AFTER color space conversion
+  // This uses the same blue noise infrastructure as SDR for consistent quality
+  color = ditherToHDR(
+    color,
+    pixelPosition,
+    cb.frameIndex,
+    cb.hdrEnableDithering != 0,
+    true, // Enable temporal dithering for smoothest results
+    cb.hdrFormat
+  );
+  
+  // TEMP DEBUG: Test if blue noise texture is accessible
   if (cb.hdrEnableDithering != 0) {
-    if (usePQ) {
-      // Use enhanced PQ-aware dithering with improved sensitivity
-      float3 dither = getEnhancedPQDither(pixelPosition, cb.frameIndex, color);
-      color += dither;
-    } else {
-      // Use enhanced linear dithering for non-PQ formats
-      float3 dither = getEnhancedLinearDither(pixelPosition, cb.frameIndex, color);
-      color += dither;
-    }
+    // Create a RNG to test blue noise access
+    RNG rng = createRNG(pixelPosition, cb.frameIndex);
+    float testNoise = getNextSampleBlueNoise(rng);
+    // Make noise very obvious (but not as jarring as red tint)
+    color += float3(testNoise * 0.3f - 0.15f); // Should create obvious moving noise pattern
   }
   
   // Note: UI brightness adjustment would be applied in composite pass
