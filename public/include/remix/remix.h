@@ -169,6 +169,7 @@ namespace remix {
     Result< void >                    Startup(const remixapi_StartupInfo& info);
     Result< void >                    Shutdown();
     Result< void >                    Present(const remixapi_PresentInfo* info = nullptr);
+    Result< remixapi_FrameInfo >      GetFrameInfo();
     Result< remixapi_MaterialHandle > CreateMaterial(const remixapi_MaterialInfo& info);
     Result< void >                    DestroyMaterial(remixapi_MaterialHandle handle);
     Result< remixapi_MeshHandle >     CreateMesh(const remixapi_MeshInfo& info);
@@ -177,6 +178,7 @@ namespace remix {
     Result< void >                    DrawInstance(const remixapi_InstanceInfo& info);
     Result< remixapi_LightHandle >    CreateLight(const remixapi_LightInfo& info);
     Result< void >                    DestroyLight(remixapi_LightHandle handle);
+    Result< void >                    UpdateLight(remixapi_LightHandle handle, const remixapi_LightInfo& info);
     Result< void >                    DrawLightInstance(remixapi_LightHandle handle);
     Result< void >                    SetConfigVariable(const char* key, const char* value);
 
@@ -216,7 +218,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 184,
+      static_assert(sizeof(remixapi_Interface) == 200,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -264,6 +266,19 @@ namespace remix {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.Present(info);
+  }
+
+  inline Result< remixapi_FrameInfo > Interface::GetFrameInfo() {
+    if (!m_CInterface.GetFrameInfo) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    
+    remixapi_FrameInfo frameInfo = {};
+    remixapi_ErrorCode status = m_CInterface.GetFrameInfo(&frameInfo);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return frameInfo;
   }
 
   inline Result<UIState> Interface::GetUIState() {
@@ -945,6 +960,10 @@ namespace remix {
 
   inline Result< void > Interface::DestroyLight(remixapi_LightHandle handle) {
     return m_CInterface.DestroyLight(handle);
+  }
+
+  inline Result< void > Interface::UpdateLight(remixapi_LightHandle handle, const remixapi_LightInfo& info) {
+    return m_CInterface.UpdateLight(handle, &info);
   }
 
   inline Result< void > Interface::DrawLightInstance(remixapi_LightHandle handle) {

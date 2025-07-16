@@ -1036,6 +1036,70 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLight(
+    remixapi_LightHandle handle, const remixapi_LightInfo* info) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!info) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Handle dome lights similar to CreateLight
+    if (auto src = pnext::find<remixapi_LightInfoDomeEXT>(info)) {
+      // Special case for dome lights
+      std::lock_guard lock { s_mutex };
+      remixDevice->EmitCs([cHandle = handle, 
+                          cRadiance = convert::tovec3(info->radiance), 
+                          cTransform = convert::tomat4(src->transform), 
+                          cTexturePath = convert::topath(src->colorTexture)]
+                          (dxvk::DxvkContext* ctx) {
+        auto preloadTexture = [&ctx](const std::filesystem::path& path)->dxvk::TextureRef {
+          if (path.empty()) {
+            return {};
+          }
+          auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
+          if (assetData == nullptr) {
+            return {};
+          }
+          auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
+            .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
+          return dxvk::TextureRef { uploadedTexture };
+        };
+
+        dxvk::DomeLight domeLight;
+        domeLight.radiance = cRadiance;
+        domeLight.worldToLight = inverse(cTransform);
+        domeLight.texture = preloadTexture(cTexturePath);
+
+        // Ensures a texture stays in VidMem
+        uint32_t unused;
+        ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
+
+        auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+        lightMgr.addExternalDomeLight(cHandle, domeLight);
+      });
+    } else {
+      // Regular analytical light handling
+      const auto rtLight = convert::toRtLight(*info);
+
+      // Note: If the toRtLight conversion process returns an empty optional, the specified LightInfo did
+      // not contain the proper arguments to create a light with.
+      if (!rtLight.has_value()) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+
+      std::lock_guard lock { s_mutex };
+      remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
+        auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+        lightMgr.addExternalLight(cHandle, cRtLight);
+      });
+    }
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawLightInstance(
     remixapi_LightHandle lightHandle) {
@@ -1505,6 +1569,38 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetFrameInfo(remixapi_FrameInfo* out_info) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!out_info) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Get frame timing information from the scene manager and device
+    auto dxvkDevice = remixDevice->GetDXVKDevice();
+    auto& sceneManager = dxvkDevice->getCommon()->getSceneManager();
+    
+    // Fill in the frame info structure
+    out_info->sType = REMIXAPI_STRUCT_TYPE_FRAME_INFO;
+    out_info->pNext = nullptr;
+    out_info->frameNumber = dxvkDevice->getCurrentFrameId();
+    out_info->timeSinceStartMilliseconds = sceneManager.getRealTimeSinceStartMS();
+    
+    // For frame time, we need to get the wall time since last call from RtxContext
+    // Since we don't have direct access to the current frame time here, we'll use
+    // a simple approach by calculating the time since the last call to this function
+    static std::chrono::time_point<std::chrono::steady_clock> lastCallTime = std::chrono::steady_clock::now();
+    const auto currentTime = std::chrono::steady_clock::now();
+    const std::chrono::duration<float, std::milli> elapsedMilliseconds = currentTime - lastCallTime;
+    lastCallTime = currentTime;
+    
+    out_info->frameTimeMilliseconds = elapsedMilliseconds.count();
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   bool isVersionCompatible(uint64_t userVersion) {
     constexpr uint64_t compiledVersion = REMIXAPI_VERSION_MAKE(REMIXAPI_VERSION_MAJOR, REMIXAPI_VERSION_MINOR, REMIXAPI_VERSION_PATCH);
 
@@ -1565,6 +1661,7 @@ extern "C"
       interf.DrawInstance = remixapi_DrawInstance;
       interf.CreateLight = remixapi_CreateLight;
       interf.DestroyLight = remixapi_DestroyLight;
+      interf.UpdateLight = remixapi_UpdateLight;
       interf.DrawLightInstance = remixapi_DrawLightInstance;
       interf.SetConfigVariable = remixapi_SetConfigVariable;
       interf.dxvk_CreateD3D9 = remixapi_dxvk_CreateD3D9_legacy;
@@ -1575,10 +1672,11 @@ extern "C"
       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
+      interf.GetFrameInfo = remixapi_GetFrameInfo;
       interf.GetUIState = remixapi_GetUIState;
       interf.SetUIState = remixapi_SetUIState;
     }
-    static_assert(sizeof(interf) == 184, "Add/remove function registration");
+    static_assert(sizeof(interf) == 200, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

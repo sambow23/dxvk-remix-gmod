@@ -673,11 +673,20 @@ namespace dxvk {
     } else {
       m_externalLights.emplace(handle, rtlight);
     }
+    
+    // Automatically activate the light when it's created (hardcoded auto-enable)
+    addExternalLightInstance(handle);
   }
 
   void LightManager::removeExternalLight(remixapi_LightHandle handle) {
     m_externalLights.erase(handle);
     m_externalDomeLights.erase(handle);
+    
+    // Also remove from active light lists
+    m_externalActiveLightList.erase(handle);
+    if (m_externalActiveDomeLight == handle) {
+      m_externalActiveDomeLight = nullptr;
+    }
   }
 
   bool LightManager::getActiveDomeLight(DomeLight& domeLightOut) {
@@ -706,6 +715,9 @@ namespace dxvk {
     } else {
       m_externalDomeLights.emplace(handle, domeLight);
     }
+    
+    // Automatically activate the dome light when it's created (hardcoded auto-enable)
+    addExternalLightInstance(handle);
   }
 
   void LightManager::addExternalLightInstance(remixapi_LightHandle enabledLight) {

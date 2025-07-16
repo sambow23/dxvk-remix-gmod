@@ -92,6 +92,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_LIGHT_INFO_USD_EXT                   = 21,
     REMIXAPI_STRUCT_TYPE_STARTUP_INFO                         = 22,
     REMIXAPI_STRUCT_TYPE_PRESENT_INFO                         = 23,
+    REMIXAPI_STRUCT_TYPE_FRAME_INFO                           = 24,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
   } remixapi_StructType;
 
@@ -561,6 +562,9 @@ extern "C" {
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyLight)(
     remixapi_LightHandle      handle);
 
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_UpdateLight)(
+    remixapi_LightHandle      handle,
+    const remixapi_LightInfo* info);
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DrawLightInstance)(
     remixapi_LightHandle      lightHandle);
@@ -576,7 +580,16 @@ extern "C" {
     HWND                      hwndOverride; // Can be NULL
   } remixapi_PresentInfo;
 
+  typedef struct remixapi_FrameInfo {
+    remixapi_StructType       sType;
+    void*                     pNext;
+    float                     frameTimeMilliseconds;      // Time for the current frame in milliseconds
+    uint64_t                  timeSinceStartMilliseconds; // Time since app start in milliseconds
+    uint32_t                  frameNumber;                // Current frame number
+  } remixapi_FrameInfo;
+
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_Present)(const remixapi_PresentInfo* info);
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetFrameInfo)(remixapi_FrameInfo* out_info);
 
   typedef void (REMIXAPI_PTR* PFN_remixapi_pick_RequestObjectPickingUserCallback)(
     const uint32_t*           objectPickingValues_values,
@@ -648,6 +661,7 @@ extern "C" {
     PFN_remixapi_DrawInstance       DrawInstance;
     PFN_remixapi_CreateLight        CreateLight;
     PFN_remixapi_DestroyLight       DestroyLight;
+    PFN_remixapi_UpdateLight        UpdateLight;
     PFN_remixapi_DrawLightInstance  DrawLightInstance;
     PFN_remixapi_SetConfigVariable  SetConfigVariable;
 
@@ -664,6 +678,7 @@ extern "C" {
 
     PFN_remixapi_Startup            Startup;
     PFN_remixapi_Present            Present;
+    PFN_remixapi_GetFrameInfo       GetFrameInfo;
     remixapi_UIState                (*GetUIState)(void);
     remixapi_ErrorCode              (*SetUIState)(remixapi_UIState state);
   } remixapi_Interface;
