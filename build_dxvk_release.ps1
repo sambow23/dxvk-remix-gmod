@@ -20,8 +20,8 @@
   DEALINGS IN THE SOFTWARE.
 #>
 
-Remove-Item -Path .\nv-private
-Remove-Item -Path .\tests\rtx\dxvk_rt_testing
+Remove-Item -Path .\nv-private -Recurse -Force -Confirm:$false
+Remove-Item -Path .\tests\rtx\dxvk_rt_testing -Recurse -Force -Confirm:$false
 
 
 .   ".\build_common.ps1"
