@@ -592,6 +592,14 @@ struct RtLight {
      m_rootInstanceId = rootInstanceId;
   }
 
+  PrimInstanceOwner& getPrimInstanceOwner() {
+    return m_primInstanceOwner;
+  }
+
+  const PrimInstanceOwner& getPrimInstanceOwner() const {
+    return m_primInstanceOwner;
+  }
+
   void markAsInsideFrustum() const {
     m_isInsideFrustum = true;
   }
@@ -652,6 +660,10 @@ private:
   // identical lights that are children of different instances of the same replacement asset.
   // Defaults to 0 to avoid changing the hash of auto generated lights from draw calls.  
   uint64_t m_rootInstanceId = 0;
+
+  // Used to associate parts of a replacement heirarchy.
+  PrimInstanceOwner m_primInstanceOwner;
+
   // Shared Light Information
   mutable uint32_t m_frameLastTouched = kInvalidFrameIndex;
   mutable uint32_t m_bufferIdx = kNewLightIdx; // index into the light list (RTX-DI needs to understand how light indices change over time)

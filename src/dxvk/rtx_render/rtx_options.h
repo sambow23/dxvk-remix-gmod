@@ -296,6 +296,7 @@ namespace dxvk {
     RTX_OPTION("rtx", std::string, geometryAssetHashRuleString, "positions,indices,geometrydescriptor",
                   "Defines which hashes we need to include when sampling from replacements and doing USD capture.");
     RTX_OPTION("rtx", fast_unordered_set, raytracedRenderTargetTextures, {}, "DescriptorHashes for Render Targets. (Screens that should display the output of another camera).");
+    RTX_OPTION("rtx", fast_unordered_set, particleEmitterTextures, {}, "Objects rendered with these textures will emit particles that inherit the material of the object itself.");
     
   public:
     RTX_OPTION("rtx", bool, showRaytracingOption, true, "Enables or disables the option to toggle ray tracing in the UI. When set to false the ray tracing checkbox will not appear in the Remix UI.");
@@ -481,7 +482,7 @@ namespace dxvk {
                    "   It serves as a reference integration mode for validation of other indirect integration modes.\n"
                    "1: ReSTIR GI. ReSTIR GI provides improved indirect path sampling over \"Importance Sampled\" mode \n"
                    "   with better indirect diffuse and specular GI quality at increased performance cost.\n"
-                   "2: Neural Radiance Cache (NRC). NRC is an AI based world space radiance cache. It is live trained by the path tracer\n"
+                   "2: RTX Neural Radiance Cache (NRC). NRC is an AI based world space radiance cache. It is live trained by the path tracer\n"
                    "   and allows paths to terminate early by looking up the cached value and saving performance.\n"
                    "   NRC supports infinite bounces and often provides results closer to that of reference than ReSTIR GI\n"
                    "   while improving performance in scenarios where ray paths have 2 or more bounces on average.\n");
@@ -497,9 +498,11 @@ namespace dxvk {
     RTX_OPTION("rtx", bool, enableSecondaryBounces, true, "Enables indirect lighting (lighting from diffuse/specular bounces to one or more other surfaces) on surfaces when set to true, otherwise disables it.");
     RTX_OPTION("rtx", bool, zUp, false, "Indicates that the Z axis is the \"upward\" axis in the world when true, otherwise the Y axis when false.");
     RTX_OPTION("rtx", bool, leftHandedCoordinateSystem, false, "Indicates that the world space coordinate system is left-handed when true, otherwise right-handed when false.");
-    RTX_OPTION("rtx", float, uniqueObjectDistance, 300.f, "The distance (in game units) that an object can move in a single frame before it is no longer considered the same object.\n"
+      
+    // Needs to be > 0
+    RTX_OPTION_ARGS("rtx", float, uniqueObjectDistance, 300.f, "The distance (in game units) that an object can move in a single frame before it is no longer considered the same object.\n"
                     "If this is too low, fast moving objects may flicker and have bad lighting.  If it's too high, repeated objects may flicker.\n"
-                    "This does not account for sceneScale.");
+                    "This does not account for sceneScale.", args.minValue = 0.f);
     
     RTX_OPTION_ARGS("rtx", UIType, showUI, UIType::None, "0 = Don't Show, 1 = Show Simple, 2 = Show Advanced.", 
                     args.environment = "RTX_GUI_DISPLAY_UI",
@@ -549,11 +552,13 @@ namespace dxvk {
                    "It is also useful for higher quality artistic renders of a scene beyond what is possible in real-time.");
 
     struct Accumulation {
-      RTX_OPTION_ENV("rtx.accumulation", uint32_t, numberOfFramesToAccumulate, 1024, "RTX_ACCUMULATION_NUMBER_OF_FRAMES_TO_ACCUMULATE",
+      RTX_OPTION_ARGS("rtx.accumulation", uint32_t, numberOfFramesToAccumulate, 1024,
                  "Number of frames to accumulate render output.\n"
                  "This can be used for generating reference images smoothed over time.\n"
                  "By default the accumulation stops once the limit is reached.\n"
-                 "When desired, continous accumulation can be enabled via enableContinuousAccumulation.");
+                 "When desired, continous accumulation can be enabled via enableContinuousAccumulation.",
+                 args.environment = "RTX_ACCUMULATION_NUMBER_OF_FRAMES_TO_ACCUMULATE",
+                 args.minValue = 1);
       RTX_OPTION_ENV("rtx.accumulation", AccumulationBlendMode, blendMode, AccumulationBlendMode::Average, "RTX_ACCUMULATION_BLEND_MODE",
                      "The blend mode to use for accumulating debug view output.\n"
                      "Supported modes are: 0 = Average, 1 = Min, 2 = Max.\n"
@@ -887,6 +892,7 @@ namespace dxvk {
                "A time in milliseconds that the DXVK presentation thread should sleep for. Requires present throttling to be enabled to take effect.\n"
                "Note that the application may sleep for longer than the specified time as is expected with sleep functions in general.");
     RTX_OPTION_ENV("rtx", bool, validateCPUIndexData, false, "DXVK_VALIDATE_CPU_INDEX_DATA", "");
+    RTX_OPTION("rtx", uint, dumpAllInstancesOnFrame, UINT32_MAX, "If set, and running in a REMIX_DEVELOPMENT build, this will dump all active instances to the log on the specified frame.");
 
     struct Aliasing
     {
@@ -966,7 +972,9 @@ namespace dxvk {
                  "replacements assets are simply too large for the target GPUs available vid mem, we may end up going overbudget "
                  "regularly.  Defaults to 50% of the available VRAM.");
       RTX_OPTION("rtx.texturemanager", bool, fixedBudgetEnable, false, "If true, rtx.texturemanager.fixedBudgetMiB is used instead of rtx.texturemanager.budgetPercentageOfAvailableVram.");
-      RTX_OPTION("rtx.texturemanager", int, fixedBudgetMiB, 2048, "Fixed-size VRAM budget for replacement textures. In mebibytes. To use, set rtx.texturemanager.fixedBudgetEnable to True.");
+      RTX_OPTION_ARGS("rtx.texturemanager", int, fixedBudgetMiB, 2048, "Fixed-size VRAM budget for replacement textures. In mebibytes. To use, set rtx.texturemanager.fixedBudgetEnable to True.",
+                      args.minValue = 256,
+                      args.maxValue = 1024 * 32);
       RTX_OPTION_ENV("rtx.texturemanager", bool, samplerFeedbackEnable, true, "DXVK_TEXTURES_SAMPLER_FEEDBACK_ENABLE",
                  "Enable texture sampler feedback. If true, a texture prioritization logic considers the amount of mip-levels that was sampled by a GPU while rendering a scene."
                  "(For example, if a texture is in the distance, it will have a lower priority compared to a texture rendered just in front of the camera).");
@@ -1145,9 +1153,6 @@ namespace dxvk {
     RtxOptions(const Config& options) {
       // Need to set this to true after conf files are parsed, but before any options are accessed.
       RtxOptionImpl::s_isInitialized = true;
-
-      // Needs to be > 0
-      RTX_OPTION_CLAMP_MIN(uniqueObjectDistance, FLT_MIN);
 
       RTX_OPTION_CLAMP_MIN(emissiveIntensity, 0.0f);
       // Note: Clamp to positive values as negative luminance thresholds are not valid.

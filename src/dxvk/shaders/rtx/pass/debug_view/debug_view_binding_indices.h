@@ -36,7 +36,7 @@
 #define DEBUG_VIEW_BINDING_SHARED_FLAGS_INPUT                                              7
 #define DEBUG_VIEW_BINDING_PRIMARY_LINEAR_VIEW_Z_INPUT                                     8
 #define DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_PERCEPTUAL_ROUGHNESS_INPUT 9
-#define DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_MOTION_VECTOR_INPUT                             10
+
 #define DEBUG_VIEW_BINDING_PRIMARY_SCREEN_SPACE_MOTION_VECTOR_INPUT                        11
 #define DEBUG_VIEW_BINDING_RTXDI_CONFIDENCE_INPUT                                          12
 #define DEBUG_VIEW_BINDING_RENDER_OUTPUT_INPUT                                             13
@@ -57,6 +57,8 @@
 #define DEBUG_VIEW_BINDING_COMPOSITE_INPUT                                                 31
 
 #define DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT                          32
+
+#define DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT                                       33
 
 // Inputs / Outputs
 

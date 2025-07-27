@@ -43,6 +43,8 @@
 #include "rtx/pass/nrc/nrc_utilities.slangh"
 #include "rtx/algorithm/accumulate.slangh"
 
+#include "rtx/concept/surface/minimal_surface_interaction.slangh"
+
 uint32_t RAB_EncodeNormal(float3 normal)
 {
   return float2x32ToSnorm2x16(sphereDirectionToSignedOctahedral(normal));
@@ -55,71 +57,72 @@ float3 RAB_DecodeNormal(uint encodedNormal)
 
 // Inputs
 
-layout(binding = DEBUG_VIEW_BINDING_CONSTANTS_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_CONSTANTS_INPUT)]]
 ConstantBuffer<DebugViewArgs> cb;
 
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_DENOISED_PRIMARY_DIRECT_DIFFUSE_RADIANCE_HIT_T_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_DENOISED_PRIMARY_DIRECT_DIFFUSE_RADIANCE_HIT_T_INPUT)]]
 Texture2D<float4> DenoisedPrimaryDirectDiffuseRadianceHitT;
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_DENOISED_PRIMARY_DIRECT_SPECULAR_RADIANCE_HIT_T_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_DENOISED_PRIMARY_DIRECT_SPECULAR_RADIANCE_HIT_T_INPUT)]]
 Texture2D<float4> DenoisedPrimaryDirectSpecularRadianceHitT;
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_DENOISED_SECONDARY_COMBINED_DIFFUSE_RADIANCE_HIT_T_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_DENOISED_SECONDARY_COMBINED_DIFFUSE_RADIANCE_HIT_T_INPUT)]]
 Texture2D<float4> DenoisedSecondaryCombinedDiffuseRadianceHitT;
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_DENOISED_SECONDARY_COMBINED_SPECULAR_RADIANCE_HIT_T_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_DENOISED_SECONDARY_COMBINED_SPECULAR_RADIANCE_HIT_T_INPUT)]]
 Texture2D<float4> DenoisedSecondaryCombinedSpecularRadianceHitT;
-layout(r16ui, binding = DEBUG_VIEW_BINDING_SHARED_FLAGS_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_SHARED_FLAGS_INPUT)]]
 Texture2D<uint> SharedFlags;
-layout(r32f, binding = DEBUG_VIEW_BINDING_PRIMARY_LINEAR_VIEW_Z_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_PRIMARY_LINEAR_VIEW_Z_INPUT)]]
 Texture2D<float> PrimaryLinearViewZ;
-layout(rgba16, binding = DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_PERCEPTUAL_ROUGHNESS_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_PERCEPTUAL_ROUGHNESS_INPUT)]]
 Texture2D<float4> PrimaryVirtualWorldNormalPerceptualRoughness;
-layout(rgba16, binding = DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_MOTION_VECTOR_INPUT)
-Texture2D<float4> PrimaryVirtualMotionVector;
-layout(rg16, binding = DEBUG_VIEW_BINDING_PRIMARY_SCREEN_SPACE_MOTION_VECTOR_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_PRIMARY_SCREEN_SPACE_MOTION_VECTOR_INPUT)]]
 Texture2D<float2> PrimaryScreenSpaceMotionVector;
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_RTXDI_CONFIDENCE_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_RTXDI_CONFIDENCE_INPUT)]]
 Texture2D<float4> RtxdiConfidence;
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_RENDER_OUTPUT_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_RENDER_OUTPUT_INPUT)]]
 Texture2D<float4> RenderOutput;
-layout(r32ui, binding = DEBUG_VIEW_BINDING_INSTRUMENTATION_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_INSTRUMENTATION_INPUT)]]
 Texture2D<uint> Instrumentation;
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_TERRAIN_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_TERRAIN_INPUT)]]
 Texture2D<float4> TerrainTexture;
-layout(rgba32ui, binding = DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT)]]
 Texture3D<uint4> VolumeReservoirs;
 
-layout(binding = DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT)]]
 Sampler3D<float> VolumeFilteredRadianceAge;
-layout(binding = DEBUG_VIEW_BINDING_VOLUME_RADIANCE_Y_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RADIANCE_Y_INPUT)]]
 Sampler3D<float4> VolumeFilteredRadianceY;
-layout(binding = DEBUG_VIEW_BINDING_VOLUME_RADIANCE_COCG_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RADIANCE_COCG_INPUT)]]
 Sampler3D<float2> VolumeFilteredRadianceCoCg;
 
-layout(binding = DEBUG_VIEW_BINDING_VALUE_NOISE_SAMPLER)
+[[vk::binding(DEBUG_VIEW_BINDING_VALUE_NOISE_SAMPLER)]]
 Sampler3D<float4> ValueNoiseSampler;
 
-layout(binding = DEBUG_VIEW_BINDING_BLUE_NOISE_TEXTURE)
+[[vk::binding(DEBUG_VIEW_BINDING_BLUE_NOISE_TEXTURE)]]
 Texture2DArray BlueNoise;
 
-layout(rgba32f, binding = DEBUG_VIEW_BINDING_DEBUG_VIEW_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_DEBUG_VIEW_INPUT)]]
 Texture2D<float4> DebugView;
 
-layout(rgba8f, binding = DEBUG_VIEW_BINDING_NRD_VALIDATION_LAYER_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_NRD_VALIDATION_LAYER_INPUT)]]
 Texture2D<float4> NrdValidationLayer;
 
-layout(rgba16f, binding = DEBUG_VIEW_BINDING_COMPOSITE_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_COMPOSITE_INPUT)]]
 Texture2D<float4> Composite;
 
-layout(r16f, binding = DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT)]]
 Texture2D<float> PrimaryDisocclusionThreshold;
+
+layout(binding = DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT)
+Texture2D<float4> PreviousWorldPosition_WorldTriangleNormal;
 
 // Inputs / Outputs
 
-layout(rgba32f, binding = DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)]]
 RWTexture2D<float4> AccumulatedDebugView; 
 
 // Outputs
 
-layout(binding = DEBUG_VIEW_BINDING_STATISTICS_BUFFER_OUTPUT)
+[[vk::binding(DEBUG_VIEW_BINDING_STATISTICS_BUFFER_OUTPUT)]]
 RWStructuredBuffer<float> DebugViewStatistics;
 
 // Samplers
@@ -130,10 +133,10 @@ RWStructuredBuffer<float> DebugViewStatistics;
 
 // Samplers
 
-layout(binding = DEBUG_VIEW_BINDING_NEAREST_SAMPLER)
+[[vk::binding(DEBUG_VIEW_BINDING_NEAREST_SAMPLER)]]
 SamplerState NearestSampler;
 
-layout(binding = DEBUG_VIEW_BINDING_LINEAR_SAMPLER)
+[[vk::binding(DEBUG_VIEW_BINDING_LINEAR_SAMPLER)]]
 SamplerState LinearSampler;
 
 #include "rtx/utility/common.slangh"
@@ -269,9 +272,6 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
   {
   case DEBUG_VIEW_VIRTUAL_SHADING_NORMAL:
     value = unormVectorToColor(PrimaryVirtualWorldNormalPerceptualRoughness[threadId].xyz);
-    break;
-  case DEBUG_VIEW_VIRTUAL_MOTION_VECTOR:
-    value = vec4(abs(PrimaryVirtualMotionVector[threadId].xyz), 1);
     break;
   case DEBUG_VIEW_SCREEN_SPACE_MOTION_VECTOR:
     value = vec4(abs(PrimaryScreenSpaceMotionVector[threadId].xy), 0, 1);
@@ -483,13 +483,37 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       value = float4(0, 1, 1, 1);
     }
     break;
+  case DEBUG_VIEW_PREV_WORLD_POSITION_AND_TBN:
+    {
+      GBufferMemoryMinimalSurfaceInteraction memory;
+      memory.encodedWorldPositionWorldTriangleTBN = PreviousWorldPosition_WorldTriangleNormal[threadId];
+      memory.positionError = 0;
+
+      MinimalSurfaceInteraction si = minimalSurfaceInteractionCreate(memory);
+      
+      if(cb.debugKnob.x <= 1.f)
+      {
+        value.xyz = si.position;
+      }
+      else if(cb.debugKnob.x <= 2.f)
+      {
+        value.xyz = normalize(float3(si.triangleNormal));
+      }
+      else if(cb.debugKnob.x <= 3.f)
+      {
+        value.xyz = normalize(float3(si.triangleTangent));
+      }
+      else if(cb.debugKnob.x <= 4.f)
+      {
+        value.xyz = normalize(float3(si.triangleBitangent));
+      }
+      break;
+    }
   case DEBUG_VIEW_NAN:
     bool isValid = DebugView[threadId].x != 0.0;
 
     // DEBUG_VIEW_VIRTUAL_SHADING_NORMAL
     isValid &= isValidValue(unormVectorToColor(PrimaryVirtualWorldNormalPerceptualRoughness[threadId].xyz));
-    // DEBUG_VIEW_VIRTUAL_MOTION_VECTOR
-    isValid &= isValidValue(PrimaryVirtualMotionVector[threadId].xy);
     // DEBUG_VIEW_SCREEN_SPACE_MOTION_VECTOR
     isValid &= isValidValue(PrimaryScreenSpaceMotionVector[threadId].xy);
 

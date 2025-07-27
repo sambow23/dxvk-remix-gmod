@@ -78,6 +78,7 @@ public:
   const DomeLightArgs& getDomeLightArgs() const { return m_gpuDomeLightArgs; }
 
   void clear();
+  void clearFromUIThread();
 
   void garbageCollection(RtCamera& camera);
 
@@ -86,8 +87,8 @@ public:
   void prepareSceneData(Rc<DxvkContext> ctx, CameraManager const& cameraManager);
 
   void addGameLight(D3DLIGHTTYPE type, const RtLight& light);
-  void addLight(const RtLight& light, const RtLightAntiCullingType antiCullingType, const XXH64_hash_t lightToReplace = kEmptyHash);
-  void addLight(const RtLight& light, const DrawCallState& drawCallState, const RtLightAntiCullingType antiCullingType);
+  RtLight* addLight(const RtLight& light, const RtLightAntiCullingType antiCullingType, const XXH64_hash_t lightToReplace = kEmptyHash);
+  RtLight* addLight(const RtLight& light, const DrawCallState& drawCallState, const RtLightAntiCullingType antiCullingType);
 
   void addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight);
   void addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight);
@@ -123,6 +124,10 @@ private:
   std::vector<RtLight*> m_linearizedLights{};
   std::vector<unsigned char> m_lightsGPUData{};
   std::vector<uint16_t> m_lightMappingData{};
+
+  // Mutex to prevent the debugging UI from accessing the light data after it's been deleted.
+  mutable std::mutex m_lightUIMutex;
+  std::unique_lock<std::mutex> m_lightDebugUILock = std::unique_lock<std::mutex>(m_lightUIMutex, std::defer_lock);
 
   bool getActiveDomeLight(DomeLight& lightOut);
 

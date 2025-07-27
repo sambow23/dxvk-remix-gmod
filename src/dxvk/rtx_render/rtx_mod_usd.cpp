@@ -56,6 +56,9 @@
 #include <pxr/usd/usdSkel/bindingAPI.h>
 #include <pxr/usd/usdShade/materialBindingAPI.h>
 #include <pxr/base/arch/fileSystem.h>
+#include <pxr/base/plug/registry.h>
+#include <pxr/base/plug/plugin.h>
+#include <src/usd-plugins/RemixParticleSystem/Prim.h>
 #include <pxr/usd/sdf/layer.h>
 #include "../../lssusd/usd_include_end.h"
 #include "../util/util_watchdog.h"
@@ -143,6 +146,7 @@ private:
   bool processMesh(const pxr::UsdPrim& prim, Args& args);
   void processPrim(Args& args, const pxr::UsdPrim& prim);
   void processPointInstancer(Args& args, const pxr::UsdPrim& prim);
+  bool processParticleSystem(Args& args, const pxr::UsdPrim& prim);
 
   void processLight(Args& args, const pxr::UsdPrim& lightPrim, const bool isOverride);
   bool processReplacement(Args& args);
@@ -488,7 +492,7 @@ bool hasExplicitTransform(const pxr::UsdPrim& prim) {
   return prim.HasAttribute(pxr::TfToken("xformOp:rotateZYX")) || prim.HasAttribute(pxr::TfToken("xformOp:scale")) || prim.HasAttribute(pxr::TfToken("xformOp:translate")) || prim.HasAttribute(pxr::TfToken("xformOpOrder"));
 }
 
-void UsdMod::Impl::processLight(Args& args, const pxr::UsdPrim& lightPrim, const bool isOverride) {
+void UsdMod::Impl::processLight(Args& args, const pxr::UsdPrim& lightPrim, const bool isRoot) {
   if (args.rootPrim.IsA<pxr::UsdGeomMesh>() && lightPrim.IsA<pxr::UsdLuxDistantLight>()) {
     Logger::err(str::format(
       "A Distant Light detected under ", args.rootPrim.GetName(),
@@ -517,10 +521,153 @@ void UsdMod::Impl::processLight(Args& args, const pxr::UsdPrim& lightPrim, const
   const auto& replacementToObjectAsArray = reinterpret_cast<const float(&)[4][4]>(lightTransform);
   const Matrix4 replacementToObject(replacementToObjectAsArray);
 
-  const std::optional<LightData> lightData = LightData::tryCreate(lightPrim, isTransformDefined ? &lightTransform : nullptr, isOverride, isParentTransformDefined);
+  std::optional<LightData> lightData = LightData::tryCreate(lightPrim, isTransformDefined ? &lightTransform : nullptr, isRoot, isParentTransformDefined);
   if (lightData.has_value()) {
+    if (isRoot && args.meshes.size() == 1) {
+      // Already created an empty replacement to indicate the root needs to be kept,
+      // but since we have actual override data for it, need to remove that placeholder.
+      args.meshes.clear();
+    }
     args.meshes.emplace_back(lightData.value(), replacementToObject);
   }
+}
+
+inline Vector4 toFloat4(const pxr::GfVec4f& v) {
+  Vector4 f;
+  f.x = v[0];
+  f.y = v[1];
+  f.z = v[2];
+  f.w = v[3];
+  return f;
+}
+
+bool UsdMod::Impl::processParticleSystem(Args& args, const pxr::UsdPrim& prim) {
+  using namespace pxr;
+
+  const RemixParticleSystemPrim particleSystem(prim);
+
+  UsdRelationship emitterRel = particleSystem.GetEmitterMeshRel();
+  if (!emitterRel) {
+    return false;
+  }
+
+  // esolve targets (could be many; we take the first)
+  SdfPathVector targets;
+  emitterRel.GetTargets(&targets);
+  if (targets.empty()) {
+    return false;
+  }
+
+  // Lookup the prim at that path
+  UsdPrim meshPrim;
+  UsdStagePtr stage = prim.GetStage();
+  const SdfPath primPath = prim.GetPath();
+
+  for (const SdfPath& t : targets) {
+    // Resolve to an absolute path
+    SdfPath absPath;
+    if (t.IsAbsolutePath()) {
+      absPath = t;
+    } else {
+      // relative name like "Cube" or "Some/Child"
+      absPath = primPath.AppendPath(t);
+    }
+
+    meshPrim = stage->GetPrimAtPath(absPath);
+    if (meshPrim) {
+      break;
+    }
+  }
+
+  if (!meshPrim) {
+    Logger::warn(str::format("Emitter mesh target ", targets[0].GetText(), "' not found"));
+    return false;
+  }
+
+  const XXH64_hash_t usdOriginHash = getStrongestOpinionatedPathHash(meshPrim);
+  MeshReplacement* pTemp;
+  if (!m_owner.m_replacements->getObject(usdOriginHash, pTemp)) {
+    // First time seeing this mesh, then process it.
+    if (!processMesh(meshPrim, args)) {
+      return false;
+    }
+  }
+
+  MaterialData* materialData = processMaterialUser(args, prim);
+
+  RtxParticleSystemDesc particleDesc;
+
+  // Helper macro to read an attribute into a float or int field
+#define READ_ATTR(Type, attrName, field) \
+            if (UsdAttribute attr = particleSystem.Get##attrName##Attr()) { \
+                Type result; \
+                attr.Get<Type>(&result); \
+                particleDesc.field = (Type)result; \
+            } 
+#define READ_ATTR_CONV(Type, attrName, field, conversionFunc) \
+            if (UsdAttribute attr = particleSystem.Get##attrName##Attr()) { \
+                Type result; \
+                attr.Get<Type>(&result); \
+                particleDesc.field = conversionFunc(result); \
+            } 
+
+    // Read all simulation parameters
+  READ_ATTR(float, MinTimeToLive, minTtl);
+  READ_ATTR(float, MaxTimeToLive, maxTtl);
+  READ_ATTR(float, InitialVelocityFromNormal, initialVelocityFromNormal);
+  READ_ATTR(float, InitialVelocityConeAngleDegrees, initialVelocityConeAngleDegrees);
+  READ_ATTR(float, MinParticleSize, minParticleSize);
+  READ_ATTR(float, MaxParticleSize, maxParticleSize);
+  READ_ATTR(float, MinRotationSpeed, minRotationSpeed);
+  READ_ATTR(float, MaxRotationSpeed, maxRotationSpeed);
+  READ_ATTR(float, GravityForce, gravityForce);
+  READ_ATTR(float, MaxSpeed, maxSpeed);
+  READ_ATTR(float, TurbulenceFrequency, turbulenceFrequency);
+  READ_ATTR(float, TurbulenceAmplitude, turbulenceAmplitude);
+  READ_ATTR(float, CollisionThickness, collisionThickness);
+  READ_ATTR(float, CollisionRestitution, collisionRestitution);
+  READ_ATTR(float, MotionTrailMultiplier, motionTrailMultiplier);
+  READ_ATTR(int, MaxNumParticles, maxNumParticles);
+  READ_ATTR(bool, UseTurbulence, useTurbulence);
+  READ_ATTR(bool, UseSpawnTexcoords, useSpawnTexcoords);
+  READ_ATTR(bool, EnableCollisionDetection, enableCollisionDetection);
+  READ_ATTR(bool, AlignParticlesToVelocity, alignParticlesToVelocity);
+  READ_ATTR(bool, EnableMotionTrail, enableMotionTrail);
+  READ_ATTR(float, SpawnRatePerSecond, spawnRate);
+  READ_ATTR_CONV(GfVec4f, MaxSpawnColor, maxSpawnColor, toFloat4);
+  READ_ATTR_CONV(GfVec4f, MinSpawnColor, minSpawnColor, toFloat4);
+
+#undef READ_ATTR
+#undef READ_ATTR_CONV
+
+  bool unused = false;
+  pxr::GfMatrix4f localToRoot = pxr::GfMatrix4f(args.xformCache.ComputeRelativeTransform(prim, args.rootPrim.GetParent(), &unused));
+  const auto& replacementToObjectAsArray = reinterpret_cast<const float(&)[4][4]>(localToRoot);
+  const Matrix4 replacementToObject(replacementToObjectAsArray);
+
+  std::vector<pxr::UsdGeomSubset> geomSubsets;
+  auto children = prim.GetFilteredChildren(pxr::UsdPrimIsActive);
+  for (auto child : children) {
+    if (child.IsA<pxr::UsdGeomSubset>()) {
+      geomSubsets.emplace_back(child);
+    }
+  }
+
+  if (geomSubsets.empty()) {
+    Categorizer categoryFlags = processCategoryFlags(prim);
+
+    MeshReplacement* pGeometryData;
+    if (m_owner.m_replacements->getObject(usdOriginHash, pGeometryData)) {
+      AssetReplacement newReplacementMesh(pGeometryData, materialData, categoryFlags, replacementToObject);
+      // Add the particle system descriptor
+      newReplacementMesh.particleSystem = particleDesc;
+      args.meshes.push_back(newReplacementMesh);
+    }
+  } else {
+    Logger::err(str::format("Using UsdGeomSubset as a particle emitter is currently unsupported, prim=", prim.GetPath().GetAsString()));
+  }
+
+  return true;
 }
 
 void UsdMod::Impl::processPointInstancer(Args& args, const pxr::UsdPrim& prim) {
@@ -728,19 +875,24 @@ bool explicitlyNoReferences(const pxr::UsdPrim& prim) {
 
 bool UsdMod::Impl::processReplacement(Args& args) {
   ScopedCpuProfileZone();
+  bool changesDrawCall = true;
+  
+  // Want the original draw call to occupy the first index in the replacements vector, so that the indices of the
+  // asset replacements line up with the indices of the Entities being drawn.
+  if (preserveGameObject(args.rootPrim)) {
+    args.meshes.push_back(AssetReplacement(nullptr, nullptr, Categorizer(), Matrix4()));
+    args.meshes[0].includeOriginal = true;
+    args.meshes[0].categories = processCategoryFlags(args.rootPrim);
+    changesDrawCall = false;
+  }
   processReplacementRecursive(args, args.rootPrim, true);
 
-  if (!args.meshes.empty()) {
-    args.meshes[0].includeOriginal = preserveGameObject(args.rootPrim);
-
-    // Read category flags if we include the original
-    if (args.meshes[0].includeOriginal) {
-      args.meshes[0].categories = processCategoryFlags(args.rootPrim);
-    }
-    return true;
-  } else {
-    return !preserveGameObject(args.rootPrim);
+  // Only return false if no changes were made to the draw call, including the original draw being preserved.
+  if (args.meshes.size() == 1 && args.meshes[0].includeOriginal) {
+    return false;
   }
+  return true;
+
 }
 
 void UsdMod::Impl::processReplacementRecursive(Args& args, const pxr::UsdPrim& prim, bool isRoot) {
@@ -749,9 +901,12 @@ void UsdMod::Impl::processReplacementRecursive(Args& args, const pxr::UsdPrim& p
   } else if (prim.IsA<pxr::UsdGeomPointInstancer>()) {
     processPointInstancer(args, prim);
     return;  // meshes with pointInstancer parents don't render in USD Composer, so mimicing that behavior here.
+  } else if (prim.IsA<pxr::RemixParticleSystemPrim>()) {
+    processParticleSystem(args, prim);
   } else if (LightData::isSupportedUsdLight(prim) && (!isRoot || !explicitlyNoReferences(prim))) {
     processLight(args, prim, isRoot);
   }
+
   auto children = prim.GetFilteredChildren(pxr::UsdPrimIsActive);
   for (auto child : children) {
     processReplacementRecursive(args, child);
@@ -1857,6 +2012,39 @@ bool UsdMod::Impl::processMesh(const pxr::UsdPrim& prim, Args& args) {
 UsdMod::UsdMod(const Mod::Path& usdFilePath)
 : Mod(usdFilePath) {
   m_impl = std::make_unique<Impl>(*this);
+
+  // Load plugins
+  static std::string pluginsDir;
+  auto dir = env::getDllDirectory();
+  if (!dir.empty()) {
+    std::filesystem::path p(dir);
+    p /= "usd\\plugins";
+    pluginsDir = p.string();
+    const auto& plugins = pxr::PlugRegistry::GetInstance().RegisterPlugins(pluginsDir);
+
+    if (plugins.empty()) {
+      Logger::warn("usd plugins were not loaded");
+      return;
+    }
+
+    for (auto const& notice : plugins) {
+      if(!notice->IsLoaded() && !notice->Load()) {
+        Logger::warn(str::format("USD plugin, ", notice->GetName(), " failed to load!"));
+      } else {
+        Logger::info(str::format("USD plugin, ", notice->GetName(), " loaded!"));
+      }
+
+      const std::string& name = notice->GetName();
+      const std::string& libPath = notice->GetPath();
+      const std::string& resourcePath = notice->GetResourcePath();
+
+      Logger::debug(str::format("Plugin Info: ", name, "\n"
+                                , "\tLibrary:       ", libPath, "\n"
+                                , "\tResourcePath:  ", resourcePath));
+    }
+  } else {
+    Logger::warn("usd plugins were not loaded");
+  }
 }
 
 UsdMod::~UsdMod() {

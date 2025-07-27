@@ -107,6 +107,9 @@ namespace dxvk {
       case OptionType::Vector3:
         delete value.v3;
         break;
+      case OptionType::Vector4:
+        delete value.v4;
+        break;
       case OptionType::Vector2i:
         delete value.v2i;
         break;
@@ -131,6 +134,7 @@ namespace dxvk {
     case OptionType::Vector2: return "float2";
     case OptionType::Vector3: return "float3";
     case OptionType::Vector2i: return "int2";
+    case OptionType::Vector4: return "float4";
     case OptionType::String: return "string";
     default:
       return "unknown type";
@@ -139,7 +143,10 @@ namespace dxvk {
 
   std::string RtxOptionImpl::genericValueToString(ValueType valueType) const {
     const GenericValue& value = valueList[static_cast<int>(valueType)];
+    return genericValueToString(value);
+  }
 
+  std::string RtxOptionImpl::genericValueToString(const GenericValue& value) const {
     switch (type) {
     case OptionType::Bool: return Config::generateOptionString(value.b);
     case OptionType::Int: return Config::generateOptionString(value.i);
@@ -151,6 +158,7 @@ namespace dxvk {
     case OptionType::Vector2: return Config::generateOptionString(*value.v2);
     case OptionType::Vector3: return Config::generateOptionString(*value.v3);
     case OptionType::Vector2i: return Config::generateOptionString(*value.v2i);
+    case OptionType::Vector4: return Config::generateOptionString(*value.v4);
     case OptionType::String: return *value.string;
     default:
       return "unknown type";
@@ -185,6 +193,72 @@ namespace dxvk {
     if (onChangeCallback) {
       onChangeCallback();
     }
+  }
+
+  bool RtxOptionImpl::clampValue(ValueType valueType) {
+    GenericValue& value = valueList[static_cast<int>(valueType)];
+    bool changed = false;
+    
+    switch (type) {
+      case OptionType::Int: {
+        int32_t oldValue = value.i;
+        if (minValue.has_value()) {
+          value.i = std::max(value.i, minValue.value().i); 
+        }
+        if (maxValue.has_value()) {
+          value.i = std::min(value.i, maxValue.value().i); 
+        }
+        changed = value.i != oldValue;
+        break;
+      }
+      case OptionType::Float: {
+        float oldValue = value.f;
+        if (minValue.has_value()) {
+          value.f = std::max(value.f, minValue.value().f); 
+        }
+        if (maxValue.has_value()) {
+          value.f = std::min(value.f, maxValue.value().f); 
+        }
+        changed = value.f != oldValue;
+        break;
+      }
+      case OptionType::Vector2: {
+        Vector2 oldValue = *value.v2;
+        if (minValue.has_value()) {
+          *value.v2 = max(*value.v2, *(minValue.value().v2));
+        }
+        if (maxValue.has_value()) {
+          *value.v2 = min(*value.v2, *(maxValue.value().v2));
+        }
+        changed = *value.v2 != oldValue;
+        break;
+      }
+      case OptionType::Vector3: {
+        Vector3 oldValue = *value.v3;
+        if (minValue.has_value()) {
+          *value.v3 = max(*value.v3, *(minValue.value().v3));
+        }
+        if (maxValue.has_value()) {
+          *value.v3 = min(*value.v3, *(maxValue.value().v3));
+        }
+        changed = *value.v3 != oldValue;
+        break;
+      }
+      case OptionType::Vector2i: {
+        Vector2i oldValue = *value.v2i;
+        if (minValue.has_value()) {
+          *value.v2i = max(*value.v2i, *(minValue.value().v2i));
+        }
+        if (maxValue.has_value()) {
+          *value.v2i = min(*value.v2i, *(maxValue.value().v2i));
+        }
+        changed = *value.v2i != oldValue;
+        break;
+      }
+      default:
+        break;
+    }
+    return changed;
   }
 
   void RtxOptionImpl::readOption(const Config& options, RtxOptionImpl::ValueType valueType) {
@@ -226,9 +300,14 @@ namespace dxvk {
     case OptionType::String:
       *value.string = options.getOption<std::string>(fullName.c_str(), *value.string, env);
       break;
+    case OptionType::Vector4:
+      *value.v4 = options.getOption<Vector4>(fullName.c_str(), *value.v4, env);
+      break;
     default:
       break;
     }
+
+    clampValue(valueType);
     
     if (valueType == ValueType::PendingValue) {
       // If reading into the pending value, need to mark the option as dirty so it gets copied to the value at the end of the frame.
@@ -289,6 +368,9 @@ namespace dxvk {
     case OptionType::String:
       options.setOption(fullName.c_str(), *value.string);
       break;
+    case OptionType::Vector4:
+      options.setOption(fullName.c_str(), *value.v4);
+      break;
     default:
       break;
     }
@@ -335,6 +417,9 @@ namespace dxvk {
       break;
     case OptionType::String:
       return *aValue.string == *bValue.string;
+      break;
+    case OptionType::Vector4:
+      return *aValue.v4 == *bValue.v4;
       break;
     }      
     return false;
@@ -394,6 +479,9 @@ namespace dxvk {
       break;
     case OptionType::String:
       *value.string = *source.string;
+      break;
+    case OptionType::Vector4:
+      *value.v4 = *source.v4;
       break;
     default:
       break;
@@ -460,8 +548,8 @@ Tables below enumerate all the options and their defaults set by RTX Remix. Note
     auto writeOutRtxOptionTable = [&](bool processLongEntryTypes) {
       // Write out a header for a Markdown table
       outputFile << 
-        "| RTX Option | Type | Default Value | Description |\n"
-        "| :-- | :-: | :-: | :-- |\n"; // Text alignment per column
+        "| RTX Option | Type | Default Value | Min Value | Max Value | Description |\n"
+        "| :-- | :-: | :-: | :-: | :-: | :-- |\n"; // Text alignment per column
 
       // Write out all RTX Options
       auto& globalRtxOptions = getGlobalRtxOptionMap();
@@ -500,12 +588,16 @@ Tables below enumerate all the options and their defaults set by RTX Remix. Note
         }
 
         std::string defaultValueString = rtxOption.genericValueToString(ValueType::DefaultValue);
+        std::string minValueString = rtxOption.minValue.has_value() ? rtxOption.genericValueToString(*rtxOption.minValue) : "";
+        std::string maxValueString = rtxOption.maxValue.has_value() ? rtxOption.genericValueToString(*rtxOption.maxValue) : "";
 
         // Write the first portion of the result row to the the outputstream
         outputFile <<
           "|" << rtxOption.getFullName() <<
           "|" << rtxOption.getTypeString() <<
           "|" << defaultValueString <<
+          "|" << minValueString <<
+          "|" << maxValueString <<
           "|";
 
         // Preprocess option description for Markdown

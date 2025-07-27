@@ -37,6 +37,7 @@
 #include "rtx_scene_manager.h"
 #include "rtx_texture_manager.h"
 #include "rtx_debug_view.h"
+#include "../util/util_globaltime.h"
 
 namespace dxvk {
 
@@ -362,14 +363,13 @@ namespace dxvk {
     const SceneManager& sceneManager,
     const VkExtent3D& downscaledExtent,
     const VkExtent3D& targetExtent,
-    float frameTimeMilliseconds,
     bool resetHistory,
     bool isCameraCut) {
 
     FrameBeginContext frameBeginCtx;
     frameBeginCtx.downscaledExtent = downscaledExtent;
     frameBeginCtx.targetExtent = targetExtent;
-    frameBeginCtx.frameTimeMilliseconds = frameTimeMilliseconds;
+    frameBeginCtx.frameTimeMilliseconds = GlobalTime::get().deltaTimeMs();
     frameBeginCtx.resetHistory = resetHistory;
     frameBeginCtx.isCameraCut = isCameraCut;
 
@@ -410,7 +410,7 @@ namespace dxvk {
         m_raytracingOutput.m_primaryRtxdiTemporalPosition = AliasedResource(m_raytracingOutput.m_primaryVirtualWorldShadingNormalPerceptualRoughnessDenoising, ctx, m_downscaledExtent, VK_FORMAT_R32_UINT, "primary rtxdi temporal position", true);
       }
 
-      if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache && DebugView::debugViewIdx() == DEBUG_VIEW_DISABLED && RtxOptions::captureDebugImage() == false) {
+      if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache && RtxOptions::captureDebugImage() == false) {
         m_raytracingOutput.m_indirectRadianceHitDistance = AliasedResource(m_raytracingOutput.m_primaryVirtualMotionVector, ctx, m_downscaledExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "Indirect Radiance Hit Distance", true);
 
         // m_primaryRtxdiTemporalPosition and m_primaryVirtualWorldShadingNormalPerceptualRoughnessDenoising has different format, so they have different image views
@@ -986,6 +986,7 @@ namespace dxvk {
     m_raytracingOutput.m_primaryHitDistance = createImageResource(ctx, "primary hit distance", m_downscaledExtent, VK_FORMAT_R32_SFLOAT);
     m_raytracingOutput.m_primaryViewDirection = createImageResource(ctx, "primary view direction", m_downscaledExtent, VK_FORMAT_R16G16_SNORM);
     m_raytracingOutput.m_primaryConeRadius = createImageResource(ctx, "primary cone radius", m_downscaledExtent, VK_FORMAT_R16_SFLOAT);
+
     m_raytracingOutput.m_primaryWorldPositionWorldTriangleNormal[0] = AliasedResource(ctx, m_downscaledExtent, VK_FORMAT_R32G32B32A32_SFLOAT, "primary world position world triangle normal 0");
     m_raytracingOutput.m_primaryWorldPositionWorldTriangleNormal[1] = AliasedResource(ctx, m_downscaledExtent, VK_FORMAT_R32G32B32A32_SFLOAT, "primary world position world triangle normal 1");
     m_raytracingOutput.m_primaryPositionError = createImageResource(ctx, "primary position error", m_downscaledExtent, VK_FORMAT_R32_SFLOAT);

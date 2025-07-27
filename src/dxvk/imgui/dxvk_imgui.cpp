@@ -54,6 +54,7 @@
 #include "dxvk_image.h"
 #include "../util/rc/util_rc_ptr.h"
 #include "../util/util_math.h"
+#include "../util/util_globaltime.h"
 #include "rtx_render/rtx_opacity_micromap_manager.h"
 #include "rtx_render/rtx_bridge_message_channel.h"
 #include "dxvk_imgui_about.h"
@@ -62,6 +63,7 @@
 #include "dxvk_scoped_annotation.h"
 #include "../../d3d9/d3d9_rtx.h"
 #include "dxvk_memory_tracker.h"
+#include "rtx_render/rtx_particle_system.h"
 
 
 namespace dxvk {
@@ -186,7 +188,8 @@ namespace dxvk {
     {"opacitymicromapignoretextures", "Opacity Micromap Ignore Texture (optional)", &RtxOptions::opacityMicromapIgnoreTexturesObject()},
     {"allowbakedlightingtextures","Allow Baked Lighting Textures (optional)", &RtxOptions::allowBakedLightingTexturesObject()},
     {"ignorealphaontextures","Ignore Alpha Channel of Textures (optional)", &RtxOptions::ignoreAlphaOnTexturesObject()},
-    {"raytracedRenderTargetTextures","Raytraced Render Target Textures (optional)", &RtxOptions::raytracedRenderTargetTexturesObject(), ImGUI::kTextureFlagsRenderTarget}
+    {"raytracedRenderTargetTextures","Raytraced Render Target Textures (optional)", &RtxOptions::raytracedRenderTargetTexturesObject(), ImGUI::kTextureFlagsRenderTarget},
+    {"particleemittertextures","Particle Emitters (optional)", &RtxOptions::particleEmitterTexturesObject()}
   };
 
   ImGui::ComboWithKey<RenderPassGBufferRaytraceMode> renderPassGBufferRaytraceModeCombo {
@@ -227,7 +230,7 @@ namespace dxvk {
   };
 
   ImGui::ComboWithKey<GraphicsPreset> graphicsPresetCombo{
-    "Rendering Preset",
+    "Graphics Preset",
     ImGui::ComboWithKey<GraphicsPreset>::ComboEntries{ {
         {GraphicsPreset::Ultra, "Ultra"},
         {GraphicsPreset::High, "High"},
@@ -269,7 +272,7 @@ namespace dxvk {
   };
 
   ImGui::ComboWithKey<NeuralRadianceCache::QualityPreset> neuralRadianceCacheQualityPresetCombo {
-    "Neural Radiance Cache Quality",
+    "RTX Neural Radiance Cache Quality",
     ImGui::ComboWithKey<NeuralRadianceCache::QualityPreset>::ComboEntries { {
         {NeuralRadianceCache::QualityPreset::Ultra, "Ultra"},
         {NeuralRadianceCache::QualityPreset::High, "High"},
@@ -417,8 +420,8 @@ namespace dxvk {
           "It serves as a reference integration mode for validation of other indirect integration modes." },
         {IntegrateIndirectMode::ReSTIRGI, "ReSTIR GI", 
           "ReSTIR GI provides improved indirect path sampling over \"Importance Sampled\" mode with better indirect diffuse and specular GI quality at increased performance cost."},
-        {IntegrateIndirectMode::NeuralRadianceCache, "Neural Radiance Cache", 
-          "Neural Radiance Cache (NRC). NRC is an AI based world space radiance cache. It is live trained by the path tracer\n"
+        {IntegrateIndirectMode::NeuralRadianceCache, "RTX Neural Radiance Cache", 
+          "RTX Neural Radiance Cache (NRC). NRC is an AI based world space radiance cache. It is live trained by the path tracer\n"
           "and allows paths to terminate early by looking up the cached value and saving performance.\n"
           "NRC supports infinite bounces and often provides results closer to that of reference than ReSTIR GI\n"
           "while increasing performance in scenarios where ray paths have 2 or more bounces on average."}
@@ -1189,7 +1192,7 @@ namespace dxvk {
           ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Rendering", nullptr, tab_item_flags)) {
+        if (ImGui::BeginTabItem("Graphics", nullptr, tab_item_flags)) {
           showUserRenderingSettings(ctx, subItemWidth, subItemIndent);
 
           ImGui::EndTabItem();
@@ -1467,7 +1470,6 @@ namespace dxvk {
 
       m_userGraphicsSettingChanged |= minPathBouncesCombo.getKey(&RtxOptions::pathMinBouncesObject());
       m_userGraphicsSettingChanged |= maxPathBouncesCombo.getKey(&RtxOptions::pathMaxBouncesObject());
-      m_userGraphicsSettingChanged |= ImGui::Checkbox("Enable Volumetric Lighting", &RtxGlobalVolumetrics::enableObject());
       m_userGraphicsSettingChanged |= indirectLightingParticlesCombo.getKey(&indirectLightParticlesLevel);
       ImGui::SetTooltipToLastWidgetOnHover("Controls the quality of particles in indirect (reflection/GI) rays.");
 
@@ -1480,7 +1482,6 @@ namespace dxvk {
         ImGui::BeginDisabled(!enableNeuralRadianceCache);
         
         if (neuralRadianceCacheQualityPresetCombo.getKey(&NeuralRadianceCache::NrcOptions::qualityPresetObject())) {
-          nrc.applyQualityPreset();
           m_userGraphicsSettingChanged = true;
         }
 
@@ -1494,6 +1495,18 @@ namespace dxvk {
       }
 
       ImGui::EndDisabled();
+    }
+
+    // Volumetrics Settings
+
+    ImGui::TextSeparator("RTX Volumetrics Settings");
+    {
+      m_userGraphicsSettingChanged |= ImGui::Checkbox("Enable Volumetric Lighting", &RtxGlobalVolumetrics::enableObject());
+      ImGui::BeginDisabled(!RtxGlobalVolumetrics::enable());
+      ImGui::Indent(static_cast<float>(subItemIndent));
+      common->metaGlobalVolumetrics().showImguiUserSettings();
+      ImGui::EndDisabled();
+      ImGui::Unindent(static_cast<float>(subItemIndent));
     }
 
     // Post Effect Settings
@@ -2287,7 +2300,7 @@ namespace dxvk {
         const auto nvidiaColor = ImVec4(0.462745f, 0.725490f, 0.f, 1.f);
 
         const auto color = (texHash == textureInPopup ? blueColor : nvidiaColor);
-        const float anim = animatedHighlightIntensity(common->getSceneManager().getGameTimeSinceStartMS());
+        const float anim = animatedHighlightIntensity(GlobalTime::get().absoluteTimeMs());
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(anim * color.x, anim * color.y, anim * color.z, 1.f));
       } else if (textureHasSelection) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.996078f, 0.329412f, 0.f, 1.f));
@@ -3633,7 +3646,7 @@ namespace dxvk {
             ImGui::Unindent();
           }
         } else if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache) {
-          if (ImGui::CollapsingHeader("Neural Radiance Cache", collapsingHeaderClosedFlags)) {
+          if (ImGui::CollapsingHeader("RTX Neural Radiance Cache", collapsingHeaderClosedFlags)) {
 
             ImGui::Indent();
             ImGui::PushID("Neural Radiance Cache");
@@ -3659,7 +3672,9 @@ namespace dxvk {
       ImGui::Unindent();
     }
 
-    if (ImGui::CollapsingHeader("Global Volumetrics", collapsingHeaderClosedFlags)) {
+    RtxParticleSystemManager::showImguiSettings();
+
+    if (ImGui::CollapsingHeader("RTX Volumetrics (Global)", collapsingHeaderClosedFlags)) {
       ImGui::Indent();
 
       common->metaGlobalVolumetrics().showImguiSettings();
@@ -3867,7 +3882,6 @@ namespace dxvk {
                                         0.5f, 1.f, 32.f, "%.1f GB", ImGuiSliderFlags_NoRoundToFormat)) {
             ctx->getCommonObjects()->getSceneManager().requestVramCompaction();
           }
-          RTX_OPTION_CLAMP(RtxOptions::TextureManager::fixedBudgetMiB, 256, 1024 * 32);
         } else {
           // always disabled drag float just to show the available texture cache budget
           ImGui::BeginDisabled(true);

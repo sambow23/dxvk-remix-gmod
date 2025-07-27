@@ -89,6 +89,7 @@ namespace dxvk {
         {DEBUG_VIEW_SHADING_NORMAL, "Shading Normal"},
         {DEBUG_VIEW_VIRTUAL_SHADING_NORMAL, "Virtual Shading Normal"},
         {DEBUG_VIEW_VERTEX_COLOR, "Vertex Color"},
+        {DEBUG_VIEW_VERTEX_ALPHA, "Vertex Alpha"},
         {DEBUG_VIEW_PORTAL_SPACE, "Portal Space"},
 
         {DEBUG_VIEW_MATERIAL_TYPE, "Material Type"},
@@ -320,6 +321,13 @@ namespace dxvk {
         {DEBUG_VIEW_NRD_INSTANCE_0_VALIDATION_LAYER,      "NRD Instance 0 Validation Layer", "Requires NRD and \"NRD/Common Settings/Validation Layer\" enabled" },
         {DEBUG_VIEW_NRD_INSTANCE_1_VALIDATION_LAYER,      "NRD Instance 1 Validation Layer", "Requires NRD and \"NRD/Common Settings/Validation Layer\" enabled" },
         {DEBUG_VIEW_NRD_INSTANCE_2_VALIDATION_LAYER,      "NRD Instance 2 Validation Layer", "Requires NRD and \"NRD/Common Settings/Validation Layer\" enabled" },
+
+        {DEBUG_VIEW_PREV_WORLD_POSITION_AND_TBN,  "Encoded previous world position and TBN texture",
+                                                  "Parameterize via ROUND(Debug Knob [0]):\n"
+                                                  "  0: World Position\n"
+                                                  "  1: World Normal\n"
+                                                  "  2: World Tangent\n"
+                                                  "  3: World Bitangent" },
     } };
 
   // Note: this does a linear search through the debug view vector so do not use it in performance critical code
@@ -527,7 +535,6 @@ namespace dxvk {
         TEXTURE2D(DEBUG_VIEW_BINDING_SHARED_FLAGS_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_PRIMARY_LINEAR_VIEW_Z_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_PERCEPTUAL_ROUGHNESS_INPUT)
-        TEXTURE2D(DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_MOTION_VECTOR_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_PRIMARY_SCREEN_SPACE_MOTION_VECTOR_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_RTXDI_CONFIDENCE_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_RENDER_OUTPUT_INPUT)
@@ -543,6 +550,7 @@ namespace dxvk {
         TEXTURE2D(DEBUG_VIEW_BINDING_NRD_VALIDATION_LAYER_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_COMPOSITE_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT)
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -882,7 +890,6 @@ namespace dxvk {
         ImGui::DragFloat("Scale", &m_scale, 0.01f, 0.0f, FLT_MAX, "%.3f", sliderFlags);
         ImGui::InputFloat("Min Value", &minValueObject(), std::max(0.01f, 0.02f * std::abs(minValue())), std::max(0.1f, 0.1f * std::abs(minValue())));
         ImGui::InputFloat("Max Value", &maxValueObject(), std::max(0.01f, 0.02f * std::abs(maxValue())), std::max(0.1f, 0.1f * std::abs(maxValue())));
-        maxValue.setDeferred(std::max(1.00001f * minValue(), maxValue()));
 
         // Color legend
         if (pseudoColorMode() != PseudoColorMode::Disabled) {
@@ -1252,7 +1259,6 @@ namespace dxvk {
     ctx->bindResourceView(DEBUG_VIEW_BINDING_SHARED_FLAGS_INPUT, rtOutput.m_sharedFlags.view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_PRIMARY_LINEAR_VIEW_Z_INPUT, rtOutput.m_primaryLinearViewZ.view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_PERCEPTUAL_ROUGHNESS_INPUT, rtOutput.m_primaryVirtualWorldShadingNormalPerceptualRoughness.view, nullptr);
-    ctx->bindResourceView(DEBUG_VIEW_BINDING_PRIMARY_VIRTUAL_MOTION_VECTOR_INPUT, rtOutput.m_primaryVirtualMotionVector.view(Resources::AccessType::Read), nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_PRIMARY_SCREEN_SPACE_MOTION_VECTOR_INPUT, rtOutput.m_primaryScreenSpaceMotionVector.view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_RTXDI_CONFIDENCE_INPUT, rtOutput.getCurrentRtxdiConfidence().view(Resources::AccessType::Read, debugViewArgs.isRTXDIConfidenceValid), nullptr);
     Rc<DxvkImageView> renderOutput =
@@ -1305,9 +1311,15 @@ namespace dxvk {
         break;
       }
     }
-
+    
+    const uint32_t frameIdx = ctx->getDevice()->getCurrentFrameId();
+    
     ctx->bindResourceView(DEBUG_VIEW_BINDING_COMPOSITE_INPUT, rtOutput.m_compositeOutput.view(Resources::AccessType::Read), nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT, rtOutput.m_primaryDisocclusionThresholdMix.view, nullptr);
+
+    ctx->bindResourceView(DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT,
+                           rtOutput.getPreviousPrimaryWorldPositionWorldTriangleNormal().view(Resources::AccessType::Read,
+                                                                                              rtOutput.getPreviousPrimaryWorldPositionWorldTriangleNormal().matchesWriteFrameIdx(frameIdx - 1)), nullptr);
 
     // Inputs / Outputs
 
@@ -1315,7 +1327,6 @@ namespace dxvk {
 
     // Outputs
 
-    const uint32_t frameIdx = ctx->getDevice()->getCurrentFrameId();
     VkDeviceSize statisticsBufferOffset = (frameIdx % kMaxFramesInFlight) * sizeof(m_outputStatistics);
     ctx->bindResourceBuffer(DEBUG_VIEW_BINDING_STATISTICS_BUFFER_OUTPUT, DxvkBufferSlice(m_statisticsBuffer, statisticsBufferOffset, m_statisticsBuffer->info().size));
 
@@ -1660,5 +1671,17 @@ namespace dxvk {
       static_cast<CompositeDebugView>(m_composite.compositeViewIdx()) != CompositeDebugView::Disabled ||
       m_showCachedImage || m_cacheCurrentImage ||
       RtxOptions::useDenoiserReferenceMode();
+  }
+
+  void DebugView::maxValueOnChange() {
+    // If the max value is negative, we want the min value to be further away from 0.
+    const float factor = maxValue() > 0 ? 0.99999f : 1.00001f;
+    minValueObject().setMaxValue(maxValue() * factor);
+  }
+
+  void DebugView::minValueOnChange() {
+    // If the min value is negative, we want the max value to be closer to 0.
+    const float factor = minValue() > 0 ? 1.00001f : 0.99999f;
+    maxValueObject().setMinValue(minValue() * factor);
   }
 } // namespace dxvk

@@ -126,7 +126,8 @@ namespace dxvk {
     , m_geometryFlags(src.m_geometryFlags)
     , m_firstBillboard(src.m_firstBillboard)
     , m_billboardCount(src.m_billboardCount)
-    , m_categoryFlags(src.m_categoryFlags) {
+    , m_categoryFlags(src.m_categoryFlags)
+    , m_primInstanceOwner(src.m_primInstanceOwner) {
     // Members for which state carry over is intentionally skipped
     /*
        m_isMarkedForGC
@@ -149,7 +150,7 @@ namespace dxvk {
   namespace {
     template<int RtInstanceSize> struct CheckRtInstanceSize {
       // The second line of the build error should contain the new size of RtInstance in the template argument, i.e. `dxvk::CheckRtInstanceSize<newSize>`
-      static_assert(RtInstanceSize == 688, "RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
+      static_assert(RtInstanceSize == 704, "RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
     };
     CheckRtInstanceSize<sizeof(RtInstance)> _rtInstanceSizeTest;
   }
@@ -208,6 +209,16 @@ namespace dxvk {
     surface.normalObjectToWorld = transpose(inverse(Matrix3(surface.objectToWorld)));
     surface.prevObjectToWorld = oldToNew * surface.prevObjectToWorld;
     onTransformChanged();
+
+    if (m_primInstanceOwner.isRoot(this)) {
+      // this is the root of a replacement - need to update the transform history for all the instances in the replacement.
+      for (size_t i = 0; i < m_primInstanceOwner.getReplacementInstance()->prims.size(); i++) {
+        RtInstance* instance = m_primInstanceOwner.getReplacementInstance()->prims[i].getInstance();
+        if (instance != nullptr && instance != this) {
+          instance->teleportWithHistory(oldToNew);
+        }
+      }
+    }
   }
   
   bool RtInstance::move(const Matrix4& objectToWorld) {
@@ -306,6 +317,133 @@ namespace dxvk {
     return m_vkInstance.mask & OBJECT_MASK_VIEWMODEL_VIRTUAL;
   }
 
+  void RtInstance::printDebugInfo() const {
+#ifdef REMIX_DEVELOPMENT
+    Logger::warn(str::format(
+      "=== RtInstance Debug Info ===\n",
+      "ID: ", m_id, "\n",
+      "Vector Index: ", m_instanceVectorId, "\n",
+      "Frame Created: ", m_frameCreated, "\n",
+      "Frame Last Updated: ", m_frameLastUpdated, "\n",
+      "Frame Age: ", getFrameAge(), "\n",
+      "\n",
+      "=== Transform Info ===\n",
+      "World Position: (", getWorldPosition().x, ", ", getWorldPosition().y, ", ", getWorldPosition().z, ")\n",
+      "Transform Matrix:\n",
+      "  [", getTransform()[0][0], ", ", getTransform()[0][1], ", ", getTransform()[0][2], ", ", getTransform()[0][3], "]\n",
+      "  [", getTransform()[1][0], ", ", getTransform()[1][1], ", ", getTransform()[1][2], ", ", getTransform()[1][3], "]\n",
+      "  [", getTransform()[2][0], ", ", getTransform()[2][1], ", ", getTransform()[2][2], ", ", getTransform()[2][3], "]\n",
+      "  [", getTransform()[3][0], ", ", getTransform()[3][1], ", ", getTransform()[3][2], ", ", getTransform()[3][3], "]\n",
+      "Previous World Position: (", getPrevWorldPosition().x, ", ", getPrevWorldPosition().y, ", ", getPrevWorldPosition().z, ")\n",
+      "\n",
+      "=== BLAS Info ===\n",
+      "Linked BLAS: ", m_linkedBlas ? "Valid" : "Null"));
+    
+    if (m_linkedBlas) {
+      Logger::warn("=== BLAS Entry Debug Info ===");
+      m_linkedBlas->printDebugInfo("(from RtInstance)");
+      Logger::warn("=== End BLAS Entry Debug Info ===");
+      
+      // Print DrawCallState info
+      Logger::warn("=== DrawCallState Debug Info ===");
+      m_linkedBlas->input.printDebugInfo("(from RtInstance)");
+      Logger::warn("=== End DrawCallState Debug Info ===");
+    }
+    
+    // Print RtSurface info
+    Logger::warn("=== RtSurface Debug Info ===");
+    surface.printDebugInfo("(from RtInstance)");
+    Logger::warn("=== End RtSurface Debug Info ===");
+    
+    Logger::warn(str::format(
+      "=== Hash Info ===\n",
+      "Material Hash: 0x", std::hex, m_materialHash, std::dec, "\n",
+      "Material Data Hash: 0x", std::hex, m_materialDataHash, std::dec, "\n",
+      "Texcoord Hash: 0x", std::hex, m_texcoordHash, std::dec, "\n",
+      "Index Hash: 0x", std::hex, m_indexHash, std::dec, "\n",
+      "Spatial Cache Hash: 0x", std::hex, m_spatialCacheHash, std::dec, "\n",
+      "\n",
+      "=== Vulkan Instance Info ===\n",
+      "VK Instance Mask: ", m_vkInstance.mask, "\n",
+      "VK Instance Flags: ", m_vkInstance.flags, "\n",
+      "VK Instance Custom Index: ", m_vkInstance.instanceCustomIndex, "\n",
+      "VK Instance SBT Record Offset: ", m_vkInstance.instanceShaderBindingTableRecordOffset, "\n",
+      "\n",
+      "=== Material Info ===\n",
+      "Material Type: ", static_cast<int>(m_materialType), "\n",
+      "Albedo Opacity Texture Index: ", m_albedoOpacityTextureIndex, "\n",
+      "Sampler Index: ", m_samplerIndex, "\n",
+      "Secondary Opacity Texture Index: ", m_secondaryOpacityTextureIndex, "\n",
+      "Secondary Sampler Index: ", m_secondarySamplerIndex, "\n",
+      "\n",
+      "=== Surface Info ===\n",
+      "Surface Index: ", m_surfaceIndex, "\n",
+      "Previous Surface Index: ", m_previousSurfaceIndex, "\n",
+      "\n",
+      "=== Billboard Info ===\n",
+      "First Billboard Index: ", m_firstBillboard, "\n",
+      "Billboard Count: ", m_billboardCount, "\n",
+      "\n",
+      "=== Geometry Info ===\n",
+      "Geometry Flags: ", m_geometryFlags, "\n",
+      "\n",
+      "=== Boolean Flags ===\n",
+      "Is Hidden: ", m_isHidden ? "true" : "false", "\n",
+      "Is Player Model: ", m_isPlayerModel ? "true" : "false", "\n",
+      "Is World Space UI: ", m_isWorldSpaceUI ? "true" : "false", "\n",
+      "Is Unordered: ", m_isUnordered ? "true" : "false", "\n",
+      "Is Object To World Mirrored: ", m_isObjectToWorldMirrored ? "true" : "false", "\n",
+      "Is Created By Renderer: ", m_isCreatedByRenderer ? "true" : "false", "\n",
+      "Is Animated: ", m_isAnimated ? "true" : "false", "\n",
+      "Is Front Face Flipped: ", isFrontFaceFlipped ? "true" : "false", "\n",
+      "\n",
+      "=== Garbage Collection Flags ===\n",
+      "Is Marked For GC: ", m_isMarkedForGC ? "true" : "false", "\n",
+      "Is Unlinked For GC: ", m_isUnlinkedForGC ? "true" : "false", "\n",
+      "Is Inside Frustum: ", m_isInsideFrustum ? "true" : "false", "\n",
+      "\n",
+      "=== View Model Flags ===\n",
+      "Is View Model: ", isViewModel() ? "true" : "false", "\n",
+      "Is View Model Non Reference: ", isViewModelNonReference() ? "true" : "false", "\n",
+      "Is View Model Reference: ", isViewModelReference() ? "true" : "false", "\n",
+      "Is View Model Virtual: ", isViewModelVirtual() ? "true" : "false", "\n",
+      "\n",
+      "=== Category Info ===\n",
+      "Category Flags: ", m_categoryFlags.raw(), "\n",
+      "\n",
+      "=== Camera Types ===\n",
+      "Seen Camera Types Count: ", m_seenCameraTypes.size()));
+    
+    for (size_t i = 0; i < m_seenCameraTypes.size(); ++i) {
+      Logger::warn(str::format("  Camera Type ", i, ": ", static_cast<int>(m_seenCameraTypes[i])));
+    }
+    
+    Logger::warn(str::format(
+      "\n=== Billboard Indices ===\n",
+      "Billboard Indices Count: ", billboardIndices.size()));
+    
+    for (size_t i = 0; i < std::min(billboardIndices.size(), size_t(5)); ++i) {
+      Logger::warn(str::format("  Billboard Index ", i, ": ", billboardIndices[i]));
+    }
+    if (billboardIndices.size() > 5) {
+      Logger::warn(str::format("  ... and ", billboardIndices.size() - 5, " more"));
+    }
+    
+    Logger::warn(str::format(
+      "\n=== Index Offsets ===\n",
+      "Index Offsets Count: ", indexOffsets.size()));
+    
+    for (size_t i = 0; i < std::min(indexOffsets.size(), size_t(5)); ++i) {
+      Logger::warn(str::format("  Index Offset ", i, ": ", indexOffsets[i]));
+    }
+    if (indexOffsets.size() > 5) {
+      Logger::warn(str::format("  ... and ", indexOffsets.size() - 5, " more"));
+    }
+    
+    Logger::warn("=== End RtInstance Debug Info ===");
+#endif
+}
+
   InstanceManager::InstanceManager(DxvkDevice* device, ResourceCache* pResourceCache)
     : CommonDeviceObject(device)
     , m_pResourceCache(pResourceCache) {
@@ -346,13 +484,7 @@ namespace dxvk {
     // This is a big hammer but it's fine, it's a debugging feature
     const bool isViewModelEnabled = RtxOptions::ViewModel::enable();
     if (isViewModelEnabled != m_previousViewModelState) {
-      for (auto* instance : m_instances) {
-        removeInstance(instance);
-        delete instance;
-      }
-      m_instances.clear();
-      m_viewModelCandidates.clear();
-      m_playerModelInstances.clear();
+      clear();
       m_previousViewModelState = isViewModelEnabled;
     }
 
@@ -401,14 +533,19 @@ namespace dxvk {
 
   RtInstance* InstanceManager::processSceneObject(
     const CameraManager& cameraManager, const RayPortalManager& rayPortalManager,
-    BlasEntry& blas, const DrawCallState& drawCall, const MaterialData& materialData, const RtSurfaceMaterial& material) {
+    BlasEntry& blas, const DrawCallState& drawCall, const MaterialData& materialData, const RtSurfaceMaterial& material, RtInstance* existingInstance) {
 
     // If the RtInstance represents multiple instances, use the full transform of the first copy for the spatial map.
     // this prevents a bad de-duplication when the same replacement asset is used in multiple GeomPointInstancer prims.
     Matrix4 firstInstanceObjectToWorld = drawCall.getTransformData().calcFirstInstanceObjectToWorld();
 
+    // If we already know which instance to use, just use that.
+    RtInstance* currentInstance = existingInstance;
+
     // Search for an existing instance matching our input
-    RtInstance* currentInstance = findSimilarInstance(blas, material, firstInstanceObjectToWorld, drawCall.cameraType, rayPortalManager);
+    if (currentInstance == nullptr) {
+      currentInstance = findSimilarInstance(blas, material, firstInstanceObjectToWorld, drawCall.cameraType, rayPortalManager);
+    }
 
     if (currentInstance == nullptr) {
       // No existing match - so need to create one

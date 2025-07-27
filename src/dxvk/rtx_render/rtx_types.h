@@ -41,8 +41,10 @@ namespace dxvk
 {
 class RtCamera;
 class RtInstance;
+struct RtLight;
 struct D3D9FixedFunctionVS;
 struct D3D9FixedFunctionPS;
+struct ReplacementInstance;
 
 using RasterBuffer = GeometryBuffer<Raster>;
 using RaytraceBuffer = GeometryBuffer<Raytrace>;
@@ -50,6 +52,88 @@ using RaytraceBuffer = GeometryBuffer<Raytrace>;
 // DLFG async compute overlap: max of 2 frames in flight
 // (set to 1 to serialize graphics and async compute queues)
 constexpr uint32_t kDLFGMaxGPUFramesInFlight = 2;
+
+// A container for the runtime instance that maps to a prim in a replacement heirarchy.
+class PrimInstance {
+public:
+  enum class Type : uint8_t {
+    Instance,
+    Light,
+    None
+  };
+  // set to 0 because the Id is based on a pointer value, so the id of an empty Entity is nullptr.
+  static constexpr uint64_t kEmptyId = 0;
+
+  // Use `Entity()` to create a nullptr Entity.
+  PrimInstance() {}
+
+  // Default copy/move/destructors are fine - this just contains typed weak pointers.
+  PrimInstance(const PrimInstance&) = default;
+  PrimInstance(PrimInstance&&) noexcept = default;
+  PrimInstance& operator=(const PrimInstance&) = default;
+  PrimInstance& operator=(PrimInstance&&) noexcept = default;
+  ~PrimInstance() = default;
+
+  // Instance constructor, getter
+  explicit PrimInstance(RtInstance* instance);
+  RtInstance* getInstance() const;
+
+  // Light constructor, getter
+  explicit PrimInstance(RtLight* light);
+  RtLight* getLight() const;
+
+  // Untyped utilities.
+  PrimInstance(void* owner, Type type);
+  Type getType() const;
+  void* getUntyped() const;
+  void setReplacementInstance(ReplacementInstance* replacementInstance, size_t replacementIndex);
+
+private:
+  union EntityPtr {
+    void* untyped = nullptr;
+    RtInstance* instance;
+    RtLight* light;
+  } m_ptr;
+  Type m_type = Type::None;
+};
+std::ostream& operator << (std::ostream& os, PrimInstance::Type type);
+
+struct ReplacementInstance {
+  // Lifecycle note:
+  // Currently, ReplacementInstances are created the first time a given replaced draw call
+  // is rendered.  A single entity (a light or instance) is designated as the 'root'.
+  // When that entity is destroyed, the ReplacementInstance is destroyed.
+  // Unfortunately, lights and instances aren't always destroyed at the same time, or
+  // in the same order they were created.  To accomodate that, when non-root entities
+  // are deleted, they remove themselves from the `entities` vector.  Similarly, when
+  // the root is deleted, all entities remaining in the vector will have their pointer
+  // to the ReplacementInstance set to nullptr.
+  // TODO(REMIX-4226): In the future, draw calls should be tracked and destroyed based
+  // on the pre-replacement draw call, so that everything in a ReplacementInstance gets
+  // destroyed at the same time.  When that change is made, the original tracked draw
+  // call should own this ReplacementInstance.
+
+  static constexpr uint32_t kInvalidReplacementIndex = UINT32_MAX;
+
+  std::vector<PrimInstance> prims;
+  PrimInstance root;
+
+  ~ReplacementInstance();
+
+  void setup(PrimInstance newRoot, size_t numPrims);
+};
+
+// Wrapper utility to share the code for handling replacementInstance ownership.
+class PrimInstanceOwner {
+public:
+  bool isRoot(void* owner) const;
+  void setReplacementInstance(ReplacementInstance* replacementInstance, size_t replacementIndex, void* owner, PrimInstance::Type type);
+  ReplacementInstance* getReplacementInstance() const { return m_replacementInstance; }
+  size_t getReplacementIndex() const { return m_replacementIndex; }
+private:
+  ReplacementInstance* m_replacementInstance = nullptr;
+  size_t m_replacementIndex = ReplacementInstance::kInvalidReplacementIndex;
+};
 
 // NOTE: Needed to move this here in order to avoid
 // circular includes.  This probably requires a 
@@ -148,6 +232,16 @@ struct AxisAlignedBoundingBox {
 
   const XXH64_hash_t calculateHash() const {
     return XXH3_64bits(this, sizeof(AxisAlignedBoundingBox));
+  }
+
+  float getVolume(const Matrix4& transform, float minimumThickness = 0.001f) const {
+    const Vector3 minPosWorld = (transform * dxvk::Vector4(minPos, 1.0f)).xyz();
+    const Vector3 maxPosWorld = (transform * dxvk::Vector4(maxPos, 1.0f)).xyz();
+
+    // Assume some minimum thickness to work around the possibility of infinitely thin geometry
+    const Vector3 size = max(Vector3(minimumThickness), abs(maxPosWorld - minPosWorld));
+
+    return size.x * size.y * size.z;
   }
 };
 
@@ -437,6 +531,7 @@ enum class InstanceCategories : uint32_t {
   ThirdPersonPlayerBody,
   IgnoreBakedLighting,
   IgnoreTransparencyLayer,
+  ParticleEmitter,
 
   Count,
 };
@@ -506,7 +601,6 @@ struct DrawCallState {
   float maxZ = 1.0f;
 
   bool zWriteEnable = false;
-  bool alphaBlendEnable = false;
   bool zEnable = false;
 
   uint32_t drawCallID = 0;
@@ -522,12 +616,74 @@ struct DrawCallState {
   template<typename... InstanceCategories>
   bool testCategoryFlags(InstanceCategories... cat) const { return categories.any(cat...); }
 
+  void printDebugInfo(const char* name = "") const {
+#ifdef REMIX_DEVELOPMENT
+    Logger::warn(str::format(
+      "DrawCallState ", name, "\n",
+      "  address: ", this, "\n",
+      "  drawCallID: ", drawCallID, "\n",
+      "  cameraType: ", static_cast<int>(cameraType), "\n",
+      "  usesVertexShader: ", usesVertexShader, "\n",
+      "  usesPixelShader: ", usesPixelShader, "\n",
+      "  stencilEnabled: ", stencilEnabled, "\n",
+      "  zWriteEnable: ", zWriteEnable, "\n",
+      "  zEnable: ", zEnable, "\n",
+      "  minZ: ", minZ, "\n",
+      "  maxZ: ", maxZ, "\n",
+      "  isDrawingToRaytracedRenderTarget: ", isDrawingToRaytracedRenderTarget, "\n",
+      "  isUsingRaytracedRenderTarget: ", isUsingRaytracedRenderTarget, "\n",
+      "  categoryFlags: ", categories.raw(), "\n",
+      "  hasTextureCoordinates: ", hasTextureCoordinates(), "\n",
+      "  materialHash: 0x", std::hex, materialData.getHash(), std::dec));
+    
+    // Print geometry info
+    Logger::warn("=== Geometry Info ===");
+    Logger::warn(str::format(
+      "  vertexCount: ", geometryData.vertexCount, "\n",
+      "  indexCount: ", geometryData.indexCount, "\n",
+      "  numBonesPerVertex: ", geometryData.numBonesPerVertex, "\n",
+      "  topology: ", static_cast<int>(geometryData.topology), "\n",
+      "  cullMode: ", static_cast<int>(geometryData.cullMode), "\n",
+      "  frontFace: ", static_cast<int>(geometryData.frontFace), "\n",
+      "  forceCullBit: ", geometryData.forceCullBit, "\n",
+      "  externalMaterial: ", (geometryData.externalMaterial != nullptr ? "valid" : "null")));
+    
+    // Print transform info
+    Logger::warn("=== Transform Info ===");
+    Logger::warn(str::format(
+      "  enableClipPlane: ", transformData.enableClipPlane, "\n",
+      "  clipPlane: (", transformData.clipPlane.x, ", ", transformData.clipPlane.y, ", ", transformData.clipPlane.z, ", ", transformData.clipPlane.w, ")"));
+    
+    // Print skinning info
+    Logger::warn("=== Skinning Info ===");
+    Logger::warn(str::format(
+      "  numBones: ", skinningData.numBones, "\n",
+      "  numBonesPerVertex: ", skinningData.numBonesPerVertex, "\n",
+      "  minBoneIndex: ", skinningData.minBoneIndex, "\n",
+      "  boneHash: 0x", std::hex, skinningData.boneHash, std::dec));
+    
+    // Print fog info
+    Logger::warn("=== Fog Info ===");
+    Logger::warn(str::format(
+      "  fogMode: ", fogState.mode, "\n",
+      "  fogColor: (", fogState.color.x, ", ", fogState.color.y, ", ", fogState.color.z, ")\n",
+      "  fogScale: ", fogState.scale, "\n",
+      "  fogEnd: ", fogState.end, "\n",
+      "  fogDensity: ", fogState.density));
+    
+    // Print material info
+    Logger::warn("=== Material Info ===");
+    materialData.printDebugInfo("(from DrawCallState)");
+#endif
+  }
+
 private:
   friend class RtxContext;
   friend class SceneManager;
   friend struct D3D9Rtx;
   friend class TerrainBaker;
   friend struct RemixAPIPrivateAccessor;
+  friend class RtxParticleSystemManager;
 
   bool finalizeGeometryHashes();
   void finalizeGeometryBoundingBox();
@@ -642,6 +798,37 @@ struct BlasEntry {
   const InstanceMap& getSpatialMap() const { return m_spatialMap; }
 
   void rebuildSpatialMap();
+
+  void printDebugInfo(const char* name = "") const {
+#ifdef REMIX_DEVELOPMENT
+    Logger::warn(str::format(
+      "BlasEntry ", name, "\n",
+      "  address: ", this, "\n",
+      "  frameCreated: ", frameCreated, "\n",
+      "  frameLastTouched: ", frameLastTouched, "\n",
+      "  frameLastUpdated: ", frameLastUpdated, "\n",
+      "  vertexCount: ", modifiedGeometryData.vertexCount, "\n",
+      "  indexCount: ", modifiedGeometryData.indexCount, "\n",
+      "  linkedInstances: ", m_linkedInstances.size(), "\n",
+      "  cachedMaterials: ", m_materials.size(), "\n",
+      "  buildGeometries: ", buildGeometries.size(), "\n",
+      "  buildRanges: ", buildRanges.size(), "\n",
+      "  dynamicBlas: ", (dynamicBlas != nullptr ? "valid" : "null")));
+    
+    // Print main material info
+    Logger::warn("=== Main Material Info ===");
+    input.getMaterialData().printDebugInfo("(main)");
+    
+    // Print cached materials info
+    if (!m_materials.empty()) {
+      Logger::warn("=== Cached Materials Info ===");
+      for (const auto& [hash, material] : m_materials) {
+        Logger::warn(str::format("Cached Material Hash: 0x", std::hex, hash, std::dec));
+        material.printDebugInfo("(cached)");
+      }
+    }
+#endif
+  }
 
 private:
   std::vector<RtInstance*> m_linkedInstances;

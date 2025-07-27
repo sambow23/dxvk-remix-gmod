@@ -50,6 +50,7 @@ public:
   RtInstance(const RtInstance& src, uint64_t id, uint32_t instanceVectorId);
 
   uint64_t getId() const { return m_id; }
+  uint32_t getVectorIdx() const { return m_instanceVectorId; }
   const VkAccelerationStructureInstanceKHR& getVkInstance() const { return m_vkInstance; }
   VkAccelerationStructureInstanceKHR& getVkInstance() { return m_vkInstance; }
   bool isObjectToWorldMirrored() const { return m_isObjectToWorldMirrored; }
@@ -133,7 +134,7 @@ public:
   OpacityMicromapInstanceData& getOpacityMicromapInstanceData() { return m_opacityMicromapInstanceData; }
   const OpacityMicromapInstanceData& getOpacityMicromapInstanceData() const { return m_opacityMicromapInstanceData; }
 
-  uint32_t getFirstBillboardIndex() const { return m_firstBillboard; }
+uint32_t getFirstBillboardIndex() const { return m_firstBillboard; }
   uint32_t getBillboardCount() const { return m_billboardCount; }
 
   VkGeometryFlagsKHR getGeometryFlags() const { return m_geometryFlags; }
@@ -148,6 +149,11 @@ public:
   bool isViewModelVirtual() const;
 
   bool isUnlinkedForGC() const { return m_isUnlinkedForGC; }
+
+  PrimInstanceOwner& getPrimInstanceOwner() { return m_primInstanceOwner; }
+  
+  void printDebugInfo() const;
+
 private:
 
   Matrix4 calcFirstInstanceObjectToWorld() {
@@ -209,6 +215,10 @@ private:
   CategoryFlags m_categoryFlags;
 
   XXH64_hash_t m_spatialCacheHash = 0;
+
+  // This can be used to access all lights and instances that originate from the same draw call.
+  // Left as nullptr if the draw call does not have replacement data.
+  PrimInstanceOwner m_primInstanceOwner;
 
 public:
   bool isFrontFaceFlipped = false;
@@ -286,7 +296,7 @@ public:
   // Takes a scene object entry (blas + drawcall) and generates/finds the instance data internally
   RtInstance* processSceneObject(
     const CameraManager& cameraManager, const RayPortalManager& rayPortalManager,
-    BlasEntry& blas, const DrawCallState& drawCall, const MaterialData& materialData, const RtSurfaceMaterial& material);
+    BlasEntry& blas, const DrawCallState& drawCall, const MaterialData& materialData, const RtSurfaceMaterial& material, RtInstance* existingInstance);
 
   // Creates a copy of a reference instance and adds it to the instance pool
   // Temporary single frame instances generated every frame should disable valid id generation to avoid overflowing it

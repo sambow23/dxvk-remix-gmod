@@ -210,7 +210,7 @@ struct RaytraceArgs {
   uint32_t clearColorPicking;
 
   uint enableDLSSRR;
-  bool setLogValueForDisocclusionMaskForDLSSRR;
+  uint setLogValueForDisocclusionMaskForDLSSRR;
 
   // NOTE: Variables need to be in groups of 4x32 bits above this comment.
 
@@ -381,11 +381,12 @@ struct RaytraceArgs {
   uint allowNrcTraining;
 
   float vertexColorStrength;
-  bool vertexColorIsBakedLighting;
+  uint vertexColorIsBakedLighting;
 
   // XeSS motion vector mode control
   uint enableXeSSJitteredMotionVectors;
   uint3 pad_xess;
 
   // NOTE: Add structs to the top section of RaytraceArgs, not the bottom.
+  // NOTE: bool does not work in debug builds, use uint instead.
 };
