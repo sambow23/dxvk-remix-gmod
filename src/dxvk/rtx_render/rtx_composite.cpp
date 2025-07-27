@@ -493,6 +493,7 @@ namespace dxvk {
     compositeArgs.hdrUIBrightness = hdrUIBrightness();
     compositeArgs.detectUITextures = detectUITextures();
     compositeArgs.separateUIProcessing = separateUIProcessing() && hdrEnabled;
+    compositeArgs.hdrFormat = static_cast<uint32_t>(m_device->getCommon()->metaToneMapping().hdrFormat());
 
     RayPortalManager::SceneData portalData = sceneManager.getRayPortalManager().getRayPortalInfoSceneData();
     compositeArgs.numActiveRayPortals = portalData.numActiveRayPortals;

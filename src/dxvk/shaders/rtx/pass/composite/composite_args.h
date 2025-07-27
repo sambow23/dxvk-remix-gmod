@@ -118,4 +118,5 @@ struct CompositeArgs {
   float hdrUIBrightness;
   uint detectUITextures;
   uint separateUIProcessing;
+  uint hdrFormat;  // 0=Linear, 1=PQ, 2=HLG
 };

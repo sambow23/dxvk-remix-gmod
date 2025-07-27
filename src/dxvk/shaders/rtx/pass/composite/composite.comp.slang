@@ -575,6 +575,46 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
 
   finalOutput = accumulate(thread_id.xy, finalOutput, cb.accumulationArgs, true, AccumulatedFinalOutput);
   
+  // Apply HDR UI brightness adjustment if HDR is enabled and UI processing is configured
+  if (cb.enableHDR != 0 && cb.detectUITextures != 0 && cb.separateUIProcessing != 0) {
+    // Simple heuristic to detect UI-like content:
+    // UI elements typically have lower saturation and are often in screen-aligned orthographic projections
+    // Since we don't have direct access to projection matrices here, we use color characteristics
+    
+    float3 color = finalOutput.rgb;
+    float luminance = dot(color, float3(0.299, 0.587, 0.114)); // Rec.709 luminance weights
+    
+    // Detect low-saturation content (likely UI elements)
+    float maxChannel = max(color.r, max(color.g, color.b));
+    float minChannel = min(color.r, min(color.g, color.b));
+    float saturation = (maxChannel > 0.001) ? (maxChannel - minChannel) / maxChannel : 0.0;
+    
+    // UI detection heuristic: low saturation, moderate luminance
+    float uiLikelihood = 0.0;
+    if (saturation < 0.3 && luminance > 0.1 && luminance < 0.9) {
+      uiLikelihood = 1.0 - (saturation / 0.3); // Higher likelihood for lower saturation
+    }
+    
+    // Apply UI brightness adjustment with smooth blending
+    if (uiLikelihood > 0.1) {
+      // Scale UI brightness - this helps prevent over-bright UI in HDR
+      float uiBrightnessFactor = cb.hdrUIBrightness;
+      
+             // For PQ format (HDR format 1), apply more conservative scaling to prevent colorization
+       // PQ has a very specific curve that can introduce color shifts with aggressive scaling
+       if (cb.hdrFormat == 1) { // PQ/HDR10 format
+         uiBrightnessFactor = lerp(1.0, uiBrightnessFactor, 0.7); // Reduce the effect for PQ
+       }
+      
+      // Blend between original and adjusted brightness based on UI likelihood
+      float adjustedBrightness = lerp(1.0, uiBrightnessFactor, uiLikelihood);
+      finalOutput.rgb *= adjustedBrightness;
+      
+      // Clamp to prevent out-of-range values that could cause artifacts
+      finalOutput.rgb = clamp(finalOutput.rgb, float3(0.0), float3(10.0)); // Allow HDR range but prevent extremes
+    }
+  }
+  
   imageStore(FinalOutput, thread_id.xy, finalOutput);
 
   postCompositeDebugView(thread_id, geometryFlags, particleLayerOutput);

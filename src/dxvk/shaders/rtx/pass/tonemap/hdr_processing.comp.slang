@@ -283,18 +283,56 @@ float3 processHDR(float3 inputColor, uint2 pixelPosition)
   
   // Note: Pre-tone mapping dithering removed - now using high-quality blue noise dithering after processing
   
-  // Apply HDR tone mapping
-  color = hdrToneMapping(color, cb.hdrMaxLuminance, cb.hdrPaperWhiteLuminance);
+  // Detect and handle UI elements before HDR tone mapping
+  // UI elements should be processed more conservatively to maintain their appearance
+  bool isLikelyUI = false;
+  float uiBrightnessFactor = 1.0f;
+  
+  if (cb.uiBrightness != 1.0f) {
+    // Simple heuristic to detect UI-like content based on color characteristics
+    float luminance = dot(color, float3(0.299, 0.587, 0.114));
+    float maxChannel = max(color.r, max(color.g, color.b));
+    float minChannel = min(color.r, min(color.g, color.b));
+    float saturation = (maxChannel > 0.001) ? (maxChannel - minChannel) / maxChannel : 0.0;
+    
+    // UI detection: low saturation, moderate luminance range
+    if (saturation < 0.2 && luminance > 0.05 && luminance < 0.95) {
+      isLikelyUI = true;
+      uiBrightnessFactor = cb.uiBrightness;
+      
+      // For PQ format, be more conservative with UI brightness to prevent colorization
+      if (cb.hdrFormat == 1) { // PQ/HDR10
+        uiBrightnessFactor = lerp(1.0, uiBrightnessFactor, 0.5);
+      }
+      
+      // Apply UI brightness adjustment before tone mapping
+      color = adjustUIBrightness(color, uiBrightnessFactor);
+    }
+  }
+  
+  // Apply HDR tone mapping (reduced intensity for UI elements)
+  if (isLikelyUI && cb.hdrFormat == 1) {
+    // For likely UI elements in PQ mode, use gentler tone mapping
+    // Apply minimal tone mapping to preserve UI appearance
+    color = hdrToneMapping(color, cb.hdrMaxLuminance * 0.5, cb.hdrPaperWhiteLuminance);
+  } else {
+    // Normal HDR tone mapping for scene content
+    color = hdrToneMapping(color, cb.hdrMaxLuminance, cb.hdrPaperWhiteLuminance);
+  }
   
   // Apply HDR-specific brightness and exposure adjustments
-  // Apply exposure bias (in EV stops)
-  color *= exp2(cb.hdrExposureBias);
-  
-  // Apply brightness multiplier
-  color *= cb.hdrBrightness;
-  
-  // Apply shadow/midtone/highlight adjustments
-  color = applyShadowMidtoneHighlight(color, cb.hdrShadows, cb.hdrMidtones, cb.hdrHighlights);
+  // For UI elements, reduce the intensity of HDR adjustments to prevent colorization
+  if (isLikelyUI && cb.hdrFormat == 1) { // PQ format is most sensitive to over-processing
+    // Apply gentler adjustments for UI elements
+    color *= exp2(cb.hdrExposureBias * 0.5);
+    color *= lerp(1.0, cb.hdrBrightness, 0.3);
+    // Skip shadow/midtone/highlight adjustments for UI to maintain neutrality
+  } else {
+    // Normal HDR adjustments for scene content
+    color *= exp2(cb.hdrExposureBias);
+    color *= cb.hdrBrightness;
+    color = applyShadowMidtoneHighlight(color, cb.hdrShadows, cb.hdrMidtones, cb.hdrHighlights);
+  }
   
   // Clamp to valid HDR range after adjustments
   color = clamp(color, float3(cb.hdrMinLuminance), float3(cb.hdrMaxLuminance));
@@ -302,7 +340,18 @@ float3 processHDR(float3 inputColor, uint2 pixelPosition)
   // Enhanced color space conversion with HDR format support
   bool usePQ = (cb.hdrFormat == 1);  // PQ/HDR10
   bool useHLG = (cb.hdrFormat == 2); // HLG
-  color = convertColorSpace(color, usePQ, useHLG);
+  
+  // For UI elements in PQ mode, use more conservative color space conversion
+  if (isLikelyUI && usePQ) {
+    // Reduce the intensity of Rec.2020 conversion for UI elements
+    // This helps prevent color shifts in neutral UI elements
+    float3 originalColor = color;
+    color = convertColorSpace(color, usePQ, useHLG);
+    // Blend back some of the original color to reduce color space artifacts
+    color = lerp(color, originalColor * 0.8, 0.3);
+  } else {
+    color = convertColorSpace(color, usePQ, useHLG);
+  }
   
   // Apply high-quality blue noise dithering AFTER color space conversion
   // This uses the same blue noise infrastructure as SDR for consistent quality
