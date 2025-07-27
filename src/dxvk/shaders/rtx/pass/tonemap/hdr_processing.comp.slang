@@ -27,13 +27,13 @@
 
 // HDR Processing binding indices are now defined in tonemapping.h
 
-layout(uint, binding = HDR_PROCESSING_BLUE_NOISE_TEXTURE)
+layout(binding = HDR_PROCESSING_BLUE_NOISE_TEXTURE)
 Texture2DArray BlueNoise;
 
-layout(rgba32f, binding = HDR_PROCESSING_INPUT_BUFFER)
+layout(binding = HDR_PROCESSING_INPUT_BUFFER)
 RWTexture2D<float4> InColorBuffer;
 
-layout(rgba32f, binding = HDR_PROCESSING_OUTPUT_BUFFER)
+layout(binding = HDR_PROCESSING_OUTPUT_BUFFER)
 RWTexture2D<float4> OutColorBuffer;
 
 layout(binding = HDR_PROCESSING_EXPOSURE_INPUT)

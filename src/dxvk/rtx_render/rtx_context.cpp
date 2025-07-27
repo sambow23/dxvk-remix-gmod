@@ -1672,7 +1672,7 @@ namespace dxvk {
     DxvkAutoExposure& autoExposure = m_common->metaAutoExposure();    
     autoExposure.dispatch(this, 
       getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
-      rtOutput, adjustedFrameTimeMilliseconds, performSRGBConversion);
+      rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion);
 
     // Check if HDR is enabled
     const bool hdrEnabled = isHDREnabled();
@@ -1693,7 +1693,7 @@ namespace dxvk {
         autoExposure.getExposureTexture().view,
         rtOutput.m_finalOutput.resource(Resources::AccessType::Read),
         rtOutput.m_finalOutput.resource(Resources::AccessType::Write),
-        adjustedFrameTimeMilliseconds,
+        GlobalTime::get().deltaTimeMs(),
         autoExposure.enabled());
     } else {
       // SDR Mode: Apply the selected tonemapping mode
