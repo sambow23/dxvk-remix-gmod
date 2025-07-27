@@ -20,6 +20,10 @@
   DEALINGS IN THE SOFTWARE.
 #>
 
+Remove-Item -Path .\nv-private
+Remove-Item -Path .\tests\rtx\dxvk_rt_testing
+
+
 .   ".\build_common.ps1"
 
 $BuildFlavours = @("release")
