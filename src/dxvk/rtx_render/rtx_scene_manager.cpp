@@ -55,6 +55,7 @@ namespace dxvk {
     , m_instanceManager(device, this)
     , m_accelManager(device)
     , m_lightManager(device)
+    , m_graphManager()
     , m_rayPortalManager(device, this)
     , m_drawCallCache(device)
     , m_bindlessResourceManager(device)
@@ -151,6 +152,7 @@ namespace dxvk {
     
     m_instanceManager.clear();
     m_lightManager.clear();
+    m_graphManager.clear();
     m_rayPortalManager.clear();
     m_drawCallCache.clear();
     textureManager.clear();
@@ -478,6 +480,10 @@ namespace dxvk {
 
     m_thinOpaqueMaterialExist = false;
     m_sssMaterialExist = false;
+
+    // execute graph updates after all garbage collection is complete (to avoid updating graphs that will just be deleted)
+    // RtxOptions will still be pending, so any changes to them will apply next frame.
+    m_graphManager.update(ctx);
   }
 
   void SceneManager::onFrameEndNoRTX() {
@@ -792,6 +798,28 @@ namespace dxvk {
         }
       }
     }
+
+    // Create graphs associated with this replacement, if they haven't already been created.
+    // Graphs are cleaned up when the replacementInstance is destroyed, which happens when the 
+    // root instance is destroyed.
+    if (isFirstFrame) {
+      for (size_t i = 0; i < pReplacements->size(); i++) {
+        auto&& replacement = (*pReplacements)[i];
+        if (replacement.type == AssetReplacement::eGraph) {
+          if (!replacement.graphState.has_value()) {
+            Logger::err(str::format(
+                "Graph prims missing graph state in mesh replacement.  mesh hash: ",
+                std::hex, input->getHash(RtxOptions::geometryAssetHashRule())
+            ));
+            break;
+          }
+          GraphInstance* graphInstance = m_graphManager.addInstance(ctx, replacement.graphState.value(), replacementInstance);
+          if (graphInstance) {
+            graphInstance->getPrimInstanceOwner().setReplacementInstance(replacementInstance, i, graphInstance, PrimInstance::Type::Graph);
+          }
+        }
+      }
+    }
   }
 
   void SceneManager::clearFogState() {
@@ -911,7 +939,6 @@ namespace dxvk {
     if (pBlas != nullptr && !instance.isUnlinkedForGC()) {
       pBlas->unlinkInstance(&instance);
     }
-    instance.getPrimInstanceOwner().setReplacementInstance(nullptr, ReplacementInstance::kInvalidReplacementIndex, &instance, PrimInstance::Type::Instance);
   }
 
   // Helper to populate the texture cache with this resource (and patch sampler if required for texture)
@@ -1491,6 +1518,8 @@ namespace dxvk {
     m_lightManager.dynamicLightMatching();
 
     garbageCollection();
+
+    m_graphManager.applySceneOverrides(ctx);
 
     m_terrainBaker->prepareSceneData(ctx);
 
