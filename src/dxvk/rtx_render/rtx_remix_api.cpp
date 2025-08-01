@@ -324,7 +324,6 @@ namespace {
           src.getWrapModeV()
         } };
       }
-      case MaterialDataType::Legacy:
       default: assert(0); return materialWithoutPreload;
       }
     }
@@ -419,7 +418,7 @@ namespace {
       }
 
       assert(0);
-      return MaterialData { LegacyMaterialData {} };
+      return MaterialData { OpaqueMaterialData {} };
     }
 
     // --
@@ -1316,7 +1315,6 @@ namespace {
         return;
       }
 
-      assert(srcImage.ptr());
       if (srcImage.ptr()) {
         dxvk::RtxContext::blitImageHelper(ctx, srcImage, cDest, VkFilter::VK_FILTER_NEAREST);
       }
