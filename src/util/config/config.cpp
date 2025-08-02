@@ -862,7 +862,7 @@ namespace dxvk {
       { "rtx.postfx.vignetteSoftness",                          "0.1"   },
       { "rtx.enableNearPlaneOverride",                          "True"  },
       { "rtx.nativeMipBias",                                    "0.9"   },
-      { "rtx.upscalingMipBias",                                 "-0.4"  },
+      // { "rtx.upscalingMipBias",                                 "-0.4"  }, // Deprecated: Now calculated automatically
       { "rtx.legacyMaterial.roughnessConstant",                 "0.1"   },
       { "rtx.opacityMicromap.enable",                           "True"  },
       { "rtx.terrain.terrainAsDecalsEnabledIfNoBaker",          "True"  },

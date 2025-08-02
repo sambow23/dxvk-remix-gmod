@@ -326,11 +326,16 @@ namespace dxvk {
     RTX_OPTION("rtx", bool, xessUseOptimizedJitter, true, "Use XeSS-optimized jitter patterns and scaling. When disabled, uses the same jitter as other upscalers.");
     RTX_OPTION("rtx", float, xessAutoExposureJitterDamping, 0.85f, "Reduces jitter intensity when using XeSS internal auto-exposure to improve temporal stability. Lower values = more damping.");
     RTX_OPTION("rtx", bool, xessAutoExposureTemporalOptimization, true, "Enable temporal optimizations when using XeSS internal auto-exposure, including adaptive jitter scaling based on scene brightness changes.");
-    RTX_OPTION("rtx", bool, xessUseJitteredMotionVectors, false, "Include jitter in motion vectors for XeSS instead of passing jitter separately. Can improve temporal stability.");
+    RTX_OPTION("rtx", bool, xessUseJitteredMotionVectors, false, "DEPRECATED: XeSS developer guide states motion vectors should NOT include jitter. This option is ignored.");
     RTX_OPTION("rtx", bool, xessForceInvertedDepth, false, "Force XeSS to treat depth buffer as inverted (1.0 = near, 0.0 = far). Enable if depth-related artifacts occur.");
     RTX_OPTION("rtx", bool, xessForceLDRInput, false, "Force XeSS to treat input color as LDR instead of HDR. Enable if color artifacts occur.");
     RTX_OPTION("rtx", bool, xessForceHighResMotionVectors, false, "Force XeSS to treat motion vectors as high resolution. Enable if motion vector scaling issues occur.");
     RTX_OPTION("rtx", bool, xessEnableMotionVectorDebug, false, "Enable debug logging for XeSS motion vector validation and range checking.");
+    RTX_OPTION("rtx", bool, xessUseRecommendedJitterSequenceLength, true, "Use XeSS 2.1 recommended jitter sequence length calculation based on scaling factor. When disabled, uses the global cameraJitterSequenceLength setting.");
+    RTX_OPTION("rtx", float, xessResponsivePixelMaskClampValue, 0.8f, "Maximum value to clamp responsive pixel mask to. XeSS 2.1 default is 0.8 to prevent aliasing artifacts.");
+    RTX_OPTION("rtx", float, xessExtremeScalingJitterDamping, 0.6f, "Additional jitter damping factor for extreme scaling scenarios (>6x upscaling) to reduce swimming artifacts. Lower values = less jitter.");
+    RTX_OPTION("rtx", bool, xessLogJitterSequenceLength, false, "Log the current jitter sequence length being used for XeSS. Useful for debugging swimming artifacts.");
+    RTX_OPTION("rtx", uint32_t, xessMinJitterSequenceLength, 8, "Minimum jitter sequence length for XeSS, even at low scaling factors.");
     RTX_OPTION_ENV("rtx", GraphicsPreset, graphicsPreset, GraphicsPreset::Auto, "DXVK_GRAPHICS_PRESET_TYPE", "Overall rendering preset, higher presets result in higher image quality, lower presets result in better performance.");
     RTX_OPTION_ENV("rtx", RaytraceModePreset, raytraceModePreset, RaytraceModePreset::Auto, "DXVK_RAYTRACE_MODE_PRESET_TYPE", "");
     RTX_OPTION("rtx", float, emissiveIntensity, 1.0f, "A general scale factor on all emissive intensity values globally. Generally per-material emissive intensities should be used, but this option may be useful for debugging without needing to author materials.");
@@ -862,7 +867,7 @@ namespace dxvk {
                "Specifies a mipmapping level bias to add to all material texture filtering. Stacks with the upscaling mip bias.\n"
                "Mipmaps are determined based on how far away a texture is, using this can bias the desired level in a lower quality direction (positive bias), or a higher quality direction with potentially more aliasing (negative bias).\n"
                "Note that mipmaps are also important for good spatial caching of textures, so too far negative of a mip bias may start to significantly affect performance, therefore changing this value is not recommended");
-    RTX_OPTION("rtx", float, upscalingMipBias, 0.0f,
+    RTX_OPTION("rtx", float, upscalingMipBias, 0.0f, 
                "Specifies a mipmapping level bias to add to all material texture filtering when upscaling (such as DLSS) is used.\n"
                "Mipmaps are determined based on how far away a texture is, using this can bias the desired level in a lower quality direction (positive bias), or a higher quality direction with potentially more aliasing (negative bias).\n"
                "Note that mipmaps are also important for good spatial caching of textures, so too far negative of a mip bias may start to significantly affect performance, therefore changing this value is not recommended");

@@ -1394,7 +1394,8 @@ namespace dxvk {
           // Display DLSS Upscaling Information
 
           const auto currentDLSSProfile = RtxOptions::enableRayReconstruction() ? rayReconstruction.getCurrentProfile() : dlss.getCurrentProfile();
-          uint32_t dlssInputWidth, dlssInputHeight;
+          uint32_t dlssInputWidth;
+        uint32_t dlssInputHeight;
 
           if (RtxOptions::enableRayReconstruction()) {
             rayReconstruction.getInputSize(dlssInputWidth, dlssInputHeight);
@@ -1441,7 +1442,8 @@ namespace dxvk {
 
           // Display XeSS internal resolution
           auto& xess = ctx->getCommonObjects()->metaXeSS();
-          uint32_t inputWidth, inputHeight;
+          uint32_t inputWidth;
+          uint32_t inputHeight;
           xess.getInputSize(inputWidth, inputHeight);
           ImGui::TextWrapped(str::format("Internal Resolution: ", inputWidth, "x", inputHeight).c_str());
 
@@ -3614,7 +3616,8 @@ namespace dxvk {
 
           // Display XeSS internal resolution
           auto& xess = ctx->getCommonObjects()->metaXeSS();
-          uint32_t inputWidth, inputHeight;
+          uint32_t inputWidth;
+          uint32_t inputHeight;
           xess.getInputSize(inputWidth, inputHeight);
           ImGui::TextWrapped(str::format("Internal Resolution: ", inputWidth, "x", inputHeight).c_str());
 
@@ -4356,7 +4359,6 @@ namespace dxvk {
       ImGui::Separator();
       const float kMipBiasRange = 32;
       ImGui::DragFloat("Mip LOD Bias", &RtxOptions::nativeMipBiasObject(), 0.01f, -kMipBiasRange, kMipBiasRange, "%.2f", sliderFlags);
-      ImGui::DragFloat("Upscaling LOD Bias", &RtxOptions::upscalingMipBiasObject(), 0.01f, -kMipBiasRange, kMipBiasRange, "%.2f", sliderFlags);
       ImGui::Separator();
       ImGui::Checkbox("Use Anisotropic Filtering", &RtxOptions::useAnisotropicFilteringObject());
       if (RtxOptions::useAnisotropicFiltering()) {

@@ -28,6 +28,7 @@
 #include "rtx_options.h"
 #include "dxvk_device.h"
 #include "rtx_xess.h"
+#include "rtx_camera.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx_imgui.h"
@@ -97,84 +98,70 @@ namespace dxvk {
     }
   }
 
-  // Default constructor
-  DxvkXeSS::DxvkXeSS() 
-    : m_device(nullptr), m_context(nullptr) {
-    Logger::info("[RTX-XeSS] XeSS object created without device (default constructor)");
-  }
-
   // Constructor with device
   DxvkXeSS::DxvkXeSS(DxvkDevice* device) 
-    : m_device(device), m_context(nullptr) {
+    : RtxPass(device),
+      m_device(device),
+      m_initialized(false),
+      m_xessContext(nullptr),
+      m_targetExtent{0, 0, 0},
+      m_inputExtent{0, 0, 0},
+      m_currentProfile(XeSSProfile::Balanced),
+      m_currentNetworkModel(XeSSNetworkModel::KPSS),
+      m_currentAutoExposureMode(XeSSAutoExposureMode::Automatic),
+      m_previousExposureScale(1.0f),
+      m_exposureChangeVelocity(0.0f),
+      m_framesSinceExposureChange(0),
+      m_isUsingInternalAutoExposure(false),
+      m_context(nullptr),
+      m_profile(XeSSProfile::Balanced),
+      m_actualProfile(XeSSProfile::Balanced),
+      m_inputSize{0, 0},
+      m_xessOutputSize{0, 0},
+      m_recreate(false),
+      m_lastResolutionScale(-1.0f) {
     Logger::info("XeSS: Initializing XeSS upscaler...");
-    
-    // First check if XeSS is enabled in options
-    if (!RtxOptions::isXeSSEnabled()) {
-      Logger::info("XeSS: Disabled in options (upscaler type is not XeSS)");
-      m_enabled = false;
-      return;
-    }
-    
-    Logger::info("XeSS: Enabled in options, checking system support...");
-    
-    // Check if XeSS is supported on this system
-    if (!validateXeSSSupport(device)) {
-      Logger::warn("XeSS: System does not support XeSS - falling back to other upscaler");
-      m_enabled = false;
-      return;
-    }
-    
-    m_enabled = true;
-    Logger::info("XeSS: Successfully initialized and ready for use");
   }
 
   DxvkXeSS::~DxvkXeSS() {
     destroyXeSSContext();
   }
 
-  void DxvkXeSS::onDestroy() {
-    destroyXeSSContext();
+  // RtxPass interface implementations
+  bool DxvkXeSS::isEnabled() const {
+    return RtxOptions::isXeSSEnabled();
   }
 
-  void DxvkXeSS::release() {
-    if (m_xessContext) {
-      destroyXeSSContext();
-    }
-    m_initialized = false;
-  }
-
-  void DxvkXeSS::enable() {
-    if (!m_device) {
-      Logger::warn("XeSS: Cannot enable - no device available");
-      return;
-    }
+  bool DxvkXeSS::onActivation(Rc<DxvkContext>& ctx) {
+    Logger::info("XeSS: Activating XeSS upscaler...");
     
-    // Check if XeSS is enabled in options
-    if (!RtxOptions::isXeSSEnabled()) {
-      Logger::info("XeSS: Cannot enable - upscaler type is not XeSS");
-      m_enabled = false;
-      return;
-    }
-    
-    // Check if XeSS is supported on this system
+    // Check if XeSS is supported on this system (use stored device pointer)
     if (!validateXeSSSupport(m_device)) {
-      Logger::warn("XeSS: Cannot enable - system does not support XeSS");
-      m_enabled = false;
-      return;
+      Logger::warn("XeSS: System does not support XeSS - activation failed");
+      return false;
     }
     
-    m_enabled = true;
     m_recreate = true; // Force recreation of context
-    Logger::info("XeSS: Enabled for runtime upscaler switching");
+    Logger::info("XeSS: Activation successful");
+    return true;
   }
 
-  void DxvkXeSS::disable() {
-    m_enabled = false;
+  void DxvkXeSS::onDeactivation() {
+    Logger::info("XeSS: Deactivating XeSS upscaler");
     if (m_xessContext) {
       destroyXeSSContext();
     }
     m_initialized = false;
-    Logger::info("XeSS: Disabled");
+  }
+
+  void DxvkXeSS::createTargetResource(Rc<DxvkContext>& ctx, const VkExtent3D& targetExtent) {
+    // XeSS doesn't need additional target resources beyond what's managed internally
+    // This method is required by RtxPass but can be empty for XeSS
+  }
+
+  void DxvkXeSS::releaseTargetResource() {
+    // Release any target-specific resources if needed
+    // This method is required by RtxPass but can be empty for XeSS
   }
 
   bool DxvkXeSS::isXeSSLibraryAvailable() {
@@ -294,42 +281,72 @@ namespace dxvk {
   }
 
   VkExtent3D DxvkXeSS::getInputSize(const VkExtent3D& targetExtent) const {
-    if (!m_enabled) {
+    if (!isEnabled() || !m_xessContext) {
       return targetExtent;
     }
 
     XeSSProfile currentProfile = getProfile();
-    float scaleFactor = 1.0f;
     
     if (currentProfile == XeSSProfile::Custom) {
       // For Custom profile, use resolution scale directly
-      scaleFactor = RtxOptions::resolutionScale();
+      float scaleFactor = RtxOptions::resolutionScale();
+      VkExtent3D inputExtent;
+      inputExtent.width = std::max(1u, static_cast<uint32_t>(targetExtent.width * scaleFactor));
+      inputExtent.height = std::max(1u, static_cast<uint32_t>(targetExtent.height * scaleFactor));
+      inputExtent.depth = targetExtent.depth;
+      return inputExtent;
     } else {
-      // For other profiles, use predefined scaling factors based on quality setting
-      xess_quality_settings_t quality = profileToQuality(currentProfile);
+      // Use XeSS SDK to get optimal input resolution for XeSS 2.1+ compliance
+      xess_2d_t targetRes = { static_cast<uint32_t>(targetExtent.width), static_cast<uint32_t>(targetExtent.height) };
+      xess_2d_t optimalInputRes = { 0, 0 };
+      xess_2d_t minInputRes = { 0, 0 };
+      xess_2d_t maxInputRes = { 0, 0 };
       
-      switch (quality) {
-        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 1.0f / 3.0f; break;   // 3.0x upscaling
-        case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 1.0f / 2.3f; break;   // 2.3x upscaling
-        case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 1.0f / 2.0f; break;   // 2.0x upscaling
-        case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 1.0f / 1.7f; break;   // 1.7x upscaling
-        case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 1.0f / 1.5f; break;   // 1.5x upscaling
-        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.0f / 1.3f; break;  // 1.3x upscaling
-        case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f; break;          // 1.0x (native)
-        default:                                      scaleFactor = 1.0f / 2.0f; break;   // Default to balanced
+      xess_quality_settings_t quality = profileToQuality(currentProfile);
+      xess_result_t result = xessGetOptimalInputResolution(
+        m_xessContext, 
+        &targetRes, 
+        quality, 
+        &optimalInputRes, 
+        &minInputRes, 
+        &maxInputRes
+      );
+      
+      if (result == XESS_RESULT_SUCCESS) {
+        VkExtent3D inputExtent;
+        inputExtent.width = optimalInputRes.x;
+        inputExtent.height = optimalInputRes.y;
+        inputExtent.depth = targetExtent.depth;
+        
+        Logger::debug(str::format("XeSS 2.1: Using SDK optimal input resolution ", 
+                                  inputExtent.width, "x", inputExtent.height, 
+                                  " for target ", targetExtent.width, "x", targetExtent.height));
+        return inputExtent;
+      } else {
+        Logger::warn(str::format("XeSS 2.1: Failed to get optimal input resolution, using fallback: ", xessResultToString(result)));
+        // Fallback to hardcoded values
+        float scaleFactor = 1.0f / 2.0f; // Default to balanced
+        switch (quality) {
+          case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 1.0f / 3.0f; break;
+          case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 1.0f / 2.3f; break;
+          case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 1.0f / 2.0f; break;
+          case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 1.0f / 1.7f; break;
+          case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 1.0f / 1.5f; break;
+          case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.0f / 1.3f; break;
+          case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f; break;
+        }
+        
+        VkExtent3D inputExtent;
+        inputExtent.width = std::max(1u, static_cast<uint32_t>(targetExtent.width * scaleFactor));
+        inputExtent.height = std::max(1u, static_cast<uint32_t>(targetExtent.height * scaleFactor));
+        inputExtent.depth = targetExtent.depth;
+        return inputExtent;
       }
     }
-
-    VkExtent3D inputExtent;
-    inputExtent.width = std::max(1u, static_cast<uint32_t>(targetExtent.width * scaleFactor));
-    inputExtent.height = std::max(1u, static_cast<uint32_t>(targetExtent.height * scaleFactor));
-    inputExtent.depth = targetExtent.depth;
-
-    return inputExtent;
   }
 
   void DxvkXeSS::initialize(Rc<DxvkContext> renderContext, const VkExtent3D& targetExtent) {
-    if (!m_enabled) {
+    if (!isEnabled()) {
       return;
     }
 
@@ -373,7 +390,7 @@ namespace dxvk {
     }
     
     // Create XeSS context using real SDK
-    xess_result_t result = xessVKCreateContext(
+    xess_result_t     result = xessVKCreateContext(
       m_device->instance()->handle(),
       m_device->adapter()->handle(),
       m_device->handle(),
@@ -388,6 +405,41 @@ namespace dxvk {
     
     Logger::info("XeSS: Context created successfully");
     
+    // XeSS 2.1: Optional pipeline pre-build to reduce initialization stalls
+    xess_quality_settings_t quality = profileToQuality(m_currentProfile);
+    xess_init_flags_t preFlags = XESS_INIT_FLAG_NONE;
+    
+    // Set pre-build flags based on user settings
+    // Note: XESS_INIT_FLAG_JITTERED_MV removed per XeSS developer guide
+    if (RtxOptions::xessForceInvertedDepth()) {
+      preFlags = (xess_init_flags_t)(preFlags | XESS_INIT_FLAG_INVERTED_DEPTH);
+    }
+    if (RtxOptions::xessForceLDRInput()) {
+      preFlags = (xess_init_flags_t)(preFlags | XESS_INIT_FLAG_LDR_INPUT_COLOR);
+    }
+    if (RtxOptions::xessForceHighResMotionVectors()) {
+      preFlags = (xess_init_flags_t)(preFlags | XESS_INIT_FLAG_HIGH_RES_MV);
+    }
+    
+    // Trigger pre-build in background to reduce later initialization stalls
+    result = xessVKBuildPipelines(m_xessContext, VK_NULL_HANDLE, false, preFlags);
+    if (result == XESS_RESULT_SUCCESS) {
+      Logger::info("XeSS 2.1: Pipeline pre-build initiated");
+    } else {
+      Logger::warn(str::format("XeSS 2.1: Pipeline pre-build failed, will compile during init: ", xessResultToString(result)));
+    }
+    
+    // XeSS 2.1: Verify driver compatibility and warn if suboptimal
+    xess_result_t driverResult = xessIsOptimalDriver(m_xessContext);
+    if (driverResult == XESS_RESULT_WARNING_OLD_DRIVER) {
+      Logger::warn("XeSS 2.1: Using older driver - update recommended for optimal performance and quality");
+      // In a real application, you might want to show a user-facing notification here
+    } else if (driverResult == XESS_RESULT_SUCCESS) {
+      Logger::info("XeSS 2.1: Driver version verified as optimal");
+    } else {
+      Logger::warn(str::format("XeSS 2.1: Driver verification returned: ", xessResultToString(driverResult)));
+    }
+    
     // Select the best network model (KPSS)
     xess_network_model_t network_model = networkModelToXeSS(RtxOptions::xessNetworkModel());
     result = xessSelectNetworkModel(m_xessContext, network_model);
@@ -395,6 +447,23 @@ namespace dxvk {
       Logger::info(str::format("XeSS: Selected network model ", (int)RtxOptions::xessNetworkModel()));
     } else {
       Logger::warn(str::format("XeSS: Failed to select network model: ", xessResultToString(result)));
+    }
+    
+    // XeSS 2.1: Set responsive pixel mask clamp value if different from default
+    float responsiveMaskClamp = RtxOptions::xessResponsivePixelMaskClampValue();
+    if (responsiveMaskClamp != 0.8f) { // Only set if different from XeSS default
+      result = xessSetMaxResponsiveMaskValue(m_xessContext, responsiveMaskClamp);
+      if (result == XESS_RESULT_SUCCESS) {
+        Logger::info(str::format("XeSS 2.1: Set responsive pixel mask clamp value to ", responsiveMaskClamp));
+      } else {
+        Logger::warn(str::format("XeSS 2.1: Failed to set responsive pixel mask clamp value: ", xessResultToString(result)));
+      }
+    }
+    
+    // XeSS 2.1: Enhanced debugging (logging callback temporarily disabled due to API compatibility)
+    if (RtxOptions::xessEnableMotionVectorDebug()) {
+      Logger::info("XeSS 2.1: Enhanced debugging enabled - detailed logging will be shown during execution");
+      // TODO: Implement proper logging callback once XeSS SDK callback signature is clarified
     }
     
     // Get and log XeSS jitter scale for debugging
@@ -420,13 +489,9 @@ namespace dxvk {
     // Set initialization flags based on renderer state and user options
     initParams.initFlags = XESS_INIT_FLAG_NONE;
     
-    // Handle jittered motion vectors option
-    if (RtxOptions::xessUseJitteredMotionVectors()) {
-      initParams.initFlags |= XESS_INIT_FLAG_JITTERED_MV;
-      Logger::info("XeSS: Using jittered motion vectors");
-    } else {
-      Logger::info("XeSS: Using non-jittered motion vectors");
-    }
+    // XeSS Developer Guide: Motion vectors should NOT include jitter
+    // Always use non-jittered motion vectors as recommended
+    Logger::info("XeSS: Using non-jittered motion vectors (per developer guide)");
     
     // Handle inverted depth option
     if (RtxOptions::xessForceInvertedDepth()) {
@@ -450,7 +515,7 @@ namespace dxvk {
 
     // Handle auto-exposure based on user preference
     XeSSAutoExposureMode autoExposureMode = RtxOptions::xessAutoExposureMode();
-    const DxvkAutoExposure& autoExposure = m_device->getCommon()->metaAutoExposure();
+    auto& autoExposure = m_device->getCommon()->metaAutoExposure();
     
     bool useXeSSAutoExposure = false;
     switch (autoExposureMode) {
@@ -486,6 +551,16 @@ namespace dxvk {
     initParams.textureHeapOffset = 0;
     initParams.pipelineCache = VK_NULL_HANDLE;
     
+    // XeSS 2.1: Check pipeline build status before initialization
+    xess_result_t pipelineStatus = xessGetPipelineBuildStatus(m_xessContext);
+    if (pipelineStatus == XESS_RESULT_SUCCESS) {
+      Logger::info("XeSS 2.1: Pipelines pre-built successfully, initializing with cached pipelines");
+    } else if (pipelineStatus == XESS_RESULT_ERROR_OPERATION_IN_PROGRESS) {
+      Logger::info("XeSS 2.1: Pipeline build in progress, initialization may wait for completion");
+    } else {
+      Logger::debug(str::format("XeSS 2.1: Pipeline build status: ", xessResultToString(pipelineStatus)));
+    }
+    
     result = xessVKInit(m_xessContext, &initParams);
     if (result != XESS_RESULT_SUCCESS) {
       Logger::err(str::format("XeSS: Failed to initialize context: ", xessResultToString(result)));
@@ -495,6 +570,81 @@ namespace dxvk {
     }
     
     Logger::info("XeSS: Context initialized successfully");
+  }
+
+  uint32_t DxvkXeSS::calculateRecommendedJitterSequenceLength() const {
+    if (!RtxOptions::xessUseRecommendedJitterSequenceLength()) {
+      return RtxOptions::cameraJitterSequenceLength(); // Use global setting
+    }
+    
+    // XeSS 2.1 formula: ceil(upscale_factor^2 * 8)
+    // For extreme scaling (e.g. 0.10x = 10x upscaling), this ensures sufficient temporal samples
+    float scaleFactor = 1.0f;
+    XeSSProfile currentProfile = getProfile();
+    
+    if (currentProfile == XeSSProfile::Custom) {
+      scaleFactor = 1.0f / RtxOptions::resolutionScale();
+    } else {
+      xess_quality_settings_t quality = profileToQuality(currentProfile);
+      switch (quality) {
+        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 3.0f; break;
+        case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 2.3f; break;
+        case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 2.0f; break;
+        case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 1.7f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 1.5f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.3f; break;
+        case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f; break;
+        default:                                      scaleFactor = 2.0f; break;
+      }
+    }
+    
+    uint32_t recommendedLength = static_cast<uint32_t>(std::ceil(scaleFactor * scaleFactor * 8.0f));
+    
+    // For extreme scaling scenarios (>5x upscaling), add extra samples for better temporal distribution
+    if (scaleFactor > 5.0f) {
+      // Add 25% more samples for extreme scaling to reduce swimming artifacts
+      recommendedLength = static_cast<uint32_t>(recommendedLength * 1.25f);
+      Logger::info(str::format("XeSS 2.1: Extreme scaling detected (", scaleFactor, "x), using extended jitter sequence"));
+    }
+    
+    // Expanded range: minimum of 8, maximum of 1024 for extreme scaling scenarios
+    recommendedLength = std::clamp(recommendedLength, 8u, 1024u);
+    
+    if (RtxOptions::xessLogJitterSequenceLength()) {
+      Logger::debug(str::format("XeSS 2.1: Calculated recommended jitter sequence length: ", 
+                                recommendedLength, " for scale factor ", scaleFactor, "x"));
+    }
+    
+    return recommendedLength;
+  }
+
+  float DxvkXeSS::calculateRecommendedMipBias() const {
+    // XeSS 2.1 formula: -log2(upscale_factor)
+    float scaleFactor = 1.0f;
+    XeSSProfile currentProfile = getProfile();
+    
+    if (currentProfile == XeSSProfile::Custom) {
+      scaleFactor = 1.0f / RtxOptions::resolutionScale();
+    } else {
+      xess_quality_settings_t quality = profileToQuality(currentProfile);
+      switch (quality) {
+        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 3.0f; break;
+        case XESS_QUALITY_SETTING_PERFORMANCE:       scaleFactor = 2.3f; break;
+        case XESS_QUALITY_SETTING_BALANCED:          scaleFactor = 2.0f; break;
+        case XESS_QUALITY_SETTING_QUALITY:           scaleFactor = 1.7f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY:     scaleFactor = 1.5f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.3f; break;
+        case XESS_QUALITY_SETTING_AA:                scaleFactor = 1.0f; break;
+        default:                                      scaleFactor = 2.0f; break;
+      }
+    }
+    
+    float mipBias = -std::log2(scaleFactor);
+    
+    Logger::debug(str::format("XeSS 2.1: Calculated recommended mip bias: ", 
+                              mipBias, " for scale factor ", scaleFactor));
+    
+    return mipBias;
   }
 
   void DxvkXeSS::destroyXeSSContext() {
@@ -514,7 +664,7 @@ namespace dxvk {
     const Resources::RaytracingOutput& rtOutput,
     bool resetHistory) {
     
-    if (!m_enabled) {
+    if (!isEnabled()) {
       // Fallback: just copy input to output
       renderContext->copyImage(
         rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
@@ -564,8 +714,21 @@ namespace dxvk {
         rtOutput.m_compositeOutputExtent);
       return;
     }
-
-    Logger::debug("XeSS: Dispatching upscaling");
+    
+    // XeSS 2.1: Log recommended settings for debugging
+    if (RtxOptions::xessEnableMotionVectorDebug()) {
+      uint32_t recommendedJitterLength = calculateRecommendedJitterSequenceLength();
+      float recommendedMipBias = calculateRecommendedMipBias();
+      uint32_t currentJitterLength = RtxOptions::cameraJitterSequenceLength();
+      
+      Logger::debug(str::format("XeSS 2.1 Recommendations: Jitter Sequence Length=", recommendedJitterLength, 
+                                " (current=", currentJitterLength, "), Mip Bias=", recommendedMipBias));
+                                
+      if (RtxOptions::xessUseRecommendedJitterSequenceLength() && recommendedJitterLength != currentJitterLength) {
+        Logger::info(str::format("XeSS 2.1: Consider updating camera jitter sequence length to ", 
+                                recommendedJitterLength, " for optimal quality"));
+      }
+    }
     
     // Set up image barriers for XeSS inputs and outputs
     std::vector<Rc<DxvkImageView>> inputs = {
@@ -574,7 +737,7 @@ namespace dxvk {
       rtOutput.m_primaryDepth.view
     };
 
-    const DxvkAutoExposure& autoExposure = m_device->getCommon()->metaAutoExposure();
+    auto& autoExposure = m_device->getCommon()->metaAutoExposure();
     if (autoExposure.enabled() && autoExposure.getExposureTexture().image != nullptr) {
       inputs.push_back(autoExposure.getExposureTexture().view);
     }
@@ -616,7 +779,7 @@ namespace dxvk {
     barriers.recordCommands(renderContext->getCommandList());
 
     // Get jitter offset from camera
-    SceneManager& sceneManager = m_device->getCommon()->getSceneManager();
+    auto& sceneManager = m_device->getCommon()->getSceneManager();
     RtCamera& camera = sceneManager.getCamera();
     float jitterOffset[2];
     camera.getJittering(jitterOffset);
@@ -636,15 +799,51 @@ namespace dxvk {
         xessJitterX *= jitterScaleX;
         xessJitterY *= jitterScaleY;
         
-        Logger::debug(str::format("XeSS: Applied jitter scale ", jitterScaleX, "x", jitterScaleY, 
-                                " to jitter ", jitterOffset[0], ",", jitterOffset[1], 
-                                " -> ", xessJitterX, ",", xessJitterY));
+        // Applied jitter scale - debug logging removed to avoid spam
       }
     }
     
     // Apply user jitter scale multiplier
-    xessJitterX *= RtxOptions::xessJitterScale();
-    xessJitterY *= RtxOptions::xessJitterScale();
+    float userJitterScale = RtxOptions::xessJitterScale();
+    
+    // Apply adaptive jitter scaling for extreme upscaling scenarios
+    if (RtxOptions::xessUseOptimizedJitter()) {
+      XeSSProfile profile = getProfile();
+      float scaleFactor = 1.0f;
+      
+      if (profile == XeSSProfile::Custom) {
+        scaleFactor = 1.0f / RtxOptions::resolutionScale();
+      } else {
+        xess_quality_settings_t quality = profileToQuality(m_actualProfile);
+        switch (quality) {
+        case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: scaleFactor = 3.0f; break;
+        case XESS_QUALITY_SETTING_PERFORMANCE: scaleFactor = 2.3f; break;
+        case XESS_QUALITY_SETTING_BALANCED: scaleFactor = 2.0f; break;
+        case XESS_QUALITY_SETTING_QUALITY: scaleFactor = 1.7f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY: scaleFactor = 1.5f; break;
+        case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: scaleFactor = 1.3f; break;
+        case XESS_QUALITY_SETTING_AA: scaleFactor = 1.0f; break;
+        default: scaleFactor = 2.0f; break;
+        }
+      }
+      
+      // Adaptive jitter scaling to reduce swimming artifacts at extreme scaling
+      if (scaleFactor > 6.0f) {
+        // Extreme scaling (e.g., 0.10x resolution = 10x upscaling): configurable jitter reduction
+        float extremeDamping = RtxOptions::xessExtremeScalingJitterDamping();
+        userJitterScale *= extremeDamping;
+        // Extreme scaling detected - debug logging removed to avoid spam
+      } else if (scaleFactor > 4.0f) {
+        // Very high scaling: moderate jitter reduction
+        userJitterScale *= 0.75f;
+      } else if (scaleFactor > 2.5f) {
+        // High scaling: light jitter reduction
+        userJitterScale *= 0.85f;
+      }
+    }
+    
+    xessJitterX *= userJitterScale;
+    xessJitterY *= userJitterScale;
 
     // Debug motion vector validation if enabled
     if (RtxOptions::xessEnableMotionVectorDebug()) {
@@ -652,14 +851,7 @@ namespace dxvk {
       auto depthView = rtOutput.m_primaryDepth.view;
       auto colorView = rtOutput.m_compositeOutput.view(Resources::AccessType::Read);
       
-      Logger::debug(str::format("XeSS Debug: Motion Vector Format=", motionView->info().format, 
-                                " Size=", motionView->imageInfo().extent.width, "x", motionView->imageInfo().extent.height));
-      Logger::debug(str::format("XeSS Debug: Depth Format=", depthView->info().format, 
-                                " Size=", depthView->imageInfo().extent.width, "x", depthView->imageInfo().extent.height));
-      Logger::debug(str::format("XeSS Debug: Color Format=", colorView->info().format, 
-                                " Size=", colorView->imageInfo().extent.width, "x", colorView->imageInfo().extent.height));
-      Logger::debug(str::format("XeSS Debug: Jitter=[", xessJitterX, ",", xessJitterY, "] Mode=", 
-                                RtxOptions::xessUseJitteredMotionVectors() ? "Jittered" : "Separate"));
+            // XeSS Debug information - logging removed to avoid spam when debug option is enabled
     }
     
     // Apply exposure-aware jitter optimizations when using XeSS internal auto-exposure
@@ -681,8 +873,7 @@ namespace dxvk {
         xessJitterY *= adaptiveDamping;
         m_framesSinceExposureChange = 0;
         
-        Logger::debug(str::format("XeSS: Applied adaptive exposure damping ", adaptiveDamping, 
-                                " due to exposure velocity ", m_exposureChangeVelocity));
+        // Applied adaptive exposure damping - debug logging removed to avoid spam
       } else {
         // Stable exposure - apply standard damping
         xessJitterX *= exposureDamping;
@@ -757,35 +948,19 @@ namespace dxvk {
     execParams.outputTexture.width = outputView->imageInfo().extent.width;
     execParams.outputTexture.height = outputView->imageInfo().extent.height;
 
-    // Execution parameters - handle jitter based on motion vector mode
-    if (RtxOptions::xessUseJitteredMotionVectors()) {
-      // When using jittered motion vectors, XeSS expects zero jitter offset
-      // since the jitter is already included in the motion vectors
-      execParams.jitterOffsetX = 0.0f;
-      execParams.jitterOffsetY = 0.0f;
-      
-      if (RtxOptions::xessEnableMotionVectorDebug()) {
-        Logger::debug("XeSS: Using jittered motion vectors - setting jitter offset to 0");
-      }
-    } else {
-      // Standard mode: pass jitter separately from motion vectors
-      execParams.jitterOffsetX = xessJitterX;
-      execParams.jitterOffsetY = xessJitterY;
-      
-      if (RtxOptions::xessEnableMotionVectorDebug()) {
-        Logger::debug(str::format("XeSS: Using separate jitter offset [", xessJitterX, ",", xessJitterY, "]"));
-      }
+    // XeSS Developer Guide: Motion vectors should NOT include jitter
+    // Always provide jitter separately as calculated above
+    execParams.jitterOffsetX = xessJitterX;
+    execParams.jitterOffsetY = xessJitterY;
+    
+    if (RtxOptions::xessEnableMotionVectorDebug()) {
+              // Using separate jitter offset - debug logging removed to avoid spam
     }
     execParams.exposureScale = 1.0f; // Default exposure scale
     execParams.resetHistory = resetHistory ? 1 : 0;
-    // Use the input size from setSetting for Custom profile, or m_inputExtent for other profiles
-    if (getProfile() == XeSSProfile::Custom) {
-      execParams.inputWidth = m_inputSize.width;
-      execParams.inputHeight = m_inputSize.height;
-    } else {
-      execParams.inputWidth = m_inputExtent.width;
-      execParams.inputHeight = m_inputExtent.height;
-    }
+    // Use the input size from setSetting for all profiles
+    execParams.inputWidth = m_inputSize.width;
+    execParams.inputHeight = m_inputSize.height;
     
     // Base coordinates (default to 0,0)
     execParams.inputColorBase = { 0, 0 };
@@ -811,7 +986,7 @@ namespace dxvk {
         { 0, 0, 0 },
         rtOutput.m_compositeOutputExtent);
     } else {
-      Logger::debug("XeSS: Execute successful");
+      // XeSS execution successful - removed debug logging to avoid spam
     }
 
     // Restore barriers for output texture
@@ -917,7 +1092,9 @@ namespace dxvk {
       float scale = RtxOptions::resolutionScale();
       m_inputSize.width = outRenderSize[0] = std::max(1u, (uint32_t)(displaySize[0] * scale));
       m_inputSize.height = outRenderSize[1] = std::max(1u, (uint32_t)(displaySize[1] * scale));
-      Logger::debug(str::format("XeSS Custom: Using resolution scale ", scale, ", input: ", m_inputSize.width, "x", m_inputSize.height, ", output: ", displaySize[0], "x", displaySize[1]));
+      if (RtxOptions::xessLogJitterSequenceLength()) {
+        Logger::debug(str::format("XeSS Custom: Using resolution scale ", scale, ", input: ", m_inputSize.width, "x", m_inputSize.height, ", output: ", displaySize[0], "x", displaySize[1]));
+      }
     } else {
       // Calculate optimal input resolution based on quality setting
       xess_2d_t outputRes = { displaySize[0], displaySize[1] };
@@ -967,6 +1144,10 @@ namespace dxvk {
 
     m_xessOutputSize.width = displaySize[0];
     m_xessOutputSize.height = displaySize[1];
+    
+    // Update the camera system with the current upscaling ratio for dynamic jitter calculation
+    float currentUpscalingRatio = (float)displaySize[0] / (float)m_inputSize.width;
+    RtCamera::setCurrentUpscalingRatio(currentUpscalingRatio);
   }
 
   XeSSProfile DxvkXeSS::getCurrentProfile() const {

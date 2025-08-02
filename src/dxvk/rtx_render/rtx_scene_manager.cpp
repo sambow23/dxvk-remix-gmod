@@ -123,8 +123,42 @@ namespace dxvk {
     auto& resourceManager = m_device->getCommon()->getResources();
 
     const bool temporalUpscaling = RtxOptions::isDLSSOrRayReconstructionEnabled() || RtxOptions::isXeSSEnabled() || RtxOptions::isTAAEnabled();
-    float totalUpscaleMipBias = temporalUpscaling ? (log2(resourceManager.getUpscaleRatio()) + RtxOptions::upscalingMipBias()) : 0.0f;
-    return totalUpscaleMipBias + RtxOptions::nativeMipBias();
+    // Use XeSS developer guide formula: -log2(upscale_factor) (user upscalingMipBias is now deprecated)
+    float totalUpscaleMipBias = temporalUpscaling ? -log2(resourceManager.getUpscaleRatio()) : 0.0f;
+    float totalMipBias = totalUpscaleMipBias + RtxOptions::nativeMipBias();
+    
+    // XeSS 2.1: Add XeSS-specific mip bias when XeSS is active
+    if (RtxOptions::isXeSSEnabled()) {
+      DxvkXeSS& xess = m_device->getCommon()->metaXeSS();
+      if (xess.isActive()) {
+        float xessMipBias = xess.getRecommendedMipBias();
+        totalMipBias += xessMipBias;
+        
+        // Log mip bias breakdown (user upscalingMipBias now deprecated)
+        float calculatedUpscalingBias = -log2(resourceManager.getUpscaleRatio());
+        
+        Logger::debug(str::format("SceneManager: Total mip bias - Upscaling: ", calculatedUpscalingBias,
+                                  ", Native: ", RtxOptions::nativeMipBias(),
+                                  ", XeSS: ", xessMipBias,
+                                  ", Total: ", totalMipBias));
+      }
+    }
+    
+    return totalMipBias;
+  }
+
+  float SceneManager::getCalculatedUpscalingMipBias() {
+    auto& resourceManager = m_device->getCommon()->getResources();
+    
+    const bool temporalUpscaling = RtxOptions::isDLSSOrRayReconstructionEnabled() || RtxOptions::isXeSSEnabled() || RtxOptions::isTAAEnabled();
+    if (!temporalUpscaling) {
+      return 0.0f;
+    }
+    
+    // Use XeSS developer guide formula: -log2(upscale_factor) 
+    // This is the only upscaling mip bias we use now (user setting deprecated)
+    float calculatedUpscalingBias = -log2(resourceManager.getUpscaleRatio());
+    return calculatedUpscalingBias;
   }
 
   void SceneManager::clear(Rc<DxvkContext> ctx, bool needWfi) {

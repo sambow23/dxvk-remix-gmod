@@ -183,7 +183,6 @@ namespace dxvk
   }
 
   Vector2 calculateHaltonJitter(uint32_t currentFrame, uint32_t jitterSequenceLength) {
-    // Halton jitter
     Vector2 result(0.0f, 0.0f);
 
     uint32_t frameIndex = currentFrame % jitterSequenceLength;
@@ -208,8 +207,26 @@ namespace dxvk
       fraction *= invBase;
     }
 
+    // Map from [0,1] to [-0.5,0.5] range as required by XeSS
     result.x -= 0.5f;
     result.y -= 0.5f;
+    
+    // For extreme scaling scenarios with long sequences, apply slight randomization
+    // to break up regular patterns that can cause swimming artifacts
+    if (jitterSequenceLength > 400) {
+      // Use frame index as seed for consistent but varied offset
+      uint32_t seed = frameIndex * 0x9E3779B9u; // Golden ratio hash
+      float offsetX = ((seed & 0xFF) / 255.0f - 0.5f) * 0.05f; // ±2.5% jitter variation
+      float offsetY = (((seed >> 8) & 0xFF) / 255.0f - 0.5f) * 0.05f;
+      
+      result.x += offsetX;
+      result.y += offsetY;
+      
+      // Clamp to ensure we stay within valid range
+      result.x = std::clamp(result.x, -0.5f, 0.5f);
+      result.y = std::clamp(result.y, -0.5f, 0.5f);
+    }
+    
     return result;
   }
 
@@ -736,7 +753,73 @@ namespace dxvk
     jitter[1] = m_jitter[1];
   }
 
+  // Static variable to track the actual jitter sequence length being used
+  static uint32_t s_currentJitterSequenceLength = 64;
+  
+  // Static variable to track the current upscaling ratio for dynamic jitter calculation
+  static float s_currentUpscalingRatio = 1.0f;
+
   Vector2 RtCamera::calcPixelJitter(uint32_t jitterFrameIdx) {
+    // Only apply jittering when DLSS/XeSS/TAA is enabled, or if forced by settings
+    if (!RtxOptions::isDLSSOrRayReconstructionEnabled() &&
+        !RtxOptions::isXeSSEnabled() &&
+        !RtxOptions::isTAAEnabled() &&
+        !RtxOptions::forceCameraJitter()) {
+      s_currentJitterSequenceLength = 0; // No jitter being used
+      return Vector2{ 0, 0 };
+    }
+
+#define USE_DLSS_DEMO_JITTER_PATTERN 1
+#if USE_DLSS_DEMO_JITTER_PATTERN
+    uint32_t jitterSequenceLength = RtxOptions::cameraJitterSequenceLength();
+
+    if (RtxOptions::isXeSSEnabled() && RtxOptions::xessUseRecommendedJitterSequenceLength()) {
+      // Get the XeSS-recommended sequence length
+      // This is calculated based on upscaling factor: ceil(scale_factor^2 * 8)
+      // Use the current upscaling ratio tracked by the XeSS system for dynamic preset changes
+      float scaleFactor = s_currentUpscalingRatio;
+      uint32_t xessRecommendedLength = static_cast<uint32_t>(std::ceil(scaleFactor * scaleFactor * 8.0f));
+      
+      // Add extra samples for extreme scaling (>5x upscaling) to reduce swimming
+      if (scaleFactor > 5.0f) {
+        xessRecommendedLength = static_cast<uint32_t>(xessRecommendedLength * 1.25f);
+      }
+      
+      // Apply minimum jitter sequence length
+      uint32_t minLength = RtxOptions::xessMinJitterSequenceLength();
+      xessRecommendedLength = std::max(xessRecommendedLength, minLength);
+      
+      // Clamp to reasonable range
+      xessRecommendedLength = std::clamp(xessRecommendedLength, minLength, 1024u);
+      jitterSequenceLength = xessRecommendedLength;
+    }
+    
+    // Track the actual jitter sequence length being used
+    s_currentJitterSequenceLength = jitterSequenceLength;
+    
+    return calculateHaltonJitter(jitterFrameIdx, jitterSequenceLength);
+#else
+    s_currentJitterSequenceLength = 1; // Halton sequence is effectively length 1
+    return m_halton.next();
+#endif
+  }
+
+  uint32_t RtCamera::getCurrentJitterSequenceLength() {
+    return s_currentJitterSequenceLength;
+  }
+  
+  void RtCamera::setCurrentUpscalingRatio(float upscalingRatio) {
+    if (s_currentUpscalingRatio != upscalingRatio) {
+      s_currentUpscalingRatio = upscalingRatio;
+    }
+  }
+  
+  float RtCamera::getCurrentUpscalingRatio() {
+    return s_currentUpscalingRatio;
+  }
+  
+  // XeSS 2.1: New method to calculate jitter with XeSS-recommended sequence length
+  Vector2 RtCamera::calcPixelJitterWithXeSSRecommendation(uint32_t jitterFrameIdx, uint32_t xessRecommendedLength) {
     // Only apply jittering when DLSS/XeSS/TAA is enabled, or if forced by settings
     if (!RtxOptions::isDLSSOrRayReconstructionEnabled() &&
         !RtxOptions::isXeSSEnabled() &&
@@ -747,7 +830,14 @@ namespace dxvk
 
 #define USE_DLSS_DEMO_JITTER_PATTERN 1
 #if USE_DLSS_DEMO_JITTER_PATTERN
-    return calculateHaltonJitter(jitterFrameIdx, RtxOptions::cameraJitterSequenceLength());
+    // XeSS 2.1: Use XeSS-recommended jitter sequence length when provided
+    uint32_t jitterSequenceLength = RtxOptions::cameraJitterSequenceLength();
+    
+    if (RtxOptions::isXeSSEnabled() && RtxOptions::xessUseRecommendedJitterSequenceLength() && xessRecommendedLength > 0) {
+      jitterSequenceLength = xessRecommendedLength;
+    }
+    
+    return calculateHaltonJitter(jitterFrameIdx, jitterSequenceLength);
 #else
     return m_halton.next();
 #endif
@@ -824,6 +914,7 @@ namespace dxvk
     camera.projectionToView = projectionToView;
     camera.viewToProjectionJittered = viewToProjectionJittered;
     camera.projectionToViewJittered = projectionToViewJittered;
+    camera.worldToProjection = viewToProjection * worldToView;
     camera.worldToProjectionJittered = viewToProjectionJittered * worldToView;
     camera.projectionToWorldJittered = viewToWorld * projectionToViewJittered;
     camera.translatedWorldToView = translatedWorldToView;
@@ -876,6 +967,7 @@ namespace dxvk
 
     camera.viewToProjection = viewToProjection;
     camera.translatedWorldToView = translatedWorldToView;
+    camera.translatedWorldToProjection = viewToProjection * translatedWorldToView;
     camera.translatedWorldToProjectionJittered = viewToProjectionJittered * translatedWorldToView;
     camera.projectionToTranslatedWorld = viewToTranslatedWorld * projectionToView;
     camera.prevTranslatedWorldToView = prevTranslatedWorldToView;

@@ -648,6 +648,64 @@ namespace dxvk {
     return getSampler(filter, mipFilter, addressMode, addressMode, addressMode, VkClearColorValue(), mipBias, useAnisotropy);
   }
 
+  // XeSS 2.1: Get sampler with automatic XeSS-aware mip bias calculation
+  Rc<DxvkSampler> dxvk::Resources::getSamplerWithXeSSMipBias(
+    const VkFilter filter,
+    const VkSamplerMipmapMode mipFilter,
+    const VkSamplerAddressMode addressModeU,
+    const VkSamplerAddressMode addressModeV,
+    const VkSamplerAddressMode addressModeW,
+    const VkClearColorValue borderColor/* = VkClearColorValue()*/,
+    const float additionalMipBias/* = 0*/,
+    const bool useAnisotropy/* = false*/) {
+    
+    // Calculate total mip bias
+    float totalMipBias = additionalMipBias;
+    
+    // Add native mip bias (always applied)
+    totalMipBias += RtxOptions::nativeMipBias();
+    
+    // Calculate upscaling mip bias for both usage and logging
+    float calculatedUpscalingBias = 0.0f;
+    
+    // Add upscaling mip bias when any upscaler is active
+    if (RtxOptions::isDLSSOrRayReconstructionEnabled() || 
+        RtxOptions::isXeSSEnabled() || 
+        RtxOptions::isTAAEnabled() || 
+        RtxOptions::isNISEnabled()) {
+      // Use XeSS developer guide formula: -log2(upscale_factor) (user upscalingMipBias now deprecated)
+      Resources& resourceManager = m_device->getCommon()->getResources();
+      calculatedUpscalingBias = -log2(resourceManager.getUpscaleRatio());
+      totalMipBias += calculatedUpscalingBias;
+    }
+    
+    // XeSS 2.1: Add XeSS-specific mip bias when XeSS is active
+    if (RtxOptions::isXeSSEnabled()) {
+      DxvkXeSS& xess = m_device->getCommon()->metaXeSS();
+      if (xess.isActive()) {
+        float xessMipBias = xess.getRecommendedMipBias();
+        totalMipBias += xessMipBias;
+        
+        Logger::debug(str::format("XeSS 2.1: Applied mip bias - Native: ", RtxOptions::nativeMipBias(), 
+                                  ", Upscaling: ", calculatedUpscalingBias,
+                                  ", XeSS: ", xessMipBias,
+                                  ", Additional: ", additionalMipBias,
+                                  ", Total: ", totalMipBias));
+      }
+    }
+    
+    return getSampler(filter, mipFilter, addressModeU, addressModeV, addressModeW, borderColor, totalMipBias, useAnisotropy);
+  }
+
+  Rc<DxvkSampler> dxvk::Resources::getSamplerWithXeSSMipBias(
+    const VkFilter filter,
+    const VkSamplerMipmapMode mipFilter,
+    const VkSamplerAddressMode addrMode,
+    const float additionalMipBias/* = 0*/,
+    const bool useAnisotropy/* = false*/) {
+    return getSamplerWithXeSSMipBias(filter, mipFilter, addrMode, addrMode, addrMode, VkClearColorValue(), additionalMipBias, useAnisotropy);
+  }
+
   Rc<DxvkImageView> Resources::getWhiteTexture(Rc<DxvkContext> ctx) {
     if (m_whiteTex == nullptr || m_whiteTexView == nullptr) {
       DxvkImageCreateInfo desc;

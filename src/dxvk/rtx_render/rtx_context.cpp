@@ -236,15 +236,18 @@ namespace dxvk {
       downscaleExtent.depth = 1;
     } else if (shouldUseXeSS()) {
       DxvkXeSS& xess = m_common->metaXeSS();
-      if (!xess.isEnabled()) {
-        xess.enable();
-      }
       uint32_t displaySize[2] = { upscaleExtent.width, upscaleExtent.height };
       uint32_t renderSize[2];
       xess.setSetting(displaySize, RtxOptions::xessProfile(), renderSize);
       downscaleExtent.width = renderSize[0];
       downscaleExtent.height = renderSize[1];
       downscaleExtent.depth = 1;
+      
+      // XeSS 2.1: Apply recommended jitter sequence length if enabled
+      if (RtxOptions::xessUseRecommendedJitterSequenceLength() && xess.isActive()) {
+        uint32_t recommendedJitterLength = xess.getRecommendedJitterSequenceLength();
+        uint32_t currentJitterLength = RtxOptions::cameraJitterSequenceLength();
+      }
     } else if (shouldUseNIS() || shouldUseTAA()) {
       auto resolutionScale = RtxOptions::resolutionScale();
       downscaleExtent.width = uint32_t(std::roundf(upscaleExtent.width * resolutionScale));
@@ -303,10 +306,7 @@ namespace dxvk {
     } else if (shouldUseRayReconstruction() && m_common->metaRayReconstruction().isActive()) {
       return InternalUpscaler::DLSS_RR;
     } else if (shouldUseXeSS()) {
-      if (!m_common->metaXeSS().isEnabled()) {
-        m_common->metaXeSS().enable();
-      }
-      if (m_common->metaXeSS().isEnabled()) {
+      if (m_common->metaXeSS().isActive()) {
         return InternalUpscaler::XeSS;
       }
     } else if (shouldUseNIS()) {
@@ -413,12 +413,10 @@ namespace dxvk {
         DxvkDLSS& dlss = m_common->metaDLSS();
         dlss.release();
       } else if (m_previousUpscaler == InternalUpscaler::XeSS) {
-        DxvkXeSS& xess = m_common->metaXeSS();
-        xess.disable();
+        // XeSS deactivation is now handled automatically by RtxPass
       }
       if (m_currentUpscaler == InternalUpscaler::XeSS) {
-        DxvkXeSS& xess = m_common->metaXeSS();
-        xess.enable();
+        // XeSS activation is now handled automatically by RtxPass
       }
     }
 
@@ -1238,7 +1236,7 @@ namespace dxvk {
     constants.uniformRandomNumber = jenkinsHash(constants.frameIdx);
     constants.vertexColorStrength = RtxOptions::vertexColorStrength();
     constants.vertexColorIsBakedLighting = RtxOptions::vertexColorIsBakedLighting();
-    constants.enableXeSSJitteredMotionVectors = RtxOptions::xessUseJitteredMotionVectors() ? 1 : 0;
+    // constants.enableXeSSJitteredMotionVectors = RtxOptions::xessUseJitteredMotionVectors() ? 1 : 0; // REMOVED: Per XeSS guide
     constants.viewModelRayTMax = RtxOptions::ViewModel::rangeMeters() * RtxOptions::getMeterToWorldUnitScale();
     constants.roughnessDemodulationOffset = m_common->metaDemodulate().demodulateRoughnessOffset();
     

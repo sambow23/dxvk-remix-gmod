@@ -580,7 +580,7 @@ namespace dxvk {
     m_referenceDenoiserSecondLobe2.get().onDestroy();
     m_rayReconstruction.get().onDestroy();
     m_dlss.get().onDestroy();
-    m_xess.get().onDestroy();
+    // XeSS cleanup is now handled automatically by RtxPass
     m_dlfg.get().onDestroy();
   }
 }

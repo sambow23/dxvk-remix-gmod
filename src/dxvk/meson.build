@@ -211,7 +211,7 @@ dxvk_src = files([
   'rtx_render/rtx_denoise_type.h',
   'rtx_render/rtx_dlfg.cpp',
   'rtx_render/rtx_dlfg.h',
-    'rtx_render/rtx_dlss.cpp',
+  'rtx_render/rtx_dlss.cpp',
   'rtx_render/rtx_dlss.h',
   'rtx_render/rtx_xess.cpp',
   'rtx_render/rtx_xess.h',
