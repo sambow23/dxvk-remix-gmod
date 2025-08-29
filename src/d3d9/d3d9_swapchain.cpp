@@ -31,6 +31,8 @@
 #include "../util/util_string.h"
 #include "../dxvk/rtx_render/rtx_bridge_message_channel.h"
 #include "../dxvk/dxvk_scoped_annotation.h"
+#include "../dxvk/rtx_render/rtx_context.h"
+#include <remix/remix_c.h>
 
 // NV-DXVK start: DLFG integration
 #include "../dxvk/rtx_render/rtx_dlfg.h"
@@ -441,6 +443,9 @@ namespace dxvk {
     // NV-DXVK end
 
     D3D9DeviceLock lock = m_parent->LockDevice();
+    // NV-DXVK: Flush pending Remix API light updates safely once per frame.
+    // This only enqueues into LightManager; actual mutations apply at frame start.
+    (void)remixapi_AutoInstancePersistentLights();
 
     uint32_t presentInterval = m_presentParams.PresentationInterval;
 
