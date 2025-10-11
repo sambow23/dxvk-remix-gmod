@@ -979,6 +979,7 @@ namespace remix {
       pNext = nullptr;
       hash = 0;
       radiance = { 1.0f, 1.0f, 1.0f };
+      isDynamic = false;  // Default to static for temporal accumulation
       static_assert(sizeof remixapi_LightInfo == 40);
     }
   };
