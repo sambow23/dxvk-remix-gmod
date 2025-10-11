@@ -1128,13 +1128,16 @@ namespace {
       });
     } else {
       // Regular analytical light handling
-      const auto rtLight = convert::toRtLight(*info);
+      auto rtLight = convert::toRtLight(*info);
 
       // Note: If the toRtLight conversion process returns an empty optional, the specified LightInfo did
       // not contain the proper arguments to create a light with.
       if (!rtLight.has_value()) {
         return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
       }
+
+      // Set the isDynamic flag from the LightInfo
+      rtLight->isDynamic = info->isDynamic;
 
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
         auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();

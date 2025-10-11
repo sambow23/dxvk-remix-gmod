@@ -767,10 +767,31 @@ namespace dxvk {
       m_lightDebugUILock.lock();
     }
     assert(light->getExternallyTrackedLightId() != kInvalidExternallyTrackedLightId && " light passed to updateExternallyTrackedLight is not actually externally tracked.");
+    
     uint16_t bufferIdx = light->getBufferIdx();
-    *light = newLight;
+    uint64_t externalId = light->getExternallyTrackedLightId();
+    
+    // For static lights, preserve temporal data by only updating when needed
+    if (!newLight.isDynamic && !suppressLightKeeping()) {
+      const uint32_t isStaticCount = light->isStaticCount;
+      
+      // If this light hasn't moved for N frames, put it to sleep to preserve temporal data
+      if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
+        *light = newLight;
+        light->setBufferIdx(bufferIdx);
+        light->setExternallyTrackedLightId(externalId);
+      }
+      
+      // Increment static counter to allow temporal accumulation
+      light->isStaticCount = isStaticCount + 1;
+    } else {
+      // Dynamic lights always update
+      *light = newLight;
+      light->setBufferIdx(bufferIdx);
+      light->setExternallyTrackedLightId(externalId);
+    }
+    
     light->setFrameLastTouched(m_device->getCurrentFrameId());
-    light->setBufferIdx(bufferIdx);
   }
 
   // Marks an externally tracked light for garbage collection. The light's lifecycle is managed by external systems
@@ -780,8 +801,35 @@ namespace dxvk {
   }
 
   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
-    // Queue update to be applied at frame start
-    m_pendingExternalLightUpdates.emplace_back(handle, rtlight);
+    auto found = m_externalLights.find(handle);
+    if (found != m_externalLights.end()) {
+      // Existing light - preserve temporal data for static lights
+      RtLight& existingLight = found->second;
+      uint16_t bufferIdx = existingLight.getBufferIdx();
+      
+      // For static lights, preserve temporal data by only updating when needed
+      if (!rtlight.isDynamic && !suppressLightKeeping()) {
+        const uint32_t isStaticCount = existingLight.isStaticCount;
+        
+        // If this light hasn't moved for N frames, put it to sleep to preserve temporal data
+        if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
+          existingLight = rtlight;
+          existingLight.setBufferIdx(bufferIdx);
+        }
+        
+        // Increment static counter to allow temporal accumulation
+        existingLight.isStaticCount = isStaticCount + 1;
+      } else {
+        // Dynamic lights always update
+        existingLight = rtlight;
+        existingLight.setBufferIdx(bufferIdx);
+      }
+      
+      existingLight.setFrameLastTouched(m_device->getCurrentFrameId());
+    } else {
+      // New light
+      m_externalLights.emplace(handle, rtlight);
+    }
   }
 
   void LightManager::removeExternalLight(remixapi_LightHandle handle) {
