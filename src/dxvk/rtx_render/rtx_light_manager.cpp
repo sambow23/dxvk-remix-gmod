@@ -780,10 +780,11 @@ namespace dxvk {
         *light = newLight;
         light->setBufferIdx(bufferIdx);
         light->setExternallyTrackedLightId(externalId);
+        light->isStaticCount = isStaticCount + 1;  // Preserve and increment counter
+      } else {
+        // Light is asleep - don't update, just increment counter
+        light->isStaticCount = isStaticCount + 1;
       }
-      
-      // Increment static counter to allow temporal accumulation
-      light->isStaticCount = isStaticCount + 1;
     } else {
       // Dynamic lights always update
       *light = newLight;
@@ -815,10 +816,11 @@ namespace dxvk {
         if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
           existingLight = rtlight;
           existingLight.setBufferIdx(bufferIdx);
+          existingLight.isStaticCount = isStaticCount + 1;  // Preserve and increment counter
+        } else {
+          // Light is asleep - don't update, just increment counter
+          existingLight.isStaticCount = isStaticCount + 1;
         }
-        
-        // Increment static counter to allow temporal accumulation
-        existingLight.isStaticCount = isStaticCount + 1;
       } else {
         // Dynamic lights always update
         existingLight = rtlight;
@@ -827,8 +829,11 @@ namespace dxvk {
       
       existingLight.setFrameLastTouched(m_device->getCurrentFrameId());
     } else {
-      // New light
-      m_externalLights.emplace(handle, rtlight);
+      // New light - copy it and set initial frame
+      auto [it, inserted] = m_externalLights.emplace(handle, rtlight);
+      if (inserted) {
+        it->second.setFrameLastTouched(m_device->getCurrentFrameId());
+      }
     }
   }
 
