@@ -28,6 +28,7 @@
 #include "rtx/utility/froxel.slangh"
 #include "rtx/utility/gbuffer_helpers.slangh"
 #include "rtx/utility/debug_view_helpers.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 #include "rtx/concept/camera/camera.slangh"
 #include "rtx/concept/ray/ray.slangh"
 #include "rtx/concept/surface/surface.slangh"
@@ -1577,8 +1578,17 @@ void geometryResolverVertex(
       {
         skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
       }
+#ifdef ATMOSPHERE_AVAILABLE
+      else if (cb.skyMode == 1)
+      {
+        // Physical atmosphere mode
+        skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                       cb.isZUp != 0);
+      }
+#endif
       else
       {
+        // Skybox rasterization mode
         skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
       }
       
@@ -1608,6 +1618,28 @@ void geometryResolverVertex(
       return;
     }
     
+    // Regular miss - add sky radiance
+    vec3 skyRadiance;
+    if (cb.domeLightArgs.active)
+    {
+      skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+        // Physical atmosphere mode
+        skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                       cb.isZUp != 0);
+      }
+#endif
+    else
+    {
+      // Skybox rasterization mode
+      skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
+    }
+    
+    geometryResolverState.radiance += skyRadiance * vec3(geometryResolverState.attenuation);
+    
     updateNrcOnGBufferMiss(geometryResolverState.pixelCoordinate, cb.nrcArgs);
 
     // Note: Always write to primary surface for initial misses, 
@@ -1631,6 +1663,14 @@ void geometryResolverVertex(
     {
       skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
     }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      // Physical atmosphere mode
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                     cb.isZUp != 0);
+    }
+#endif
     else
     {
       skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
@@ -2219,9 +2259,18 @@ void geometryPSRResolverVertex(
     {
        emissiveRadiance += cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform) * radianceAttenuation;
     }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      // Physical atmosphere mode
+      vec3 skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                          cb.isZUp != 0);
+      emissiveRadiance += skyRadiance * radianceAttenuation;
+    }
+#endif
     else
     {
-      // Output radiance from sky probe
+      // Skybox rasterization mode - output radiance from sky probe
        emissiveRadiance += cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0) * radianceAttenuation;
     }
   }
@@ -2271,8 +2320,17 @@ void geometryPSRResolverVertex(
     {
       skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
     }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      // Physical atmosphere mode
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                     cb.isZUp != 0);
+    }
+#endif
     else
     {
+      // Skybox rasterization mode
       skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
     }
     
