@@ -67,6 +67,8 @@ namespace dxvk {
         VkExtent2D srcExtent;
         VkOffset2D dstOffset;
       };
+      uint32_t flipHorizontal;
+      uint32_t flipVertical;
     };
 
     Rc<DxvkDevice>      m_device;

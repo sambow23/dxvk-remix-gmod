@@ -3673,14 +3673,14 @@ namespace dxvk {
           // Axis flipping controls
           ImGui::Spacing();
           ImGui::Text("Axis Flipping:");
-          ImGui::Checkbox("Flip X-axis", &RtxOptions::fakeCameraFlipXObject());
-          ImGui::SetTooltipToLastWidgetOnHover("Flip the X-axis (left/right). Useful for mirrored coordinate systems.");
+          ImGui::TextWrapped("Flip the rendered image before display. Mostly used for Unity games.");
+          ImGui::Spacing();
+          
+          ImGui::Checkbox("Flip Horizontal", &RtxOptions::flipOutputHorizontalObject());
+          ImGui::SetTooltipToLastWidgetOnHover("Mirror the final image horizontally (left-right).");
           ImGui::SameLine();
-          ImGui::Checkbox("Flip Y-axis", &RtxOptions::fakeCameraFlipYObject());
-          ImGui::SetTooltipToLastWidgetOnHover("Flip the Y-axis (up/down). Useful for inverted Y coordinate systems.");
-          ImGui::SameLine();
-          ImGui::Checkbox("Flip Z-axis", &RtxOptions::fakeCameraFlipZObject());
-          ImGui::SetTooltipToLastWidgetOnHover("Flip the Z-axis (forward/backward). Useful for different depth conventions.");
+          ImGui::Checkbox("Flip Vertical", &RtxOptions::flipOutputVerticalObject());
+          ImGui::SetTooltipToLastWidgetOnHover("Mirror the final image vertically (top-bottom).");
           
           // Rotation offset controls
           ImGui::Spacing();

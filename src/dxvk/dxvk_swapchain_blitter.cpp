@@ -1,5 +1,6 @@
 #include "dxvk_swapchain_blitter.h"
 #include "dxvk_scoped_annotation.h"
+#include "rtx_render/rtx_options.h"
 
 #include <dxvk_present_frag.h>
 #include <dxvk_present_frag_blit.h>
@@ -210,6 +211,10 @@ namespace dxvk {
       args.dstOffset = dstRect.offset;
     else
       args.srcExtent = srcRect.extent;
+    
+    // Pass flip flags from RTX options
+    args.flipHorizontal = RtxOptions::flipOutputHorizontal() ? 1 : 0;
+    args.flipVertical = RtxOptions::flipOutputVertical() ? 1 : 0;
 
     ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
 

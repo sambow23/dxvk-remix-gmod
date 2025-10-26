@@ -488,6 +488,10 @@ namespace dxvk {
     RTX_OPTION("rtx", bool, fakeCameraFlipY, false, "Flip the Y-axis (up/down) for the fake camera. Useful for inverted Y coordinate systems.");
     RTX_OPTION("rtx", bool, fakeCameraFlipZ, false, "Flip the Z-axis (forward/backward) for the fake camera. Useful for different depth conventions.");
     
+    // Final image output flipping options (flips the rendered 2D image before display)
+    RTX_OPTION("rtx", bool, flipOutputHorizontal, false, "Flip the final output image horizontally (mirror left-right). Applied as a post-process after all rendering and denoising, so it doesn't affect any rendering calculations.");
+    RTX_OPTION("rtx", bool, flipOutputVertical, false, "Flip the final output image vertically (mirror top-bottom). Applied as a post-process after all rendering and denoising, so it doesn't affect any rendering calculations.");
+    
     // Fake camera rotation modifier options
     RTX_OPTION("rtx", float, fakeCameraPitchOffset, 0.0f, "Additional pitch rotation offset for the fake camera in radians. Applied after base rotation.");
     RTX_OPTION("rtx", float, fakeCameraYawOffset, 0.0f, "Additional yaw rotation offset for the fake camera in radians. Applied after base rotation.");

@@ -14,10 +14,23 @@ layout(push_constant)
 uniform present_info_t {
   ivec2 src_offset;
   ivec2 dst_offset;
+  uint flip_horizontal;
+  uint flip_vertical;
 };
 
 void main() {
   ivec2 coord = ivec2(gl_FragCoord.xy) + src_offset - dst_offset;
+  
+  // Apply image flipping if enabled
+  if (flip_horizontal != 0u || flip_vertical != 0u) {
+    ivec2 imageSize = textureSize(s_image);
+    if (flip_horizontal != 0u) {
+      coord.x = imageSize.x - 1 - coord.x;
+    }
+    if (flip_vertical != 0u) {
+      coord.y = imageSize.y - 1 - coord.y;
+    }
+  }
 
   // check dxvk_resolve_frag_f_amd.frag for documentation
   uint fragMask = fragmentMaskFetchAMD(s_image, coord);

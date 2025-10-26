@@ -593,7 +593,6 @@ namespace dxvk
     return Matrix4d { floatModifiedViewToProj };
   }
 
-
   bool RtCamera::updateFromSetting(uint32_t frameIdx, const RtCameraSetting& setting, uint32_t flags) {
     enableFreeCamera.setDeferred(setting.enableFreeCamera);
     freeCameraPosition.setDeferred(setting.freeCameraPosition);
