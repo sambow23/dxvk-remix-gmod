@@ -45,6 +45,7 @@
 #include "../../util/util_string.h"
 
 #include "../../d3d9/d3d9_swapchain.h"
+#include "../../d3d9/d3d9_texture.h"
 
 #include "../../lssusd/usd_include_begin.h"
 #include <src/usd-plugins/RemixParticleSystem/ParticleSystemAPI.h>
@@ -263,6 +264,23 @@ namespace {
         if (path.empty()) {
           return {};
         }
+
+        // Check for texture hash override (starts with 0x)
+        std::string pathStr = path.string();
+        if (pathStr.size() > 2 && pathStr[0] == '0' && (pathStr[1] == 'x' || pathStr[1] == 'X')) {
+          try {
+            uint64_t hash = std::stoull(pathStr, nullptr, 16);
+            if (hash != 0) {
+              const auto& textureTable = ctx.getCommonObjects()->getTextureManager().getTextureTable();
+              for (const auto& ref : textureTable) {
+                if (ref.isValid() && ref.getImageHash() == hash) {
+                  return ref;
+                }
+              }
+            }
+          } catch (...) { }
+        }
+
         auto assetData = AssetDataManager::get().findAsset(path.string());
         if (assetData == nullptr) {
           return {};
@@ -1262,6 +1280,95 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
+    const char* textureCategory,
+    const char* textureHash) {
+    std::lock_guard lock { s_mutex };
+
+    if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Invalid arguments"));
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: category='", textureCategory, "', hash='", textureHash, "'"));
+
+    std::string strCategory = std::string { textureCategory };
+    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
+    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
+    auto found = globalRtxOptions.find(optionHash);
+    if (found == globalRtxOptions.end()) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Option '", textureCategory, "' not found in global options map"));
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    if (found->second->type != dxvk::OptionType::HashSet) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Option '", textureCategory, "' is not a HashSet type"));
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Option found and is HashSet type"));
+
+    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
+
+    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Parsing hash string"));
+
+    XXH64_hash_t h = 0;
+    try {
+      h = std::stoull(textureHash, nullptr, 16);
+      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Parsed hash: 0x", std::hex, h));
+    } catch (const std::exception& e) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Failed to parse hash '", textureHash, "': ", e.what()));
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    const auto textureIterator = textureSet.find(h);
+
+    if (textureIterator == textureSet.end()) {
+      textureSet.insert(h);
+      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Successfully added hash 0x", std::hex, h));
+    } else {
+      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Hash already exists"));
+      return REMIXAPI_ERROR_CODE_SUCCESS; // already exists
+    }
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_RemoveTextureHash(
+    const char* textureCategory,
+    const char* textureHash) {
+    std::lock_guard lock { s_mutex };
+
+    if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    std::string strCategory = std::string { textureCategory };
+    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
+    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
+    auto found = globalRtxOptions.find(optionHash);
+    if (found == globalRtxOptions.end()) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    if (found->second->type != dxvk::OptionType::HashSet) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
+
+    const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
+    const auto textureIterator = textureSet.find(h);
+
+    if (textureIterator != textureSet.end()) {
+       textureSet.erase(textureIterator);
+    } else {
+      return REMIXAPI_ERROR_CODE_SUCCESS; // does not exist
+    }
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_pick_RequestObjectPicking(
     const remixapi_Rect2D* pixelRegion,
     PFN_remixapi_pick_RequestObjectPickingUserCallback callback,
@@ -1539,6 +1646,32 @@ namespace {
         break;
       }
     });
+    
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_dxvk_GetTextureHash(
+    IDirect3DTexture9* texture,
+    uint64_t* out_hash) {
+    if (!texture || !out_hash) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Cast the D3D9 texture to get the common texture wrapper
+    dxvk::D3D9CommonTexture* commonTexture = dxvk::GetCommonTexture(texture);
+    if (!commonTexture) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Get the underlying DXVK image
+    const dxvk::Rc<dxvk::DxvkImage>& image = commonTexture->GetImage();
+    if (image == nullptr) {
+      // Texture might be in system memory (not GPU)
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    // Get the hash from the image
+    *out_hash = image->getHash();
     
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
@@ -2021,12 +2154,15 @@ extern "C"
       interf.DestroyLight = remixapi_DestroyLight;
       interf.DrawLightInstance = remixapi_DrawLightInstance;
       interf.SetConfigVariable = remixapi_SetConfigVariable;
+      interf.AddTextureHash = remixapi_AddTextureHash;
+      interf.RemoveTextureHash = remixapi_RemoveTextureHash;
       interf.dxvk_CreateD3D9 = remixapi_dxvk_CreateD3D9_legacy;
       interf.dxvk_RegisterD3D9Device = remixapi_dxvk_RegisterD3D9Device;
       interf.dxvk_GetExternalSwapchain = remixapi_dxvk_GetExternalSwapchain;
       interf.dxvk_GetVkImage = remixapi_dxvk_GetVkImage;
       interf.dxvk_CopyRenderingOutput = remixapi_dxvk_CopyRenderingOutput;
       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
+      interf.dxvk_GetTextureHash = remixapi_dxvk_GetTextureHash;
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
       interf.GetUIState = remixapi_GetUIState;
@@ -2036,7 +2172,7 @@ extern "C"
       interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
       interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
     }
-    static_assert(sizeof(interf) == 216, "Add/remove function registration");
+    static_assert(sizeof(interf) == 240, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
