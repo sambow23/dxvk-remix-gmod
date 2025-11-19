@@ -61,6 +61,7 @@
 typedef struct IDirect3D9Ex       IDirect3D9Ex;
 typedef struct IDirect3DDevice9Ex IDirect3DDevice9Ex;
 typedef struct IDirect3DSurface9  IDirect3DSurface9;
+typedef struct IDirect3DTexture9  IDirect3DTexture9;
 
 
 #ifdef __cplusplus
@@ -707,6 +708,10 @@ extern "C" {
     remixapi_dxvk_CopyRenderingOutputType type,
     const remixapi_Float4D* color);
 
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_dxvk_GetTextureHash)(
+    IDirect3DTexture9* texture,
+    uint64_t*          out_hash);
+
 
   typedef struct remixapi_InitializeLibraryInfo {
     remixapi_StructType sType;
@@ -735,6 +740,7 @@ extern "C" {
     PFN_remixapi_dxvk_GetVkImage            dxvk_GetVkImage;
     PFN_remixapi_dxvk_CopyRenderingOutput   dxvk_CopyRenderingOutput;
     PFN_remixapi_dxvk_SetDefaultOutput      dxvk_SetDefaultOutput;
+    PFN_remixapi_dxvk_GetTextureHash        dxvk_GetTextureHash;
     // Object picking utils
     PFN_remixapi_pick_RequestObjectPicking  pick_RequestObjectPicking;
     PFN_remixapi_pick_HighlightObjects      pick_HighlightObjects;

@@ -45,6 +45,7 @@
 #include "../../util/util_string.h"
 
 #include "../../d3d9/d3d9_swapchain.h"
+#include "../../d3d9/d3d9_texture.h"
 
 #include "../../lssusd/usd_include_begin.h"
 #include <src/usd-plugins/RemixParticleSystem/ParticleSystemAPI.h>
@@ -1543,6 +1544,32 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_dxvk_GetTextureHash(
+    IDirect3DTexture9* texture,
+    uint64_t* out_hash) {
+    if (!texture || !out_hash) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Cast the D3D9 texture to get the common texture wrapper
+    dxvk::D3D9CommonTexture* commonTexture = dxvk::GetCommonTexture(texture);
+    if (!commonTexture) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Get the underlying DXVK image
+    const dxvk::Rc<dxvk::DxvkImage>& image = commonTexture->GetImage();
+    if (image == nullptr) {
+      // Texture might be in system memory (not GPU)
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    // Get the hash from the image
+    *out_hash = image->getHash();
+    
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_Startup(const remixapi_StartupInfo* info) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_STARTUP_INFO) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
@@ -2027,6 +2054,7 @@ extern "C"
       interf.dxvk_GetVkImage = remixapi_dxvk_GetVkImage;
       interf.dxvk_CopyRenderingOutput = remixapi_dxvk_CopyRenderingOutput;
       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
+      interf.dxvk_GetTextureHash = remixapi_dxvk_GetTextureHash;
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
       interf.GetUIState = remixapi_GetUIState;
@@ -2036,7 +2064,7 @@ extern "C"
       interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
       interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
     }
-    static_assert(sizeof(interf) == 216, "Add/remove function registration");
+    static_assert(sizeof(interf) == 224, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
