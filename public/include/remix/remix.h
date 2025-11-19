@@ -185,7 +185,8 @@ namespace remix {
     Result< void >                           dxvk_CopyRenderingOutput(IDirect3DSurface9* destination,
                                                                       remixapi_dxvk_CopyRenderingOutputType type);
     Result< void >                           dxvk_SetDefaultOutput(remixapi_dxvk_CopyRenderingOutputType type,
-                                                                   const remixapi_Float4D& color);
+                                                                  const remixapi_Float4D& color);
+    Result< uint64_t >                       dxvk_GetTextureHash(IDirect3DTexture9* texture);
     // Object picking utils
     template< typename CallbackLambda > // void( remix::Span<uint32_t> objectPickingValues )
     Result< void >                           pick_RequestObjectPicking(const Rect2D& region, CallbackLambda &&callback);
@@ -211,7 +212,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 216,
+      static_assert(sizeof(remixapi_Interface) == 240,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -1048,6 +1049,18 @@ namespace remix {
   inline Result< void > Interface::dxvk_SetDefaultOutput(
       remixapi_dxvk_CopyRenderingOutputType type, const remixapi_Float4D& color) {
     return m_CInterface.dxvk_SetDefaultOutput(type, &color);
+  }
+
+  inline Result< uint64_t > Interface::dxvk_GetTextureHash(IDirect3DTexture9* texture) {
+    if (!m_CInterface.dxvk_GetTextureHash) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    uint64_t hash = 0;
+    remixapi_ErrorCode status = m_CInterface.dxvk_GetTextureHash(texture, &hash);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return hash;
   }
 
   template< typename CallbackLambda >
