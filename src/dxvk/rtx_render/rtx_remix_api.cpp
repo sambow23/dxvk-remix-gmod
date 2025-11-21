@@ -1286,99 +1286,48 @@ namespace {
     std::lock_guard lock { s_mutex };
 
     if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Invalid arguments"));
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
+
+    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: category='", textureCategory, "', hash='", textureHash, "'"));
 
     std::string strCategory = std::string { textureCategory };
     const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
     const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
     auto found = globalRtxOptions.find(optionHash);
     if (found == globalRtxOptions.end()) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Option '", textureCategory, "' not found in global options map"));
       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     }
 
     if (found->second->type != dxvk::OptionType::HashSet) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Option '", textureCategory, "' is not a HashSet type"));
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
 
+    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Option found and is HashSet type"));
+
     auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
 
-    const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
+    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Parsing hash string"));
+
+    XXH64_hash_t h = 0;
+    try {
+      h = std::stoull(textureHash, nullptr, 16);
+      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Parsed hash: 0x", std::hex, h));
+    } catch (const std::exception& e) {
+      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Failed to parse hash '", textureHash, "': ", e.what()));
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
     const auto textureIterator = textureSet.find(h);
 
     if (textureIterator == textureSet.end()) {
       textureSet.insert(h);
+      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Successfully added hash 0x", std::hex, h));
     } else {
-      return REMIXAPI_ERROR_CODE_SUCCESS; // already exists
-    }
-
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_RemoveTextureHash(
-    const char* textureCategory,
-    const char* textureHash) {
-    std::lock_guard lock { s_mutex };
-
-    if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    std::string strCategory = std::string { textureCategory };
-    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
-    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
-    auto found = globalRtxOptions.find(optionHash);
-    if (found == globalRtxOptions.end()) {
-      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
-    }
-
-    if (found->second->type != dxvk::OptionType::HashSet) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
-
-    const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
-    const auto textureIterator = textureSet.find(h);
-
-    if (textureIterator != textureSet.end()) {
-       textureSet.erase(textureIterator);
-    } else {
-      return REMIXAPI_ERROR_CODE_SUCCESS; // does not exist
-    }
-
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
-    const char* textureCategory,
-    const char* textureHash) {
-    std::lock_guard lock { s_mutex };
-
-    if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    std::string strCategory = std::string { textureCategory };
-    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
-    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
-    auto found = globalRtxOptions.find(optionHash);
-    if (found == globalRtxOptions.end()) {
-      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
-    }
-
-    if (found->second->type != dxvk::OptionType::HashSet) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
-
-    const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
-    const auto textureIterator = textureSet.find(h);
-
-    if (textureIterator == textureSet.end()) {
-      textureSet.insert(h);
-    } else {
+      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Hash already exists"));
       return REMIXAPI_ERROR_CODE_SUCCESS; // already exists
     }
 
@@ -2223,7 +2172,7 @@ extern "C"
       interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
       interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
     }
-    static_assert(sizeof(interf) == 224, "Add/remove function registration");
+    static_assert(sizeof(interf) == 240, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
