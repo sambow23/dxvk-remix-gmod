@@ -264,6 +264,23 @@ namespace {
         if (path.empty()) {
           return {};
         }
+
+        // Check for texture hash override (starts with 0x)
+        std::string pathStr = path.string();
+        if (pathStr.size() > 2 && pathStr[0] == '0' && (pathStr[1] == 'x' || pathStr[1] == 'X')) {
+          try {
+            uint64_t hash = std::stoull(pathStr, nullptr, 16);
+            if (hash != 0) {
+              const auto& textureTable = ctx.getCommonObjects()->getTextureManager().getTextureTable();
+              for (const auto& ref : textureTable) {
+                if (ref.isValid() && ref.getImageHash() == hash) {
+                  return ref;
+                }
+              }
+            }
+          } catch (...) { }
+        }
+
         auto assetData = AssetDataManager::get().findAsset(path.string());
         if (assetData == nullptr) {
           return {};
