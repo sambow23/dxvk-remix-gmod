@@ -137,10 +137,9 @@ namespace {
 
   // from rtx_mod_usd.cpp
   XXH64_hash_t hack_getNextGeomHash() {
-    static uint64_t s_id = UINT64_MAX;
-    std::lock_guard lock { s_mutex };
-    --s_id;
-    return XXH64(&s_id, sizeof(s_id), 0);
+    static std::atomic<uint64_t> s_id { UINT64_MAX };
+    uint64_t id = --s_id;
+    return XXH64(&id, sizeof(id), 0);
   }
 
 
@@ -843,6 +842,7 @@ namespace {
 
     // async load
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cHandle = handle,
                          cMaterialData = convert::toRtMaterialWithoutTexturePreload(*info),
                          cPreloadSrc = convert::makePreloadSource(*info)](dxvk::DxvkContext* ctx) {
@@ -912,6 +912,7 @@ namespace {
     remixapi_MaterialHandle handle) {
     if (auto remixDevice = tryAsDxvk()) {
       std::lock_guard lock { s_mutex };
+      auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
         auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
         assets->destroyExternalMaterial(cHandle);
@@ -945,23 +946,23 @@ namespace {
       const size_t vertexDataSize = sizeInBytes(src.vertices_values, src.vertices_count);
       const size_t indexDataSize = sizeInBytes(src.indices_values, src.indices_count);
 
-      auto allocBuffer = [](dxvk::D3D9DeviceEx* device, size_t sizeInBytes) -> dxvk::Rc<dxvk::DxvkBuffer> {
-        if (sizeInBytes == 0) {
-          return {};
-        }
-        auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
-        {
-          bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-          bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-          bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT;
-          bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
-        }
-        return device->GetDXVKDevice()->createBuffer(
-            bufferInfo,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-            dxvk::DxvkMemoryStats::Category::RTXBuffer,
-           "Remix API mesh buffer");
-      };
+          auto allocBuffer = [](dxvk::D3D9DeviceEx* device, size_t sizeInBytes) -> dxvk::Rc<dxvk::DxvkBuffer> {
+            if (sizeInBytes == 0) {
+              return {};
+            }
+            auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
+            {
+              bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+              bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+              bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+              bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
+            }
+            return device->GetDXVKDevice()->createBuffer(
+                bufferInfo,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                dxvk::DxvkMemoryStats::Category::RTXBuffer,
+               "Remix API mesh buffer");
+          };
 
       dxvk::Rc<dxvk::DxvkBuffer> vertexBuffer = allocBuffer(remixDevice, vertexDataSize);
       dxvk::Rc<dxvk::DxvkBuffer> indexBuffer = allocBuffer(remixDevice, indexDataSize);
@@ -1040,6 +1041,7 @@ namespace {
       allocatedSurfaces.push_back(std::move(dst));
     }
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
 
     remixDevice->EmitCs([cHandle = handle, cSurfaces = std::move(allocatedSurfaces)](dxvk::DxvkContext* ctx) mutable {
       auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
@@ -1057,6 +1059,7 @@ namespace {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
     }
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
       auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
       assets->destroyExternalMesh(cHandle);
@@ -1100,11 +1103,12 @@ namespace {
       meshCreates.swap(s_pendingMeshCreates);
     }
 
-    auto devLock = remixDevice->LockDevice();
-    remixDevice->EmitCs([meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
-      auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
-      
-      for (auto& mesh : meshCreates) {
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
+        auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
+        
+        for (auto& mesh : meshCreates) {
         // Reconstruct standard MeshInfo from owned data
         std::vector<remixapi_MeshInfoSurfaceTriangles> surfaces;
         surfaces.reserve(mesh.surfaces.size());
@@ -1148,12 +1152,12 @@ namespace {
             if (sizeInBytes == 0) return {};
             auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
             bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT;
+            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
             bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
             return device->GetDXVKDevice()->createBuffer(
                 bufferInfo,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 dxvk::DxvkMemoryStats::Category::RTXBuffer,
                "Remix API mesh buffer");
           };
@@ -1228,6 +1232,7 @@ namespace {
       }
     });
   }
+}
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawInstance(
     const remixapi_InstanceInfo* info) {
@@ -1246,12 +1251,13 @@ namespace {
     // Flush any pending mesh creates before drawing
     flushPendingMeshes(remixDevice);
 
-    std::lock_guard lock { s_mutex };
-    auto devLock = remixDevice->LockDevice();
-    remixDevice->EmitCs([cRtDrawState = convert::toRtDrawState(*info)](dxvk::DxvkContext* dxvkCtx) mutable {
-      auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
-      ctx->commitExternalGeometryToRT(std::move(cRtDrawState));
-    });
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([cRtDrawState = convert::toRtDrawState(*info)](dxvk::DxvkContext* dxvkCtx) mutable {
+        auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
+        ctx->commitExternalGeometryToRT(std::move(cRtDrawState));
+      });
+    }
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -1807,6 +1813,7 @@ namespace {
     }
 
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cDest = destTexInfo->GetImage(), type = type](dxvk::DxvkContext* dxvkCtx) {
       auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
 
@@ -1855,6 +1862,7 @@ namespace {
     }
 
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([type, cColor = *color](dxvk::DxvkContext* ctx) {
       dxvk::RtxGlobals& globals = ctx->getCommonObjects()->getSceneManager().getGlobals();
       switch (type) {
@@ -2167,12 +2175,12 @@ namespace {
             if (sizeInBytes == 0) return {};
             auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
             bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT;
+            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
             bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
             return device->GetDXVKDevice()->createBuffer(
                 bufferInfo,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 dxvk::DxvkMemoryStats::Category::RTXBuffer,
                "Remix API mesh buffer");
           };
@@ -2484,12 +2492,12 @@ extern "C"
             if (sizeInBytes == 0) return {};
             auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
             bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT;
+            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
             bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
             return device->GetDXVKDevice()->createBuffer(
                 bufferInfo,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 dxvk::DxvkMemoryStats::Category::RTXBuffer,
                "Remix API mesh buffer");
           };
