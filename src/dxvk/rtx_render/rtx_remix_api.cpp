@@ -107,10 +107,25 @@ namespace {
     dxvk::Matrix4 transform; 
     std::filesystem::path texturePath;
   };
+  struct OwnedSurface {
+    std::vector<remixapi_HardcodedVertex> vertices;
+    std::vector<uint32_t> indices;
+    bool hasSkinning;
+    uint32_t bonesPerVertex;
+    std::vector<float> blendWeights;
+    std::vector<uint32_t> blendIndices;
+    remixapi_MaterialHandle material;
+  };
+  struct PendingMeshCreate {
+    remixapi_MeshHandle handle;
+    uint64_t hash;
+    std::vector<OwnedSurface> surfaces;
+  };
   std::vector<PendingLightCreate> s_pendingLightCreates;
   std::vector<PendingLightUpdate> s_pendingLightUpdates;
   std::vector<PendingDomeUpdate>  s_pendingDomeUpdates;
   std::vector<remixapi_LightHandle> s_pendingLightDestroys;
+  std::vector<PendingMeshCreate> s_pendingMeshCreates;
   // Track handles that were updated or created this frame to prevent re-adding after deletion in the same frame
   std::unordered_set<remixapi_LightHandle> s_handlesDeletedThisFrame;
 
@@ -122,10 +137,9 @@ namespace {
 
   // from rtx_mod_usd.cpp
   XXH64_hash_t hack_getNextGeomHash() {
-    static uint64_t s_id = UINT64_MAX;
-    std::lock_guard lock { s_mutex };
-    --s_id;
-    return XXH64(&s_id, sizeof(s_id), 0);
+    static std::atomic<uint64_t> s_id { UINT64_MAX };
+    uint64_t id = --s_id;
+    return XXH64(&id, sizeof(id), 0);
   }
 
 
@@ -828,6 +842,7 @@ namespace {
 
     // async load
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cHandle = handle,
                          cMaterialData = convert::toRtMaterialWithoutTexturePreload(*info),
                          cPreloadSrc = convert::makePreloadSource(*info)](dxvk::DxvkContext* ctx) {
@@ -846,6 +861,7 @@ namespace {
     remixapi_MaterialHandle handle) {
     if (auto remixDevice = tryAsDxvk()) {
       std::lock_guard lock { s_mutex };
+      auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
         auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
         assets->destroyExternalMaterial(cHandle);
@@ -879,23 +895,23 @@ namespace {
       const size_t vertexDataSize = sizeInBytes(src.vertices_values, src.vertices_count);
       const size_t indexDataSize = sizeInBytes(src.indices_values, src.indices_count);
 
-      auto allocBuffer = [](dxvk::D3D9DeviceEx* device, size_t sizeInBytes) -> dxvk::Rc<dxvk::DxvkBuffer> {
-        if (sizeInBytes == 0) {
-          return {};
-        }
-        auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
-        {
-          bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-          bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-          bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT;
-          bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
-        }
-        return device->GetDXVKDevice()->createBuffer(
-            bufferInfo,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-            dxvk::DxvkMemoryStats::Category::RTXBuffer,
-           "Remix API mesh buffer");
-      };
+          auto allocBuffer = [](dxvk::D3D9DeviceEx* device, size_t sizeInBytes) -> dxvk::Rc<dxvk::DxvkBuffer> {
+            if (sizeInBytes == 0) {
+              return {};
+            }
+            auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
+            {
+              bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+              bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+              bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+              bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
+            }
+            return device->GetDXVKDevice()->createBuffer(
+                bufferInfo,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                dxvk::DxvkMemoryStats::Category::RTXBuffer,
+               "Remix API mesh buffer");
+          };
 
       dxvk::Rc<dxvk::DxvkBuffer> vertexBuffer = allocBuffer(remixDevice, vertexDataSize);
       dxvk::Rc<dxvk::DxvkBuffer> indexBuffer = allocBuffer(remixDevice, indexDataSize);
@@ -974,6 +990,7 @@ namespace {
       allocatedSurfaces.push_back(std::move(dst));
     }
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
 
     remixDevice->EmitCs([cHandle = handle, cSurfaces = std::move(allocatedSurfaces)](dxvk::DxvkContext* ctx) mutable {
       auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
@@ -991,6 +1008,7 @@ namespace {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
     }
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
       auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
       assets->destroyExternalMesh(cHandle);
@@ -1015,12 +1033,155 @@ namespace {
       assert(0);
       const_cast<bool&>(dxvk::RtxOptions::enableNearPlaneOverride()) = false;
     }
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cRtCamera = convert::toRtCamera(*info)](dxvk::DxvkContext* ctx) {
       ctx->getCommonObjects()->getSceneManager().getCameraManager()
         .processExternalCamera(cRtCamera.type, cRtCamera.worldToView, cRtCamera.viewToProjection);
     });
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
+
+  // Helper to flush pending meshes immediately
+  void flushPendingMeshes(dxvk::D3D9DeviceEx* remixDevice) {
+    std::vector<PendingMeshCreate> meshCreates;
+    {
+      std::lock_guard lock { s_mutex };
+      if (s_pendingMeshCreates.empty()) {
+        return;
+      }
+      meshCreates.swap(s_pendingMeshCreates);
+    }
+
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
+        auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
+        
+        for (auto& mesh : meshCreates) {
+        // Reconstruct standard MeshInfo from owned data
+        std::vector<remixapi_MeshInfoSurfaceTriangles> surfaces;
+        surfaces.reserve(mesh.surfaces.size());
+        
+        for (const auto& ownedSurf : mesh.surfaces) {
+          remixapi_MeshInfoSurfaceTriangles surf = {};
+          surf.vertices_values = ownedSurf.vertices.data();
+          surf.vertices_count = ownedSurf.vertices.size();
+          surf.indices_values = ownedSurf.indices.data();
+          surf.indices_count = ownedSurf.indices.size();
+          surf.material = ownedSurf.material;
+          
+          if (ownedSurf.hasSkinning) {
+            surf.skinning_hasvalue = true;
+            surf.skinning_value.bonesPerVertex = ownedSurf.bonesPerVertex;
+            surf.skinning_value.blendWeights_values = ownedSurf.blendWeights.data();
+            surf.skinning_value.blendWeights_count = ownedSurf.blendWeights.size();
+            surf.skinning_value.blendIndices_values = ownedSurf.blendIndices.data();
+            surf.skinning_value.blendIndices_count = ownedSurf.blendIndices.size();
+          } else {
+            surf.skinning_hasvalue = false;
+          }
+          surfaces.push_back(surf);
+        }
+        
+        remixapi_MeshInfo info = {};
+        info.sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
+        info.hash = mesh.hash;
+        info.surfaces_count = surfaces.size();
+        info.surfaces_values = surfaces.data();
+        
+        remixapi_MeshHandle handle = reinterpret_cast<remixapi_MeshHandle>(info.hash);
+        
+        auto allocatedSurfaces = std::vector<dxvk::RasterGeometry> {};
+        for (size_t i = 0; i < info.surfaces_count; i++) {
+          const remixapi_MeshInfoSurfaceTriangles& src = info.surfaces_values[i];
+          const size_t vertexDataSize = sizeInBytes(src.vertices_values, src.vertices_count);
+          const size_t indexDataSize = sizeInBytes(src.indices_values, src.indices_count);
+
+          auto allocBuffer = [](dxvk::D3D9DeviceEx* device, size_t sizeInBytes) -> dxvk::Rc<dxvk::DxvkBuffer> {
+            if (sizeInBytes == 0) return {};
+            auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
+            bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+            bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
+            return device->GetDXVKDevice()->createBuffer(
+                bufferInfo,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                dxvk::DxvkMemoryStats::Category::RTXBuffer,
+               "Remix API mesh buffer");
+          };
+
+          dxvk::Rc<dxvk::DxvkBuffer> vertexBuffer = allocBuffer(s_dxvkDevice, vertexDataSize);
+          dxvk::Rc<dxvk::DxvkBuffer> indexBuffer = allocBuffer(s_dxvkDevice, indexDataSize);
+          dxvk::Rc<dxvk::DxvkBuffer> skinningBuffer = nullptr;
+
+          auto vertexSlice = dxvk::DxvkBufferSlice { vertexBuffer };
+          memcpy(vertexSlice.mapPtr(0), src.vertices_values, vertexDataSize);
+
+          auto indexSlice = dxvk::DxvkBufferSlice {};
+          if (indexDataSize > 0) {
+            indexSlice = dxvk::DxvkBufferSlice { indexBuffer };
+            memcpy(indexSlice.mapPtr(0), src.indices_values, indexDataSize);
+          }
+
+          auto blendWeightsSlice = dxvk::DxvkBufferSlice {};
+          auto blendIndicesSlice = dxvk::DxvkBufferSlice {};
+          if (src.skinning_hasvalue) {
+            size_t wordsPerCompressedTuple = dxvk::divCeil(src.skinning_value.bonesPerVertex, 4u);
+            size_t sizeInBytes_weights = sizeInBytes(src.skinning_value.blendWeights_values, src.skinning_value.blendWeights_count);
+            size_t sizeInBytes_indices = src.vertices_count * wordsPerCompressedTuple * sizeof(uint32_t);
+
+            skinningBuffer = allocBuffer(s_dxvkDevice, sizeInBytes_weights + sizeInBytes_indices);
+
+            auto compressedBlendIndices = std::vector<uint32_t> {};
+            compressedBlendIndices.resize(src.vertices_count * wordsPerCompressedTuple);
+            for (size_t vert = 0; vert < src.vertices_count; vert++) {
+              const uint32_t* dstCompressed = &compressedBlendIndices[vert * wordsPerCompressedTuple];
+              const uint32_t* blendIndicesStorage = &src.skinning_value.blendIndices_values[vert * src.skinning_value.bonesPerVertex];
+              for (int j = 0; j < src.skinning_value.bonesPerVertex; j += 4) {
+                uint32_t vertIndices = 0;
+                for (int k = 0; k < 4 && j + k < src.skinning_value.bonesPerVertex; ++k) {
+                  vertIndices |= blendIndicesStorage[j + k] << 8 * k;
+                }
+                *(uint32_t*) &dstCompressed[j / 4] = vertIndices;
+              }
+            }
+
+            blendWeightsSlice = dxvk::DxvkBufferSlice { skinningBuffer, 0, sizeInBytes_weights };
+            blendIndicesSlice = dxvk::DxvkBufferSlice { skinningBuffer, sizeInBytes_weights, sizeInBytes_indices };
+            memcpy(blendWeightsSlice.mapPtr(0), src.skinning_value.blendWeights_values, sizeInBytes_weights);
+            memcpy(blendIndicesSlice.mapPtr(0), compressedBlendIndices.data(), sizeInBytes_indices);
+          }
+
+          auto dst = dxvk::RasterGeometry {};
+          dst.externalMaterial = src.material;
+          dst.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+          dst.cullMode = VK_CULL_MODE_NONE; 
+          dst.frontFace = VK_FRONT_FACE_CLOCKWISE;
+          dst.vertexCount = src.vertices_count; 
+          dst.positionBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, position), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
+          dst.normalBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, normal), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
+          dst.texcoordBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, texcoord), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32_SFLOAT };
+          dst.color0Buffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, color), sizeof(remixapi_HardcodedVertex), VK_FORMAT_B8G8R8A8_UNORM };
+          if (src.skinning_hasvalue) {
+            dst.numBonesPerVertex = src.skinning_value.bonesPerVertex;
+            dst.blendWeightBuffer = dxvk::RasterBuffer { blendWeightsSlice, 0, sizeof(float), VK_FORMAT_R32_SFLOAT };;
+            dst.blendIndicesBuffer = dxvk::RasterBuffer { blendIndicesSlice, 0, sizeof(uint32_t), VK_FORMAT_R8G8B8A8_USCALED };
+          }
+          dst.indexCount = src.indices_count;
+          dst.indexBuffer = dxvk::RasterBuffer { indexSlice, 0, sizeof(uint32_t), VK_INDEX_TYPE_UINT32 };
+          dst.hashes[dxvk::HashComponents::Indices] = dst.hashes[dxvk::HashComponents::VertexPosition] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::VertexTexcoord] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::GeometryDescriptor] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::VertexLayout] = hack_getNextGeomHash();
+          dst.hashes.precombine();
+          allocatedSurfaces.push_back(std::move(dst));
+        }
+        assets->registerExternalMesh(handle, std::move(allocatedSurfaces));
+      }
+    });
+  }
+}
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawInstance(
     const remixapi_InstanceInfo* info) {
@@ -1035,11 +1196,17 @@ namespace {
         cb();
       }
     }
-    std::lock_guard lock { s_mutex };
-    remixDevice->EmitCs([cRtDrawState = convert::toRtDrawState(*info)](dxvk::DxvkContext* dxvkCtx) mutable {
-      auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
-      ctx->commitExternalGeometryToRT(std::move(cRtDrawState));
-    });
+    
+    // Flush any pending mesh creates before drawing
+    flushPendingMeshes(remixDevice);
+
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([cRtDrawState = convert::toRtDrawState(*info)](dxvk::DxvkContext* dxvkCtx) mutable {
+        auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
+        ctx->commitExternalGeometryToRT(std::move(cRtDrawState));
+      });
+    }
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -1063,6 +1230,7 @@ namespace {
     std::lock_guard lock { s_mutex };
     if (auto src = pnext::find<remixapi_LightInfoDomeEXT>(info)) {
       // Special case for dome lights
+      auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle, 
                           cRadiance = convert::tovec3(info->radiance), 
                           cTransform = convert::tomat4(src->transform), 
@@ -1106,6 +1274,7 @@ namespace {
       // Set the isDynamic flag from the LightInfo
       rtLight->isDynamic = info->isDynamic;
 
+      auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
         auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
         lightMgr.addExternalLight(cHandle, cRtLight);
@@ -1114,10 +1283,13 @@ namespace {
 
     *out_handle = handle;
     // Auto-register for persistent instancing on device
-    remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
-      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
-      lightMgr.registerPersistentExternalLight(cHandle);
-    });
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
+        auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+        lightMgr.registerPersistentExternalLight(cHandle);
+      });
+    }
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
   
@@ -1162,6 +1334,68 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateMeshBatched(
+    const remixapi_MeshInfo* info,
+    remixapi_MeshHandle* out_handle) {
+    if (!out_handle || !info || info->sType != REMIXAPI_STRUCT_TYPE_MESH_INFO) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    static_assert(sizeof(remixapi_MeshHandle) == sizeof(info->hash));
+    auto handle = reinterpret_cast<remixapi_MeshHandle>(info->hash);
+    if (!handle) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    PendingMeshCreate pending;
+    pending.handle = handle;
+    pending.hash = info->hash;
+    
+    // Deep copy all surfaces
+    for (uint32_t i = 0; i < info->surfaces_count; i++) {
+      const auto& src = info->surfaces_values[i];
+      OwnedSurface dst;
+      dst.material = src.material;
+      
+      // Vertices
+      dst.vertices.resize(src.vertices_count);
+      if (src.vertices_count > 0) {
+        memcpy(dst.vertices.data(), src.vertices_values, src.vertices_count * sizeof(remixapi_HardcodedVertex));
+      }
+      
+      // Indices
+      dst.indices.resize(src.indices_count);
+      if (src.indices_count > 0) {
+        memcpy(dst.indices.data(), src.indices_values, src.indices_count * sizeof(uint32_t));
+      }
+      
+      // Skinning
+      dst.hasSkinning = src.skinning_hasvalue;
+      if (src.skinning_hasvalue) {
+        dst.bonesPerVertex = src.skinning_value.bonesPerVertex;
+        dst.blendWeights.resize(src.skinning_value.blendWeights_count);
+        if (src.skinning_value.blendWeights_count > 0) {
+          memcpy(dst.blendWeights.data(), src.skinning_value.blendWeights_values, src.skinning_value.blendWeights_count * sizeof(float));
+        }
+        dst.blendIndices.resize(src.skinning_value.blendIndices_count);
+        if (src.skinning_value.blendIndices_count > 0) {
+          memcpy(dst.blendIndices.data(), src.skinning_value.blendIndices_values, src.skinning_value.blendIndices_count * sizeof(uint32_t));
+        }
+      } else {
+        dst.bonesPerVertex = 0;
+      }
+      
+      pending.surfaces.push_back(std::move(dst));
+    }
+
+    {
+      std::lock_guard lock { s_mutex };
+      s_pendingMeshCreates.push_back(std::move(pending));
+    }
+
+    *out_handle = handle;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyLight(
     remixapi_LightHandle handle) {
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
@@ -1196,6 +1430,7 @@ namespace {
 
     // async load
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([lightHandle](dxvk::DxvkContext* ctx) {
       auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
       lightMgr.addExternalLightInstance(lightHandle);
@@ -1438,6 +1673,7 @@ namespace {
     }
 
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cDest = destTexInfo->GetImage(), type = type](dxvk::DxvkContext* dxvkCtx) {
       auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
 
@@ -1486,6 +1722,7 @@ namespace {
     }
 
     std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([type, cColor = *color](dxvk::DxvkContext* ctx) {
       dxvk::RtxGlobals& globals = ctx->getCommonObjects()->getSceneManager().getGlobals();
       switch (type) {
@@ -1649,18 +1886,21 @@ namespace {
     std::vector<PendingLightUpdate> updates;
     std::vector<PendingDomeUpdate> dune;
     std::vector<remixapi_LightHandle> destroys;
+    std::vector<PendingMeshCreate> meshCreates;
     {
       std::lock_guard lock { s_mutex };
       creates.swap(s_pendingLightCreates);
       updates.swap(s_pendingLightUpdates);
       dune.swap(s_pendingDomeUpdates);
       destroys.swap(s_pendingLightDestroys);
+      meshCreates.swap(s_pendingMeshCreates);
     }
     // Build tombstone set for this frame to avoid re-adding deleted lights
     std::unordered_set<remixapi_LightHandle> tombstones;
     tombstones.insert(destroys.begin(), destroys.end());
 
-    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys), tombstones = std::move(tombstones)](dxvk::DxvkContext* ctx) mutable {
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys), tombstones = std::move(tombstones), meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
       auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
       // Apply destroys first
       for (auto h : destroys) {
@@ -1745,6 +1985,136 @@ namespace {
         lightMgr.addExternalDomeLight(du.handle, domeLight);
         lightMgr.addExternalLightInstance(du.handle);
       }
+      
+      // Apply mesh creates (flushed here if not already by DrawInstance)
+      for (auto& mesh : meshCreates) {
+        // Reconstruct standard MeshInfo from owned data
+        std::vector<remixapi_MeshInfoSurfaceTriangles> surfaces;
+        surfaces.reserve(mesh.surfaces.size());
+        
+        for (const auto& ownedSurf : mesh.surfaces) {
+          remixapi_MeshInfoSurfaceTriangles surf = {};
+          surf.vertices_values = ownedSurf.vertices.data();
+          surf.vertices_count = ownedSurf.vertices.size();
+          surf.indices_values = ownedSurf.indices.data();
+          surf.indices_count = ownedSurf.indices.size();
+          surf.material = ownedSurf.material;
+          
+          if (ownedSurf.hasSkinning) {
+            surf.skinning_hasvalue = true;
+            surf.skinning_value.bonesPerVertex = ownedSurf.bonesPerVertex;
+            surf.skinning_value.blendWeights_values = ownedSurf.blendWeights.data();
+            surf.skinning_value.blendWeights_count = ownedSurf.blendWeights.size();
+            surf.skinning_value.blendIndices_values = ownedSurf.blendIndices.data();
+            surf.skinning_value.blendIndices_count = ownedSurf.blendIndices.size();
+          } else {
+            surf.skinning_hasvalue = false;
+          }
+          surfaces.push_back(surf);
+        }
+        
+        remixapi_MeshInfo info = {};
+        info.sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
+        info.hash = mesh.hash;
+        info.surfaces_count = surfaces.size();
+        info.surfaces_values = surfaces.data();
+        
+        remixapi_MeshHandle out_handle;
+        
+        // INLINE LOGIC START
+        auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
+        remixapi_MeshHandle handle = reinterpret_cast<remixapi_MeshHandle>(info.hash);
+        
+        auto allocatedSurfaces = std::vector<dxvk::RasterGeometry> {};
+        for (size_t i = 0; i < info.surfaces_count; i++) {
+          const remixapi_MeshInfoSurfaceTriangles& src = info.surfaces_values[i];
+          const size_t vertexDataSize = sizeInBytes(src.vertices_values, src.vertices_count);
+          const size_t indexDataSize = sizeInBytes(src.indices_values, src.indices_count);
+
+          auto allocBuffer = [](dxvk::D3D9DeviceEx* device, size_t sizeInBytes) -> dxvk::Rc<dxvk::DxvkBuffer> {
+            if (sizeInBytes == 0) return {};
+            auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
+            bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+            bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
+            return device->GetDXVKDevice()->createBuffer(
+                bufferInfo,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                dxvk::DxvkMemoryStats::Category::RTXBuffer,
+               "Remix API mesh buffer");
+          };
+
+          dxvk::Rc<dxvk::DxvkBuffer> vertexBuffer = allocBuffer(s_dxvkDevice, vertexDataSize);
+          dxvk::Rc<dxvk::DxvkBuffer> indexBuffer = allocBuffer(s_dxvkDevice, indexDataSize);
+          dxvk::Rc<dxvk::DxvkBuffer> skinningBuffer = nullptr;
+
+          auto vertexSlice = dxvk::DxvkBufferSlice { vertexBuffer };
+          memcpy(vertexSlice.mapPtr(0), src.vertices_values, vertexDataSize);
+
+          auto indexSlice = dxvk::DxvkBufferSlice {};
+          if (indexDataSize > 0) {
+            indexSlice = dxvk::DxvkBufferSlice { indexBuffer };
+            memcpy(indexSlice.mapPtr(0), src.indices_values, indexDataSize);
+          }
+
+          auto blendWeightsSlice = dxvk::DxvkBufferSlice {};
+          auto blendIndicesSlice = dxvk::DxvkBufferSlice {};
+          if (src.skinning_hasvalue) {
+            size_t wordsPerCompressedTuple = dxvk::divCeil(src.skinning_value.bonesPerVertex, 4u);
+            size_t sizeInBytes_weights = sizeInBytes(src.skinning_value.blendWeights_values, src.skinning_value.blendWeights_count);
+            size_t sizeInBytes_indices = src.vertices_count * wordsPerCompressedTuple * sizeof(uint32_t);
+
+            skinningBuffer = allocBuffer(s_dxvkDevice, sizeInBytes_weights + sizeInBytes_indices);
+
+            auto compressedBlendIndices = std::vector<uint32_t> {};
+            compressedBlendIndices.resize(src.vertices_count * wordsPerCompressedTuple);
+            for (size_t vert = 0; vert < src.vertices_count; vert++) {
+              const uint32_t* dstCompressed = &compressedBlendIndices[vert * wordsPerCompressedTuple];
+              const uint32_t* blendIndicesStorage = &src.skinning_value.blendIndices_values[vert * src.skinning_value.bonesPerVertex];
+              for (int j = 0; j < src.skinning_value.bonesPerVertex; j += 4) {
+                uint32_t vertIndices = 0;
+                for (int k = 0; k < 4 && j + k < src.skinning_value.bonesPerVertex; ++k) {
+                  vertIndices |= blendIndicesStorage[j + k] << 8 * k;
+                }
+                *(uint32_t*) &dstCompressed[j / 4] = vertIndices;
+              }
+            }
+
+            blendWeightsSlice = dxvk::DxvkBufferSlice { skinningBuffer, 0, sizeInBytes_weights };
+            blendIndicesSlice = dxvk::DxvkBufferSlice { skinningBuffer, sizeInBytes_weights, sizeInBytes_indices };
+            memcpy(blendWeightsSlice.mapPtr(0), src.skinning_value.blendWeights_values, sizeInBytes_weights);
+            memcpy(blendIndicesSlice.mapPtr(0), compressedBlendIndices.data(), sizeInBytes_indices);
+          }
+
+          auto dst = dxvk::RasterGeometry {};
+          dst.externalMaterial = src.material;
+          dst.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+          dst.cullMode = VK_CULL_MODE_NONE; 
+          dst.frontFace = VK_FRONT_FACE_CLOCKWISE;
+          dst.vertexCount = src.vertices_count; 
+          dst.positionBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, position), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
+          dst.normalBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, normal), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
+          dst.texcoordBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, texcoord), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32_SFLOAT };
+          dst.color0Buffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, color), sizeof(remixapi_HardcodedVertex), VK_FORMAT_B8G8R8A8_UNORM };
+          if (src.skinning_hasvalue) {
+            dst.numBonesPerVertex = src.skinning_value.bonesPerVertex;
+            dst.blendWeightBuffer = dxvk::RasterBuffer { blendWeightsSlice, 0, sizeof(float), VK_FORMAT_R32_SFLOAT };;
+            dst.blendIndicesBuffer = dxvk::RasterBuffer { blendIndicesSlice, 0, sizeof(uint32_t), VK_FORMAT_R8G8B8A8_USCALED };
+          }
+          dst.indexCount = src.indices_count;
+          dst.indexBuffer = dxvk::RasterBuffer { indexSlice, 0, sizeof(uint32_t), VK_INDEX_TYPE_UINT32 };
+          dst.hashes[dxvk::HashComponents::Indices] = dst.hashes[dxvk::HashComponents::VertexPosition] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::VertexTexcoord] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::GeometryDescriptor] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::VertexLayout] = hack_getNextGeomHash();
+          dst.hashes.precombine();
+          allocatedSurfaces.push_back(std::move(dst));
+        }
+        assets->registerExternalMesh(handle, std::move(allocatedSurfaces));
+        // INLINE LOGIC END
+      }
+
       lightMgr.queueAutoInstancePersistent();
     });
     // endScene right before present if a frame was started
@@ -1840,6 +2210,7 @@ extern "C"
     std::vector<PendingLightUpdate> updates;
     std::vector<PendingDomeUpdate> dune;
     std::vector<remixapi_LightHandle> destroys;
+    std::vector<PendingMeshCreate> meshCreates;
     {
       std::lock_guard lock { s_mutex };
       s_handlesDeletedThisFrame.clear();
@@ -1847,8 +2218,10 @@ extern "C"
       updates.swap(s_pendingLightUpdates);
       dune.swap(s_pendingDomeUpdates);
       destroys.swap(s_pendingLightDestroys);
+      meshCreates.swap(s_pendingMeshCreates);
     }
-    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys)](dxvk::DxvkContext* ctx) mutable {
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys), meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
       auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
       // Apply destroys first
       for (auto h : destroys) {
@@ -1926,6 +2299,145 @@ extern "C"
         lightMgr.addExternalDomeLight(du.handle, domeLight);
         lightMgr.addExternalLightInstance(du.handle);
       }
+      
+      // Apply mesh creates
+      for (auto& mesh : meshCreates) {
+        // Reconstruct standard MeshInfo from owned data
+        std::vector<remixapi_MeshInfoSurfaceTriangles> surfaces;
+        surfaces.reserve(mesh.surfaces.size());
+        
+        for (const auto& ownedSurf : mesh.surfaces) {
+          remixapi_MeshInfoSurfaceTriangles surf = {};
+          surf.vertices_values = ownedSurf.vertices.data();
+          surf.vertices_count = ownedSurf.vertices.size();
+          surf.indices_values = ownedSurf.indices.data();
+          surf.indices_count = ownedSurf.indices.size();
+          surf.material = ownedSurf.material;
+          
+          if (ownedSurf.hasSkinning) {
+            surf.skinning_hasvalue = true;
+            surf.skinning_value.bonesPerVertex = ownedSurf.bonesPerVertex;
+            surf.skinning_value.blendWeights_values = ownedSurf.blendWeights.data();
+            surf.skinning_value.blendWeights_count = ownedSurf.blendWeights.size();
+            surf.skinning_value.blendIndices_values = ownedSurf.blendIndices.data();
+            surf.skinning_value.blendIndices_count = ownedSurf.blendIndices.size();
+          } else {
+            surf.skinning_hasvalue = false;
+          }
+          surfaces.push_back(surf);
+        }
+        
+        remixapi_MeshInfo info = {};
+        info.sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
+        info.hash = mesh.hash;
+        info.surfaces_count = surfaces.size();
+        info.surfaces_values = surfaces.data();
+        
+        remixapi_MeshHandle out_handle;
+        // Call internal CreateMesh logic (we can't call remixapi_CreateMesh because it does async EmitCs, but we are already in Cs!)
+        // Actually remixapi_CreateMesh does EmitCs. We can't do nested EmitCs.
+        // We need to inline the logic from remixapi_CreateMesh here, but modified to run synchronously on the context.
+        
+        // INLINE LOGIC START
+        auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
+        remixapi_MeshHandle handle = reinterpret_cast<remixapi_MeshHandle>(info.hash);
+        
+        auto allocatedSurfaces = std::vector<dxvk::RasterGeometry> {};
+        for (size_t i = 0; i < info.surfaces_count; i++) {
+          const remixapi_MeshInfoSurfaceTriangles& src = info.surfaces_values[i];
+          const size_t vertexDataSize = sizeInBytes(src.vertices_values, src.vertices_count);
+          const size_t indexDataSize = sizeInBytes(src.indices_values, src.indices_count);
+
+          auto allocBuffer = [](dxvk::D3D9DeviceEx* device, size_t sizeInBytes) -> dxvk::Rc<dxvk::DxvkBuffer> {
+            if (sizeInBytes == 0) return {};
+            auto bufferInfo = dxvk::DxvkBufferCreateInfo {};
+            bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+            bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_HOST_BIT;
+            bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+            bufferInfo.size = dxvk::align(sizeInBytes, dxvk::CACHE_LINE_SIZE);
+            return device->GetDXVKDevice()->createBuffer(
+                bufferInfo,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                dxvk::DxvkMemoryStats::Category::RTXBuffer,
+               "Remix API mesh buffer");
+          };
+
+          // NOTE: s_dxvkDevice is global, can access here? Yes, it's in anonymous namespace.
+          // But we are in a lambda. We need to capture s_dxvkDevice or pass it?
+          // s_dxvkDevice is static in anonymous namespace, accessible if lambda captures it or if it's effectively global in translation unit.
+          // Since lambda is in the same translation unit, it can access s_dxvkDevice.
+          // But wait, s_dxvkDevice is defined in anonymous namespace at top of file.
+          
+          dxvk::Rc<dxvk::DxvkBuffer> vertexBuffer = allocBuffer(s_dxvkDevice, vertexDataSize);
+          dxvk::Rc<dxvk::DxvkBuffer> indexBuffer = allocBuffer(s_dxvkDevice, indexDataSize);
+          dxvk::Rc<dxvk::DxvkBuffer> skinningBuffer = nullptr;
+
+          auto vertexSlice = dxvk::DxvkBufferSlice { vertexBuffer };
+          memcpy(vertexSlice.mapPtr(0), src.vertices_values, vertexDataSize);
+
+          auto indexSlice = dxvk::DxvkBufferSlice {};
+          if (indexDataSize > 0) {
+            indexSlice = dxvk::DxvkBufferSlice { indexBuffer };
+            memcpy(indexSlice.mapPtr(0), src.indices_values, indexDataSize);
+          }
+
+          auto blendWeightsSlice = dxvk::DxvkBufferSlice {};
+          auto blendIndicesSlice = dxvk::DxvkBufferSlice {};
+          if (src.skinning_hasvalue) {
+            size_t wordsPerCompressedTuple = dxvk::divCeil(src.skinning_value.bonesPerVertex, 4u);
+            size_t sizeInBytes_weights = sizeInBytes(src.skinning_value.blendWeights_values, src.skinning_value.blendWeights_count);
+            size_t sizeInBytes_indices = src.vertices_count * wordsPerCompressedTuple * sizeof(uint32_t);
+
+            skinningBuffer = allocBuffer(s_dxvkDevice, sizeInBytes_weights + sizeInBytes_indices);
+
+            auto compressedBlendIndices = std::vector<uint32_t> {};
+            compressedBlendIndices.resize(src.vertices_count * wordsPerCompressedTuple);
+            for (size_t vert = 0; vert < src.vertices_count; vert++) {
+              const uint32_t* dstCompressed = &compressedBlendIndices[vert * wordsPerCompressedTuple];
+              const uint32_t* blendIndicesStorage = &src.skinning_value.blendIndices_values[vert * src.skinning_value.bonesPerVertex];
+              for (int j = 0; j < src.skinning_value.bonesPerVertex; j += 4) {
+                uint32_t vertIndices = 0;
+                for (int k = 0; k < 4 && j + k < src.skinning_value.bonesPerVertex; ++k) {
+                  vertIndices |= blendIndicesStorage[j + k] << 8 * k;
+                }
+                *(uint32_t*) &dstCompressed[j / 4] = vertIndices;
+              }
+            }
+
+            blendWeightsSlice = dxvk::DxvkBufferSlice { skinningBuffer, 0, sizeInBytes_weights };
+            blendIndicesSlice = dxvk::DxvkBufferSlice { skinningBuffer, sizeInBytes_weights, sizeInBytes_indices };
+            memcpy(blendWeightsSlice.mapPtr(0), src.skinning_value.blendWeights_values, sizeInBytes_weights);
+            memcpy(blendIndicesSlice.mapPtr(0), compressedBlendIndices.data(), sizeInBytes_indices);
+          }
+
+          auto dst = dxvk::RasterGeometry {};
+          dst.externalMaterial = src.material;
+          dst.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+          dst.cullMode = VK_CULL_MODE_NONE; 
+          dst.frontFace = VK_FRONT_FACE_CLOCKWISE;
+          dst.vertexCount = src.vertices_count; 
+          dst.positionBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, position), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
+          dst.normalBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, normal), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
+          dst.texcoordBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, texcoord), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32_SFLOAT };
+          dst.color0Buffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, color), sizeof(remixapi_HardcodedVertex), VK_FORMAT_B8G8R8A8_UNORM };
+          if (src.skinning_hasvalue) {
+            dst.numBonesPerVertex = src.skinning_value.bonesPerVertex;
+            dst.blendWeightBuffer = dxvk::RasterBuffer { blendWeightsSlice, 0, sizeof(float), VK_FORMAT_R32_SFLOAT };;
+            dst.blendIndicesBuffer = dxvk::RasterBuffer { blendIndicesSlice, 0, sizeof(uint32_t), VK_FORMAT_R8G8B8A8_USCALED };
+          }
+          dst.indexCount = src.indices_count;
+          dst.indexBuffer = dxvk::RasterBuffer { indexSlice, 0, sizeof(uint32_t), VK_INDEX_TYPE_UINT32 };
+          dst.hashes[dxvk::HashComponents::Indices] = dst.hashes[dxvk::HashComponents::VertexPosition] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::VertexTexcoord] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::GeometryDescriptor] = hack_getNextGeomHash();
+          dst.hashes[dxvk::HashComponents::VertexLayout] = hack_getNextGeomHash();
+          dst.hashes.precombine();
+          allocatedSurfaces.push_back(std::move(dst));
+        }
+        assets->registerExternalMesh(handle, std::move(allocatedSurfaces));
+        // INLINE LOGIC END
+      }
+
       // Ensure persistent auto-instancing happens every frame
       lightMgr.queueAutoInstancePersistent();
     });
@@ -2019,8 +2531,9 @@ extern "C"
       interf.RegisterCallbacks = remixapi_RegisterCallbacks;
       interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
       interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
+      interf.CreateMeshBatched = remixapi_CreateMeshBatched;
     }
-    static_assert(sizeof(interf) == 240, "Add/remove function registration");
+    static_assert(sizeof(interf) == 248, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

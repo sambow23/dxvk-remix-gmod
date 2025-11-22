@@ -166,6 +166,7 @@ namespace remix {
     Result< remixapi_MaterialHandle > CreateMaterial(const remixapi_MaterialInfo& info);
     Result< void >                    DestroyMaterial(remixapi_MaterialHandle handle);
     Result< remixapi_MeshHandle >     CreateMesh(const remixapi_MeshInfo& info);
+    Result< remixapi_MeshHandle >     CreateMeshBatched(const remixapi_MeshInfo& info);
     Result< void >                    DestroyMesh(remixapi_MeshHandle handle);
     Result< void >                    SetupCamera(const remixapi_CameraInfo& info);
          Result< void >                    DrawInstance(const remixapi_InstanceInfo& info);
@@ -212,7 +213,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 240,
+      static_assert(sizeof(remixapi_Interface) == 248,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -644,6 +645,15 @@ namespace remix {
   inline Result< remixapi_MeshHandle > Interface::CreateMesh(const remixapi_MeshInfo& info) {
     remixapi_MeshHandle handle = nullptr;
     remixapi_ErrorCode status = m_CInterface.CreateMesh(&info, &handle);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return handle;
+  }
+
+  inline Result< remixapi_MeshHandle > Interface::CreateMeshBatched(const remixapi_MeshInfo& info) {
+    remixapi_MeshHandle handle = nullptr;
+    remixapi_ErrorCode status = m_CInterface.CreateMeshBatched(&info, &handle);
     if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
       return status;
     }
