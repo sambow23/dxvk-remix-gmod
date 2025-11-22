@@ -83,7 +83,7 @@ namespace dxvk {
 // NV-DXVK start: different default values for d3d9 options
     , m_d3d9Options    ( dxvkDevice, pParent->GetInstance()->config(), WithRemixAPI )
 // NV-DXVK end
-    , m_multithread    ( BehaviorFlags & D3DCREATE_MULTITHREADED )
+    , m_multithread    ( (BehaviorFlags & D3DCREATE_MULTITHREADED) || WithRemixAPI )
     , m_isSWVP         ( (BehaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? true : false )
     , m_csThread       ( dxvkDevice, dxvkDevice->createRtxContext() )
     , m_csChunk        ( AllocCsChunk() )
