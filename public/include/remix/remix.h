@@ -1007,7 +1007,8 @@ namespace remix {
       hash = 0;
       radiance = { 1.0f, 1.0f, 1.0f };
       isDynamic = false;  // Default to static for temporal accumulation
-      static_assert(sizeof remixapi_LightInfo == 40);
+      ignoreViewModel = false;  // Default to affecting all geometry including view models
+      static_assert(sizeof remixapi_LightInfo == 48);
     }
   };
 
