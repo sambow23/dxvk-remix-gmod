@@ -1324,6 +1324,9 @@ namespace {
 
       // Set the isDynamic flag from the LightInfo
       rtLight->isDynamic = info->isDynamic;
+      
+      // Set the ignoreViewModel flag from the LightInfo
+      rtLight->ignoreViewModel = info->ignoreViewModel;
 
       auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
@@ -2613,6 +2616,13 @@ extern "C"
     if (!rt.has_value()) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
+    
+    // Set the isDynamic flag from the LightInfo
+    rt->isDynamic = info->isDynamic;
+    
+    // Set the ignoreViewModel flag from the LightInfo
+    rt->ignoreViewModel = info->ignoreViewModel;
+    
     {
       std::lock_guard lock { s_mutex };
       s_pendingLightUpdates.push_back(PendingLightUpdate{ handle, std::move(rt) });

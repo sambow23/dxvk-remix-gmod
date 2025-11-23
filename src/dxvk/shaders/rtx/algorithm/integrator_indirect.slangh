@@ -637,7 +637,7 @@ void integratePathVertex(
           lightSampleValid = sampleLightRIS(
             randomState,
             surfaceInteraction, opaqueSurfaceMaterialInteraction, rayInteraction.viewDirection,
-            lightSample, invSelectionPdf, lightIdx);
+            lightSample, invSelectionPdf, lightIdx, rayInteraction.customIndex);
         }
       }
 

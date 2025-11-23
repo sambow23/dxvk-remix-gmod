@@ -606,6 +606,7 @@ extern "C" {
     uint64_t                        hash;
     remixapi_Float3D                radiance;
     remixapi_Bool                   isDynamic;
+    remixapi_Bool                   ignoreViewModel;
   } remixapi_LightInfo;
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLight)(
