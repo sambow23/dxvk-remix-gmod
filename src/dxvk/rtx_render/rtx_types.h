@@ -515,7 +515,6 @@ enum class InstanceCategories : uint32_t {
   IgnoreBakedLighting,
   IgnoreTransparencyLayer,
   ParticleEmitter,
-  LegacyEmissive,
 
   Count,
 };

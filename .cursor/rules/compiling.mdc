@@ -1,7 +1,0 @@
----
-description:
-globs:
-alwaysApply: false
----
-
-When attempting to compile dxvk-remix, always use `.\build_dxvk_release.ps1` in the root directory.
