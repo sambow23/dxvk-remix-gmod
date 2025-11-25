@@ -337,6 +337,14 @@ extern "C" {
     REMIXAPI_CAMERA_TYPE_VIEW_MODEL,
   } remixapi_CameraType;
 
+  typedef enum remixapi_UIState {
+      REMIXAPI_UI_STATE_NONE = 0,
+      REMIXAPI_UI_STATE_BASIC = 1,
+      REMIXAPI_UI_STATE_ADVANCED = 2
+  } remixapi_UIState;
+
+  REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state);  
   typedef struct remixapi_CameraInfoParameterizedEXT {
     remixapi_StructType sType;
     void*               pNext;
@@ -760,6 +768,8 @@ extern "C" {
     PFN_remixapi_RegisterCallbacks          RegisterCallbacks;
     PFN_remixapi_AutoInstancePersistentLights AutoInstancePersistentLights;
     PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
+    remixapi_UIState                (*GetUIState)(void);
+    remixapi_ErrorCode              (*SetUIState)(remixapi_UIState state);
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
