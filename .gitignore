@@ -37,3 +37,5 @@
 **/_batch_output/**
 /public/bin/
 *.log
+nv-private/
+tests/
