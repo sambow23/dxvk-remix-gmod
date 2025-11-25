@@ -2543,7 +2543,7 @@ extern "C"
       interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
       interf.CreateMeshBatched = remixapi_CreateMeshBatched;
     }
-    static_assert(sizeof(interf) == 248, "Add/remove function registration");
+    static_assert(sizeof(interf) == 216, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
