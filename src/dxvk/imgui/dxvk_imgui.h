@@ -146,8 +146,6 @@ namespace dxvk {
     Rc<ImGuiAbout>        m_about;
     Rc<ImGuiSplash>       m_splash;
     Rc<ImGuiCapture>      m_capture;
-    Rc<class GameOverlay>  m_overlayWin;
-
     // Note: May be NULL until the font loads, needs to be checked before use.
     ImFont*               m_regularFont = nullptr;
     // Note: May be NULL until the font loads, needs to be checked before use.
@@ -156,9 +154,8 @@ namespace dxvk {
     ImGuiContext*         m_context;
     ImPlotContext*        m_plotContext;
 
-    HWND                  m_gameHwnd;
+    HWND                  m_hwnd;
     bool                  m_init = false;
-    bool                  m_prevCursorVisible = false;
 
 
     // Width of developer menu in regular mode

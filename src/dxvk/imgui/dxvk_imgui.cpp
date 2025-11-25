@@ -64,7 +64,6 @@
 #include "../../d3d9/d3d9_rtx.h"
 #include "dxvk_memory_tracker.h"
 #include "rtx_render/rtx_particle_system.h"
-#include "rtx_render/rtx_overlay_window.h"
 
 
 namespace dxvk {
@@ -620,7 +619,7 @@ namespace dxvk {
 
   ImGUI::ImGUI(DxvkDevice* device)
   : m_device (device)
-  , m_gameHwnd   (nullptr)
+  , m_hwnd   (nullptr)
   , m_about  (new ImGuiAbout)
   , m_splash  (new ImGuiSplash)
   , m_graphGUI  (new RtxGraphGUI) {
@@ -698,10 +697,6 @@ namespace dxvk {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     m_capture = new ImGuiCapture(this);
-
-    if (RtxOptions::useNewGuiInputMethod()) {
-      m_overlayWin = new GameOverlay(L"RemixGuiInputSink", this);
-    }
   }
 
   ImGUI::~ImGUI() {
@@ -760,15 +755,8 @@ namespace dxvk {
   }
 
   void ImGUI::wndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (m_overlayWin.ptr() != nullptr) {
-      m_overlayWin->gameWndProcHandler(hWnd, msg, wParam, lParam);
-    } else {
-      // Note this is the old method for grabbing keyboard/mouse inputs which relies on hooking
-      //  the wndproc from the original game, and sending that data across the x86 -> x64 bridge.  
-      //  We see compatibilities in older applications with this approach that are tricky to resolve.
-      //  Favour the new approach `useNewGuiInputMethod` when possible.
-      ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
-    }
+    ImGui::SetCurrentContext(m_context);
+    ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
   }
 
   void ImGUI::showMemoryStats() const {
@@ -831,6 +819,13 @@ namespace dxvk {
     if (oldType == type && !force) {
       return;
     }
+    if (oldType == UIType::Basic) {
+      ImGui::CloseCurrentPopup();
+    }
+    
+    if (type == UIType::Basic) {
+      ImGui::OpenPopup(m_userGraphicsWindowTitle);
+    }
     
     if (type == UIType::None) {
       onCloseMenus();
@@ -839,6 +834,10 @@ namespace dxvk {
     }
 
     RtxOptions::showUI.setDeferred(type);
+
+    if (RtxOptions::showUICursor()) {
+      ImGui::GetIO().MouseDrawCursor = type != UIType::None;
+    }
 
     if (RtxOptions::blockInputToGameInUI()) {
       BridgeMessageChannel::get().send("UWM_REMIX_UIACTIVE_MSG",
@@ -954,7 +953,6 @@ namespace dxvk {
       }
     }
 
-
     // Toggle ImGUI mouse cursor. Alt-Del
     if (io.KeyAlt && ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Delete))) {
       RtxOptions::showUICursor.setDeferred(!RtxOptions::showUICursor());
@@ -984,12 +982,15 @@ namespace dxvk {
     showDebugVisualizations(ctx);
 
     const auto showUI = RtxOptions::showUI();
+
     if (showUI == UIType::Advanced) {
       showMainMenu(ctx);
 
       // Uncomment to see the ImGUI demo, good reference!  Also, need to undefine IMGUI_DISABLE_DEMO_WINDOWS (in "imconfig.h")
       //ImGui::ShowDemoWindow();
-    } else if (showUI == UIType::Basic) {
+    }
+
+    if (showUI == UIType::Basic) {
       showUserMenu(ctx);
     }
 
@@ -997,20 +998,6 @@ namespace dxvk {
     // windows from being interacted with.
     if (showUI == UIType::Advanced && m_reflexLatencyStatsOpen) {
       showReflexLatencyStats();
-    }
-
-    if (showUI == UIType::None) {
-      ImGui::CloseCurrentPopup();
-      ImGui::GetIO().MouseDrawCursor = false;
-    } else {
-      if (RtxOptions::showUICursor()) {
-        ImGui::GetIO().MouseDrawCursor = true;
-        // Force display counter into invisible state
-        while (ShowCursor(FALSE) >= 0) { }
-      } else {
-        // Force display counter into visible state
-        while (ShowCursor(TRUE) < 0) {  }
-      }
     }
 
     showHudMessages(ctx);
@@ -1178,7 +1165,14 @@ namespace dxvk {
   void ImGUI::showUserMenu(const Rc<DxvkContext>& ctx) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::OpenPopup(m_userGraphicsWindowTitle, ImGuiPopupFlags_NoOpenOverExistingPopup);
+    // Record the texture setting at the first frame it shows up
+    static int lastFrameID = -1;
+    int currentFrameID = ctx->getDevice()->getCurrentFrameId();
+
+    // Open popup if it's specified by user settings
+    if (lastFrameID == -1) {
+      ImGui::OpenPopup(m_userGraphicsWindowTitle);
+    }
 
     ImGui::SetNextWindowPos(ImVec2(viewport->Size.x * 0.5f - m_userWindowWidth * 0.5f, viewport->Size.y * 0.5f - m_userWindowHeight * 0.5f));
     ImGui::SetNextWindowSize(ImVec2(m_userWindowWidth, 0));
@@ -1313,6 +1307,8 @@ namespace dxvk {
     }
 
     ImGui::PopStyleVar();
+
+    lastFrameID = currentFrameID;
   }
 
   void ImGUI::showUserGeneralSettings(
@@ -4420,16 +4416,12 @@ namespace dxvk {
   }
 
   void ImGUI::render(
-    const HWND gameHwnd,
+    const HWND hwnd,
     const Rc<DxvkContext>& ctx,
     VkSurfaceFormatKHR surfaceFormat,
     VkExtent2D         surfaceSize,
     bool               vsync) {
     ScopedGpuProfileZone(ctx, "ImGUI Render");
-
-    if (m_overlayWin.ptr() != nullptr) {
-      m_overlayWin->update(gameHwnd);
-    }
 
     m_lastRenderVsyncStatus = vsync;
 
@@ -4437,14 +4429,12 @@ namespace dxvk {
     ImPlot::SetCurrentContext(m_plotContext);
 
     // Sometimes games can change windows on us, so we need to check that here and tell ImGUI
-    if (m_gameHwnd != gameHwnd) {
-      m_gameHwnd = gameHwnd;
-
-      if (m_init) {
+    if (m_hwnd != hwnd) {
+      if(m_init) {
         ImGui_ImplWin32_Shutdown();
       }
-
-      ImGui_ImplWin32_Init(gameHwnd);
+      m_hwnd = hwnd;
+      ImGui_ImplWin32_Init(hwnd);
     }
 
     if (!m_init) {
@@ -4659,8 +4649,6 @@ namespace dxvk {
     //  the user has toggled a bunch of systems while in menus causing an artificial
     //  inflation.
     freeUnusedMemory();
-
-    ::ShowCursor(m_prevCursorVisible);
   }
 
   void ImGUI::onOpenMenus() {
@@ -4668,10 +4656,6 @@ namespace dxvk {
     //  user may want to make some changes to various settings and so they
     //  should have all available memory to do so.
     freeUnusedMemory();
-
-    CURSORINFO info;
-    GetCursorInfo(&info);
-    m_prevCursorVisible = info.flags == CURSOR_SHOWING;
   }
 
   void ImGUI::freeUnusedMemory() {
