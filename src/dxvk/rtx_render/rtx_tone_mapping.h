@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2023-2025, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -21,18 +21,54 @@
 */
 #pragma once
 
-#include "dxvk_format.h"
-#include "dxvk_include.h"
-#include "dxvk_context.h"
-#include "rtx_resources.h"
-
-#include "../spirv/spirv_code_buffer.h"
-#include "../util/util_matrix.h"
-#include "rtx_options.h"
+#include "../dxvk_format.h"
+#include "../dxvk_include.h"
+#include "../dxvk_context.h"
+#include "../rtx_render/rtx_resources.h"
+#include "../rtx_render/rtx_options.h"
+#include "../rtx_render/rtx_common_object.h"
+#include <vector>
+#include "../imgui/imgui.h"
 
 namespace dxvk {
 
   class DxvkDevice;
+
+  // HDR Processing shader arguments
+  struct HDRProcessingArgs {
+    uint32_t enableAutoExposure;
+    float hdrMaxLuminance;
+    float hdrMinLuminance;
+    float hdrPaperWhiteLuminance;
+    float exposureFactor;
+    uint32_t frameIndex;
+    uint32_t hdrFormat;  // 0=Linear, 1=PQ, 2=HLG
+    float hdrExposureBias;
+    float hdrBrightness;
+    uint32_t hdrToneMapper;  // 0=None, 1=ACES_HDR, 2=Frostbite
+    uint32_t hdrEnableDithering;
+    float hdrShadows;
+    float hdrMidtones;
+    float hdrHighlights;
+    float hdrBlueNoiseAmplitude;
+    // Color grading
+    float hdrColorBalanceR;
+    float hdrColorBalanceG;
+    float hdrColorBalanceB;
+    float hdrSaturation;
+    float hdrContrast;
+    // Frostbite parameters
+    float frostbiteRolloffStart;
+    float frostbiteSaturation;
+    float frostbiteHueCorrect;
+    // Debug flags
+    uint32_t hdrShowGamutWarning;
+    uint32_t hdrShowLuminanceHeatmap;
+    uint32_t pad0;
+    uint32_t pad1;
+  };
+
+  // HDR Processing shader binding constants are defined in the shader header
 
   class DxvkToneMapping: public CommonDeviceObject {
   public:
@@ -52,6 +88,15 @@ namespace dxvk {
     bool isEnabled() const { return tonemappingEnabled(); }
 
     void showImguiSettings();
+
+    void dispatchHDRProcessing(
+      Rc<RtxContext> ctx,
+      Rc<DxvkSampler> linearSampler,
+      Rc<DxvkImageView> exposureView,
+      const Resources::Resource& inputColorBuffer,
+      const Resources::Resource& outputColorBuffer,
+      const float frameTimeMilliseconds,
+      bool autoExposureEnabled);
 
   private:
     void createResources(Rc<RtxContext> ctx);
@@ -74,6 +119,16 @@ namespace dxvk {
       bool performSRGBConversion,
       bool autoExposureEnabled);
 
+    // Curve editor support
+    struct CurvePoint {
+      float x, y;
+      CurvePoint(float x_ = 0.0f, float y_ = 0.0f) : x(x_), y(y_) {}
+    };
+    
+    // Custom curve editor widget
+    bool showCurveEditor(const char* label, std::vector<CurvePoint>& points, ImVec2 size = ImVec2(256, 256));
+    float evaluateCurve(const std::vector<CurvePoint>& points, float x);
+
     Rc<vk::DeviceFn> m_vkd;
 
     Resources::Resource m_toneHistogram;
@@ -81,6 +136,10 @@ namespace dxvk {
 
     bool m_resetState = true;
     bool m_isCurveChanged = true;
+    
+    // Curve editor state
+    std::vector<CurvePoint> m_customCurvePoints;
+    bool m_curveEditorInitialized = false;
 
     enum class ExposureAverageMode : uint32_t {
       Mean = 0,
@@ -124,12 +183,90 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap", float, maxExposureIncrease, 5.f, "Range [0, inf). Forces the tone curve to not increase luminance values at any point more than this value.");
 
     // Dithering settings
+    RTX_OPTION("rtx.tonemap", float, pixelHighlightReuseStrength, 0.5, "The specular portion when we reuse last frame's pixel value.");
     RTX_OPTION("rtx.tonemap", DitherMode, ditherMode, DitherMode::SpatialTemporal,
                "Tonemap dither mode selection, dithering allows for reduction of banding artifacts in the final rendered output from quantization using a small amount of monochromatic noise. Impact typically most visible in darker regions with smooth lighting gradients.\n"
                "Enabling dithering will make the rendered image slightly noisier, though usually dither noise is fairly imperceptible in most cases without looking closely. Generally dithered results will also look better than the alternative of banding artifacts due to increasing perceptual precision of the signal.\n"
                "Note that temporal dithering may increase perceptual precision further but may also introduce more noticeable noise in the final output in some cases due to the noise pattern changing every frame unlike a purely spatial approach.\n"
                "Supported enum values are 0 = None (Disabled), 1 = Spatial (Enabled, Spatial dithering only), 2 = SpatialTemporal (Enabled, Spatial and temporal dithering).\n"
                "Generally enabling dithering is recommended, but disabling it may be useful in some niche cases for improving compression ratios in images or videos at the cost of quality (as noise while it may not be very visible may be more difficult to compress), or for capturing \"raw\" post-tonemapped data from the renderer.");
+
+    // HDR format enum
+    enum class HDRFormat : uint32_t {
+      Linear = 0,   // Linear values (for testing/compatibility)
+      PQ = 1,       // HDR10 with PQ (ST.2084) - most common HDR standard
+      HLG = 2       // Hybrid Log-Gamma (HLG) - broadcast standard
+    };
+
+    // HDR tone mapping method enum
+    enum class HDRToneMapper : uint32_t {
+      None = 0,         // No tone mapping (linear passthrough)
+      ACES_HDR = 1,     // ACES optimized for HDR
+      Frostbite = 2     // Frostbite Engine tonemapper (perceptual, hue-preserving)
+    };
+
+    // HDR Options
+    RTX_OPTION("rtx.tonemap", bool, enableHDR, false, "Enable HDR output mode. Requires HDR-capable display and driver support.");
+    RTX_OPTION("rtx.tonemap", HDRFormat, hdrFormat, HDRFormat::PQ, "HDR output format: 0=Linear (compatibility), 1=PQ/HDR10 (most displays), 2=HLG (broadcast standard).");
+    RTX_OPTION("rtx.tonemap", HDRToneMapper, hdrToneMapper, HDRToneMapper::Frostbite, "HDR tone mapping method: 0=None (linear passthrough), 1=ACES_HDR, 2=Frostbite (perceptual, hue-preserving).");
+    RTX_OPTION("rtx.tonemap", bool, hdrEnableDithering, true, "Enable dithering for HDR output to reduce banding artifacts.");
+    RTX_OPTION("rtx.tonemap", float, hdrBlueNoiseAmplitude, 5.0f, "HDR blue noise dithering amplitude multiplier. 1.0 = minimal dithering, higher = stronger. Range [1.0, 20.0].");
+    RTX_OPTION("rtx.tonemap", float, hdrExposureBias, 0.0f, "HDR exposure adjustment in EV stops. Positive values brighten the image. Range [-3.0, 3.0].");
+    RTX_OPTION("rtx.tonemap", float, hdrBrightness, 1.0f, "HDR brightness multiplier. Higher values increase overall brightness. Range [0.1, 3.0].");
+    RTX_OPTION("rtx.tonemap", float, hdrMaxLuminance, 1000.0f, "Maximum display brightness in nits for HDR output (typically 1000-4000 for consumer displays).");
+    RTX_OPTION("rtx.tonemap", float, hdrMinLuminance, 0.01f, "Minimum display brightness in nits for HDR output (typically 0.01-0.05 for consumer displays).");
+    RTX_OPTION("rtx.tonemap", float, hdrPaperWhiteLuminance, 203.0f, "Reference white point luminance in nits (typically 100-203).");
+    
+    // HDR Color Grading Controls
+    RTX_OPTION("rtx.tonemap", float, hdrShadows, 0.0f, "HDR shadows adjustment. Negative values darken shadows, positive values lift them. Range [-1.0, 1.0].");
+    RTX_OPTION("rtx.tonemap", float, hdrMidtones, 0.0f, "HDR midtones adjustment. Negative values darken midtones, positive values brighten them. Range [-1.0, 1.0].");
+    RTX_OPTION("rtx.tonemap", float, hdrHighlights, 0.0f, "HDR highlights adjustment. Negative values darken highlights, positive values brighten them. Range [-1.0, 1.0].");
+    
+    // HDR Color Balance/Saturation/Contrast
+    RTX_OPTION("rtx.tonemap", Vector3, hdrColorBalance, Vector3(1.0f, 1.0f, 1.0f), "HDR color balance multipliers (RGB). Use to shift color temperature. Range [0.5, 1.5].");
+    RTX_OPTION("rtx.tonemap", float, hdrSaturation, 1.0f, "HDR saturation adjustment. 0.0 = grayscale, 1.0 = neutral, >1.0 = boosted. Range [0.0, 2.0].");
+    RTX_OPTION("rtx.tonemap", float, hdrContrast, 1.0f, "HDR contrast adjustment. 1.0 = neutral. Range [0.5, 2.0].");
+    
+    // Frostbite Tonemapper Parameters
+    RTX_OPTION("rtx.tonemap", float, frostbiteRolloffStart, 0.25f, "Frostbite linear segment threshold. Values below this pass through linearly. Range [0.1, 0.5].");
+    RTX_OPTION("rtx.tonemap", float, frostbiteSaturation, 1.0f, "Frostbite output saturation multiplier. Range [0.5, 1.5].");
+    RTX_OPTION("rtx.tonemap", float, frostbiteHueCorrect, 0.6f, "Frostbite hue preservation. 1.0 = full hue preservation, 0.0 = per-channel compression. Range [0.0, 1.0].");
+    
+    // HDR Debug Options
+    RTX_OPTION("rtx.tonemap", bool, hdrShowGamutWarning, false, "Show out-of-gamut pixels in magenta for debugging.");
+    RTX_OPTION("rtx.tonemap", bool, hdrShowLuminanceHeatmap, false, "Show luminance as a heatmap for HDR calibration.");
+    
+    // Curve Editor Controls
+    RTX_OPTION("rtx.tonemap", bool, enableCurveEditor, false, "Enable visual curve editor for tone mapping adjustments (similar to Photoshop curves).");
+    RTX_OPTION("rtx.tonemap", bool, useCustomCurve, false, "Use custom curve from curve editor instead of parametric tone mapping.");
+    
+    // HDR UI Blend Mode enum
+    enum class HDRUIBlendMode : uint32_t {
+      Alpha = 0,          // Standard alpha blend (may darken with black UI)
+      Luminance = 1,      // Luminance-based detection (original behavior)
+      AlphaReplace = 2,   // Hard replacement where alpha > 0
+      Additive = 3,       // Additive blend (naturally preserves black)
+      PreserveBlack = 4,  // Alpha blend but treat black as transparent
+      FullColor = 5       // Render UI as-is, only exact black is transparent (recommended)
+    };
+    
+    // HDR UI Compositing Options
+    RTX_OPTION("rtx.tonemap", bool, hdrSeparateUICompositing, true, 
+        "When HDR is enabled, composite UI elements separately with proper sRGB to PQ conversion. "
+        "This fixes blown-out/too-bright UI elements that occur when SDR UI is drawn onto PQ-encoded HDR surfaces.");
+    RTX_OPTION("rtx.tonemap", float, hdrUIDetectionThreshold, 0.001f,
+        "Luminance threshold for detecting UI pixels vs cleared background. Pixels brighter than this are considered UI. Range [0.0001, 0.1].");
+    RTX_OPTION("rtx.tonemap", float, hdrUIPaperWhite, 203.0f,
+        "Paper white luminance (in nits) specifically for UI elements. When set to 0, uses the main hdrPaperWhiteLuminance value. "
+        "Allows independent control of UI brightness vs scene brightness. Range [0, 400]. Typical values: 80-200 nits.");
+    RTX_OPTION("rtx.tonemap", HDRUIBlendMode, hdrUIBlendMode, HDRUIBlendMode::FullColor,
+        "UI blending mode for HDR compositing:\n"
+        "0=Alpha: Standard alpha blend. Black UI pixels with alpha=1 will darken the background.\n"
+        "1=Luminance: Only blend where UI luminance exceeds threshold. May miss very dark UI elements.\n"
+        "2=AlphaReplace: Hard replacement where alpha > 0. Good for crisp UI.\n"
+        "3=Additive: Add UI to background. Naturally preserves black, may over-brighten on bright scenes.\n"
+        "4=PreserveBlack: Alpha blend but treat black/near-black as transparent.\n"
+        "5=FullColor (Recommended): Render UI exactly as-is with color conversion. Only exact black (cleared background) is transparent.");
   };
   
 }

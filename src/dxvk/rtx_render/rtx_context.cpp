@@ -75,7 +75,26 @@
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
 
+// HDR UI Composite shader for compositing SDR UI onto PQ-encoded HDR
+#include <rtx_shaders/hdr_ui_composite.h>
+#include "rtx/pass/tonemap/tonemapping.h"
+
 namespace dxvk {
+
+  // HDR UI Composite shader - composites SDR UI onto PQ-encoded HDR background
+  class HDRUICompositeShader : public ManagedShader {
+    SHADER_SOURCE(HDRUICompositeShader, VK_SHADER_STAGE_COMPUTE_BIT, hdr_ui_composite)
+    
+    PUSH_CONSTANTS(HDRUICompositeArgs)
+    
+    BEGIN_PARAMETER()
+      TEXTURE2D(HDR_UI_COMPOSITE_HDR_INPUT)
+      TEXTURE2D(HDR_UI_COMPOSITE_UI_INPUT)
+      RW_TEXTURE2D(HDR_UI_COMPOSITE_OUTPUT)
+    END_PARAMETER()
+  };
+  
+  PREWARM_SHADER_PIPELINE(HDRUICompositeShader);
 
   Metrics Metrics::s_instance;
 
@@ -688,14 +707,22 @@ namespace dxvk {
 
         dispatchDLFG();
 
-        // Blit to the game target
+        // Blit to the game target (or stash for HDR UI compositing)
         {
           ScopedGpuProfileZone(this, "Blit to Game");
           
           // Note: the resolution between srcImage and dstImage always matches
           // so we can use the same blit with nearest neighbor filtering
           assert(srcImage->info().extent == targetImage->info().extent);
-          blitImageHelper(this, srcImage, targetImage, VkFilter::VK_FILTER_NEAREST);
+          
+          // Check if we need to use separate UI compositing for HDR
+          if (isHDREnabled() && DxvkToneMapping::hdrSeparateUICompositing()) {
+            // HDR Mode with UI compositing: Stash HDR output, clear backbuffer for UI
+            stashHDROutputForUIComposite(srcImage, targetImage);
+          } else {
+            // Standard Mode: Direct blit to game target
+            blitImageHelper(this, srcImage, targetImage, VkFilter::VK_FILTER_NEAREST);
+          }
         }
 
         // Log stats when an image is taken
@@ -749,6 +776,16 @@ namespace dxvk {
 
   // Called right before D3D9 present
   void RtxContext::onPresent(Rc<DxvkImage> targetImage) {
+    // HDR UI Compositing: Composite stashed HDR output with SDR UI
+    // This must happen before screenshots to capture the correct final image
+    if (m_hdrUICompositePending && isHDREnabled()) {
+      if (targetImage == nullptr) {
+        targetImage = m_state.om.renderTargets.color[0].view->image();
+      }
+      dispatchHDRUIComposite(targetImage);
+      m_hdrUICompositePending = false;
+    }
+    
     // If injectRTX couldn't screenshot a final image or a pre-present screenshot is requested,
     // take a screenshot of a present image (with UI and others)
     {
@@ -1657,25 +1694,188 @@ namespace dxvk {
       getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
       rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion);
 
+    // Check if HDR is enabled
+    const bool hdrEnabled = isHDREnabled();
+    
     // We don't reset history for tonemapper on m_resetHistory for easier comparison when toggling raytracing modes.
     // The tone curve shouldn't be too different between raytracing modes, 
     // but the reset of denoised buffers causes wide tone curve differences
     // until it converges and thus making comparison of raytracing mode outputs more difficult
     setFramePassStage(RtxFramePassStage::ToneMapping);
-    if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
+    
+    if (hdrEnabled) {
+      // HDR Mode: Use native HDR processing (bypass SDR tone mapping entirely)
       DxvkToneMapping& toneMapper = m_common->metaToneMapping();
-      toneMapper.dispatch(this, 
+      
+      // Apply HDR processing directly to the composite output
+      toneMapper.dispatchHDRProcessing(this,
         getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
         autoExposure.getExposureTexture().view,
-        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Read),
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Write),
+        GlobalTime::get().deltaTimeMs(),
+        autoExposure.enabled());
+    } else {
+      // SDR Mode: Apply the selected tonemapping mode
+      if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
+        DxvkToneMapping& toneMapper = m_common->metaToneMapping();
+        
+        toneMapper.dispatch(this, 
+          getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
+          autoExposure.getExposureTexture().view,
+          rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+      } else {
+        // Local tonemapping mode
+        DxvkLocalToneMapping& localTonemapper = m_common->metaLocalToneMapping();
+        if (localTonemapper.isActive()) {
+          localTonemapper.dispatch(this,
+            getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
+            autoExposure.getExposureTexture().view,
+            rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+        }
+      }
     }
-    DxvkLocalToneMapping& localTonemapper = m_common->metaLocalToneMapping();
-    if (localTonemapper.isActive()) {
-      localTonemapper.dispatch(this,
-        getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
-        autoExposure.getExposureTexture().view,
-        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+  }
+
+  bool RtxContext::isHDREnabled() const {
+    // HDR is considered enabled when the tone mapping module has HDR output toggled on
+    // Additional platform/display capability checks can be added here if needed
+    return m_common->metaToneMapping().enableHDR();
+  }
+
+  void RtxContext::stashHDROutputForUIComposite(const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& targetImage) {
+    ScopedCpuProfileZone();
+    ScopedGpuProfileZone(this, "Stash HDR for UI");
+    
+    const VkExtent3D extent = srcImage->info().extent;
+    const VkFormat format = srcImage->info().format;
+    
+    // Create/resize stash buffer if needed
+    if (m_hdrUIStashImage.ptr() == nullptr || 
+        m_hdrUIStashImage->info().extent.width != extent.width ||
+        m_hdrUIStashImage->info().extent.height != extent.height ||
+        m_hdrUIStashImage->info().format != format) 
+    {
+      DxvkImageCreateInfo desc;
+      desc.type = VK_IMAGE_TYPE_2D;
+      desc.format = format;
+      desc.flags = 0;
+      desc.sampleCount = VK_SAMPLE_COUNT_1_BIT;
+      desc.extent = extent;
+      desc.numLayers = 1;
+      desc.mipLevels = 1;
+      desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | 
+                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | 
+                   VK_IMAGE_USAGE_SAMPLED_BIT;
+      desc.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT;
+      desc.access = VK_ACCESS_SHADER_READ_BIT | 
+                    VK_ACCESS_SHADER_WRITE_BIT |
+                    VK_ACCESS_TRANSFER_WRITE_BIT;
+      desc.tiling = VK_IMAGE_TILING_OPTIMAL;
+      desc.layout = VK_IMAGE_LAYOUT_GENERAL;
+      
+      m_hdrUIStashImage = m_device->createImage(
+          desc, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+          DxvkMemoryStats::Category::RTXRenderTarget, 
+          "HDR UI Stash");
+      
+      DxvkImageViewCreateInfo viewInfo;
+      viewInfo.type = VK_IMAGE_VIEW_TYPE_2D;
+      viewInfo.format = format;
+      viewInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+      viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+      viewInfo.minLevel = 0;
+      viewInfo.numLevels = 1;
+      viewInfo.minLayer = 0;
+      viewInfo.numLayers = 1;
+      
+      m_hdrUIStashView = m_device->createImageView(m_hdrUIStashImage, viewInfo);
+      
+      changeImageLayout(m_hdrUIStashImage, VK_IMAGE_LAYOUT_GENERAL);
+      
+      Logger::info(str::format("HDR UI Composite: Created stash buffer ", extent.width, "x", extent.height));
     }
+    
+    // Copy HDR output to stash
+    copyImage(
+        m_hdrUIStashImage,
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        srcImage,
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        extent);
+    
+    // Clear the target image (backbuffer) so UI draws are detectable
+    // UI will draw on this cleared black surface
+    VkClearValue clearValue = {};
+    clearValue.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+    
+    auto targetView = m_state.om.renderTargets.color[0].view;
+    if (targetView.ptr() != nullptr) {
+      clearImageView(targetView, { 0, 0, 0 }, extent, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
+    }
+    
+    m_hdrUICompositePending = true;
+    m_hdrUIStashExtent = extent;
+  }
+
+  void RtxContext::dispatchHDRUIComposite(const Rc<DxvkImage>& targetImage) {
+    ScopedCpuProfileZone();
+    ScopedGpuProfileZone(this, "HDR UI Composite");
+    
+    if (m_hdrUIStashImage.ptr() == nullptr || m_hdrUIStashView.ptr() == nullptr) {
+      Logger::warn("HDR UI Composite: Stash buffer not available");
+      return;
+    }
+    
+    // Spill any pending render passes
+    this->spillRenderPass(false);
+    this->unbindComputePipeline();
+    
+    // Get tone mapping settings for UI conversion
+    auto& toneMapping = m_common->metaToneMapping();
+    
+    const VkExtent3D workgroups = util::computeBlockCount(m_hdrUIStashExtent, VkExtent3D{ 16, 16, 1 });
+    
+    // Prepare push constants
+    HDRUICompositeArgs pushArgs = {};
+    // Use dedicated UI paper white if set, otherwise fall back to main paper white
+    float uiPaperWhite = DxvkToneMapping::hdrUIPaperWhite();
+    pushArgs.paperWhiteNits = (uiPaperWhite > 0.0f) ? uiPaperWhite : toneMapping.hdrPaperWhiteLuminance();
+    pushArgs.uiDetectionThreshold = DxvkToneMapping::hdrUIDetectionThreshold();
+    pushArgs.hdrFormat = static_cast<uint32_t>(toneMapping.hdrFormat());
+    pushArgs.blendMode = static_cast<uint32_t>(DxvkToneMapping::hdrUIBlendMode());
+    pushArgs.maxLuminanceNits = toneMapping.hdrMaxLuminance();
+    
+    // Create a view for the target image if needed
+    DxvkImageViewCreateInfo viewInfo;
+    viewInfo.type = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = targetImage->info().format;
+    viewInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.minLevel = 0;
+    viewInfo.numLevels = 1;
+    viewInfo.minLayer = 0;
+    viewInfo.numLayers = 1;
+    
+    auto targetView = m_device->createImageView(targetImage, viewInfo);
+    
+    // Bind resources
+    // HDR_UI_COMPOSITE_HDR_INPUT = 0: The stashed PQ-encoded HDR background
+    bindResourceView(HDR_UI_COMPOSITE_HDR_INPUT, m_hdrUIStashView, nullptr);
+    // HDR_UI_COMPOSITE_UI_INPUT = 1: The sRGB UI content (backbuffer with UI drawn on cleared surface)
+    bindResourceView(HDR_UI_COMPOSITE_UI_INPUT, targetView, nullptr);
+    // HDR_UI_COMPOSITE_OUTPUT = 2: Output to the same target
+    bindResourceView(HDR_UI_COMPOSITE_OUTPUT, targetView, nullptr);
+    
+    // Bind shader and dispatch
+    bindShader(VK_SHADER_STAGE_COMPUTE_BIT, HDRUICompositeShader::getShader());
+    
+    setPushConstantBank(DxvkPushConstantBank::RTX);
+    pushConstants(0, sizeof(pushArgs), &pushArgs);
+    dispatch(workgroups.width, workgroups.height, workgroups.depth);
   }
 
   void RtxContext::dispatchBloom(const Resources::RaytracingOutput& rtOutput) {

@@ -43,6 +43,16 @@
 #define TONEMAPPING_APPLY_TONEMAPPING_EXPOSURE_INPUT       3
 #define TONEMAPPING_APPLY_TONEMAPPING_COLOR_OUTPUT         4
 
+#define HDR_PROCESSING_BLUE_NOISE_TEXTURE                  0
+#define HDR_PROCESSING_INPUT_BUFFER                        1
+#define HDR_PROCESSING_OUTPUT_BUFFER                       2  
+#define HDR_PROCESSING_EXPOSURE_INPUT                      3
+
+// HDR UI Composite shader bindings - composites SDR UI onto PQ-encoded HDR
+#define HDR_UI_COMPOSITE_HDR_INPUT                         0
+#define HDR_UI_COMPOSITE_UI_INPUT                          1
+#define HDR_UI_COMPOSITE_OUTPUT                            2
+
 #define TONEMAPPING_TONE_CURVE_SAMPLE_COUNT               256
 
 #define EXPOSURE_HISTOGRAM_SIZE                           256
@@ -132,6 +142,18 @@ struct ToneMappingApplyToneMappingArgs {
   float agxSlope;
   float agxPower;
   uint pad1;
+};
+
+// HDR UI Composite arguments - for compositing SDR UI onto PQ-encoded HDR output
+struct HDRUICompositeArgs {
+  float paperWhiteNits;         // Reference white point luminance (typically 100-203 nits)
+  float uiDetectionThreshold;   // Luminance threshold for detecting UI pixels
+  uint hdrFormat;               // 0=Linear, 1=PQ, 2=HLG
+  uint blendMode;               // 0=Alpha, 1=Luminance, 2=AlphaReplace, 3=Additive, 4=PreserveBlack
+  float maxLuminanceNits;       // Maximum display luminance for HLG scaling
+  uint pad0;
+  uint pad1;
+  uint pad2;
 };
 
 

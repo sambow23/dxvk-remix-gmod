@@ -125,6 +125,13 @@ namespace dxvk {
 
     void bindCommonRayTracingResources(const Resources::RaytracingOutput& rtOutput);
 
+    // HDR Support methods
+    bool isHDREnabled() const;
+    void processHDROutput(const Resources::RaytracingOutput& rtOutput);
+    
+    // HDR UI Compositing - properly composites SDR UI onto PQ-encoded HDR output
+    void dispatchHDRUIComposite(const Rc<DxvkImage>& targetImage);
+
     void bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView);
 
     void getDenoiseArgs(NrdArgs& outPrimaryDirectNrdArgs, NrdArgs& outPrimaryIndirectNrdArgs, NrdArgs& outSecondaryNrdArgs);
@@ -267,6 +274,15 @@ namespace dxvk {
     } m_objectPickingReadback {};
 
     std::vector<DrawCallState> m_delayedRayTracedSky;
+
+    // HDR UI Compositing state - stores HDR output for later compositing with UI
+    Rc<DxvkImage> m_hdrUIStashImage;       // Holds PQ-encoded HDR output
+    Rc<DxvkImageView> m_hdrUIStashView;    // View for shader access
+    bool m_hdrUICompositePending = false;  // True when HDR output is stashed and waiting for UI composite
+    VkExtent3D m_hdrUIStashExtent = {};    // Dimensions of stashed HDR output
+    
+    // Helper method to stash HDR output and clear backbuffer for UI drawing
+    void stashHDROutputForUIComposite(const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& targetImage);
 
 #ifdef REMIX_DEVELOPMENT
     void queryAvailableResourceAliasing();

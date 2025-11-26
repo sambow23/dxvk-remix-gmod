@@ -4403,10 +4403,152 @@ namespace dxvk {
       if (ImGui::CollapsingHeader("Auto Exposure", collapsingHeaderClosedFlags))
         common->metaAutoExposure().showImguiSettings();
 
+      if (ImGui::CollapsingHeader("HDR", collapsingHeaderClosedFlags)) {
+        ImGui::Indent();
+        ImGui::Checkbox("Enable HDR Output", &common->metaToneMapping().enableHDRObject());
+        
+        if (common->metaToneMapping().enableHDR()) {
+          ImGui::Indent();
+          
+          // HDR Format Selection
+          const char* hdrFormats[] = { "Linear (Compatibility)", "PQ/HDR10 (Most Displays)", "HLG (Broadcast)" };
+          ImGui::Combo("HDR Format", &common->metaToneMapping().hdrFormatObject(), hdrFormats, IM_ARRAYSIZE(hdrFormats));
+          ImGui::Separator();
+          
+          // HDR Tone Mapping
+          ImGui::Text("HDR Tone Mapping");
+          ImGui::Combo("HDR Tone Mapper", &common->metaToneMapping().hdrToneMapperObject(), 
+              "None (Linear)\0ACES HDR\0Frostbite (Recommended)\0");
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+              "HDR tone mapping algorithm:\n"
+              "- None: Linear passthrough (no compression)\n"
+              "- ACES HDR: Academy Color Encoding System\n"
+              "- Frostbite: EA/DICE perceptual tonemapper with hue preservation"
+            );
+          }
+          
+          // Frostbite-specific parameters
+          if (common->metaToneMapping().hdrToneMapper() == DxvkToneMapping::HDRToneMapper::Frostbite) {
+            ImGui::Indent();
+            ImGui::DragFloat("Rolloff Start", &common->metaToneMapping().frostbiteRolloffStartObject(), 0.01f, 0.1f, 0.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("Values below this threshold pass through linearly.\nHigher = more linear range, later compression start.\n0.18 = middle gray, 0.25 = default");
+            }
+            ImGui::DragFloat("Frostbite Saturation", &common->metaToneMapping().frostbiteSaturationObject(), 0.01f, 0.5f, 1.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("Output saturation multiplier.\n1.0 = neutral, <1.0 = desaturated, >1.0 = boosted.");
+            }
+            ImGui::DragFloat("Hue Preservation", &common->metaToneMapping().frostbiteHueCorrectObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("Balance between hue preservation and per-channel compression.\n1.0 = full hue preservation (may clip saturated highlights)\n0.0 = per-channel (better saturation handling, slight hue shift)");
+            }
+            ImGui::Unindent();
+          }
+          
+          ImGui::Checkbox("Enable HDR Dithering", &common->metaToneMapping().hdrEnableDitheringObject());
+          if (common->metaToneMapping().hdrEnableDithering()) {
+            ImGui::Indent();
+            ImGui::DragFloat("Blue Noise Amplitude", &common->metaToneMapping().hdrBlueNoiseAmplitudeObject(), 0.25f, 1.0f, 20.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("Dithering strength. Higher values reduce banding but may introduce visible noise.\n1.0 = minimal, 5.0 = recommended, 20.0 = maximum.");
+            }
+            ImGui::Unindent();
+          }
+          ImGui::Separator();
+          
+          // HDR Brightness Controls
+          ImGui::Text("HDR Brightness Controls");
+          ImGui::DragFloat("HDR Exposure Bias (EV)", &common->metaToneMapping().hdrExposureBiasObject(), 0.01f, -3.0f, 20.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          ImGui::DragFloat("HDR Brightness", &common->metaToneMapping().hdrBrightnessObject(), 0.01f, 0.1f, 20.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          ImGui::Separator();
+          
+          // HDR Color Grading
+          ImGui::Text("HDR Color Grading");
+          ImGui::DragFloat("HDR Shadows", &common->metaToneMapping().hdrShadowsObject(), 0.01f, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          ImGui::DragFloat("HDR Midtones", &common->metaToneMapping().hdrMidtonesObject(), 0.01f, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          ImGui::DragFloat("HDR Highlights", &common->metaToneMapping().hdrHighlightsObject(), 0.01f, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          
+          ImGui::DragFloat3("Color Balance (RGB)", &common->metaToneMapping().hdrColorBalanceObject(), 0.01f, 0.5f, 1.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("RGB multipliers for color temperature adjustment.\n1.0 = neutral. Increase R and decrease B for warmer tones.");
+          }
+          
+          ImGui::DragFloat("HDR Saturation", &common->metaToneMapping().hdrSaturationObject(), 0.01f, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Global saturation.\n0.0 = grayscale, 1.0 = neutral, >1.0 = boosted.");
+          }
+          
+          ImGui::DragFloat("HDR Contrast", &common->metaToneMapping().hdrContrastObject(), 0.01f, 0.5f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Global contrast adjustment.\n1.0 = neutral. Uses log-space for proper HDR handling.");
+          }
+          ImGui::Separator();
+          
+          ImGui::DragFloat("HDR Max Luminance (nits)", &common->metaToneMapping().hdrMaxLuminanceObject(), 10.0f, 100.0f, 10000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+          ImGui::DragFloat("HDR Min Luminance (nits)", &common->metaToneMapping().hdrMinLuminanceObject(), 0.000f, 0.000f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+          ImGui::DragFloat("Paper White Luminance (nits)", &common->metaToneMapping().hdrPaperWhiteLuminanceObject(), 1.0f, 80.0f, 400.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+          ImGui::Separator();
+          
+          // HDR UI Compositing
+          ImGui::Text("HDR UI Compositing");
+          ImGui::Checkbox("Separate UI Compositing", &common->metaToneMapping().hdrSeparateUICompositingObject());
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Fixes blown-out UI elements by compositing them\nseparately with proper sRGB to PQ conversion.");
+          }
+          
+          if (common->metaToneMapping().hdrSeparateUICompositing()) {
+            ImGui::Indent();
+            
+            // Blend mode dropdown
+            ImGui::Combo("UI Blend Mode", &common->metaToneMapping().hdrUIBlendModeObject(), 
+                "Alpha Blend\0Luminance Detect\0Alpha Replace\0Additive\0Preserve Black\0Full Color (Recommended)\0");
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip(
+                "How UI is blended with HDR background:\n"
+                "- Alpha Blend: Standard blend. Black UI may darken background.\n"
+                "- Luminance Detect: Only blend non-black UI pixels.\n"
+                "- Alpha Replace: Hard replacement where alpha > 0.\n"
+                "- Additive: Add UI to background. Black = transparent.\n"
+                "- Preserve Black: Treat black/near-black as transparent.\n"
+                "- Full Color: Render UI as-is. Only exact black is transparent (Recommended)."
+              );
+            }
+            
+            ImGui::DragFloat("UI Paper White (nits)", &common->metaToneMapping().hdrUIPaperWhiteObject(), 1.0f, 0.0f, 400.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("Paper white for UI elements. 0 = use main Paper White.\nAdjust to control UI brightness independently from scene.");
+            }
+            ImGui::DragFloat("UI Detection Threshold", &common->metaToneMapping().hdrUIDetectionThresholdObject(), 0.0001f, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("Luminance threshold for detecting UI pixels.\nLower = more sensitive, Higher = less sensitive.\nUsed by Luminance Detect and Preserve Black modes.");
+            }
+            ImGui::Unindent();
+          }
+          ImGui::Separator();
+          
+          // Debug / Calibration
+          ImGui::Text("Debug / Calibration");
+          ImGui::Checkbox("Show Gamut Warning", &common->metaToneMapping().hdrShowGamutWarningObject());
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Highlight out-of-gamut pixels in magenta.\nUseful for identifying colors that will clip.");
+          }
+          
+          ImGui::Checkbox("Show Luminance Heatmap", &common->metaToneMapping().hdrShowLuminanceHeatmapObject());
+          if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Display luminance as a color heatmap for HDR calibration.\nBlue = dark, Green = mid, Yellow = bright,\nRed = very bright, White = HDR peaks.");
+          }
+          
+          ImGui::Unindent();
+        }
+        ImGui::Unindent();
+      }
+
       if (ImGui::CollapsingHeader("Tonemapping", collapsingHeaderClosedFlags))
       {
         ImGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
         ImGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
+        
         ImGui::Separator();
         ImGui::Combo("Tonemapping Mode", &RtxOptions::tonemappingModeObject(), "Global\0Local\0");
         if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
