@@ -1240,6 +1240,17 @@ namespace dxvk {
           break;
       }
 
+      // NV-DXVK start: HDR UI Composite
+      // MUST happen BEFORE blitting backbuffer to swap image
+      // Otherwise the composite result won't be visible to the presentation
+      m_parent->m_rtx.OnPresent(swapImage);
+      
+      // Flush, sync, and wait for GPU to ensure composite completes before blit
+      m_parent->Flush();
+      m_parent->SynchronizeCsThread();
+      m_device->waitForIdle();  // Wait for composite to finish on GPU
+      // NV-DXVK end
+      
       m_context->beginRecording(
         m_device->createCommandList());
 
@@ -1261,10 +1272,6 @@ namespace dxvk {
 
       auto& gui = m_device->getCommon()->getImgui();
       gui.render(m_window, m_context, info.format, info.imageExtent, m_vsync);
-
-      // NV-DXVK start
-      m_parent->m_rtx.OnPresent(m_imageViews.at(imageIndex)->image());
-      // NV-DXVK end
 
       if (i + 1 >= SyncInterval)
         m_context->signal(m_frameLatencySignal, m_frameId);

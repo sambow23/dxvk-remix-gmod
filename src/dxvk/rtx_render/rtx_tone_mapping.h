@@ -254,7 +254,7 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap", bool, hdrSeparateUICompositing, true, 
         "When HDR is enabled, composite UI elements separately with proper sRGB to PQ conversion. "
         "This fixes blown-out/too-bright UI elements that occur when SDR UI is drawn onto PQ-encoded HDR surfaces.");
-    RTX_OPTION("rtx.tonemap", float, hdrUIDetectionThreshold, 0.001f,
+    RTX_OPTION("rtx.tonemap", float, hdrUIDetectionThreshold, 0.000f,
         "Luminance threshold for detecting UI pixels vs cleared background. Pixels brighter than this are considered UI. Range [0.0001, 0.1].");
     RTX_OPTION("rtx.tonemap", float, hdrUIPaperWhite, 203.0f,
         "Paper white luminance (in nits) specifically for UI elements. When set to 0, uses the main hdrPaperWhiteLuminance value. "

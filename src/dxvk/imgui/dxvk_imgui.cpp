@@ -4519,7 +4519,7 @@ namespace dxvk {
             if (ImGui::IsItemHovered()) {
               ImGui::SetTooltip("Paper white for UI elements. 0 = use main Paper White.\nAdjust to control UI brightness independently from scene.");
             }
-            ImGui::DragFloat("UI Detection Threshold", &common->metaToneMapping().hdrUIDetectionThresholdObject(), 0.0001f, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::DragFloat("UI Detection Threshold", &common->metaToneMapping().hdrUIDetectionThresholdObject(), 0.0001f, 0.0000f, 0.1f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
             if (ImGui::IsItemHovered()) {
               ImGui::SetTooltip("Luminance threshold for detecting UI pixels.\nLower = more sensitive, Higher = less sensitive.\nUsed by Luminance Detect and Preserve Black modes.");
             }

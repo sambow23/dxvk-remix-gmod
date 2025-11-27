@@ -180,7 +180,7 @@ void main(uint2 threadId : SV_DispatchThreadID)
   // Sample the PQ-encoded HDR background (stashed from injectRTX)
   float4 hdrColor = HDRInput[threadId];
   
-  // Sample the SDR UI layer (sRGB, drawn on cleared backbuffer)
+  // Sample the UI layer (rendered on cleared black backbuffer)
   float4 uiColor = UIInput[threadId];
   
   float4 result;
@@ -203,7 +203,6 @@ void main(uint2 threadId : SV_DispatchThreadID)
   switch (cb.blendMode) {
     case BLEND_MODE_ALPHA: {
       // Standard alpha blend - use UI alpha channel directly
-      // Black pixels with alpha=1 WILL darken the background
       if (baseAlpha > 0.0f) {
         float3 uiHDR = convertUIToHDR(uiColor.rgb);
         result = float4(lerp(hdrColor.rgb, uiHDR, baseAlpha), 1.0f);
@@ -215,8 +214,6 @@ void main(uint2 threadId : SV_DispatchThreadID)
     
     case BLEND_MODE_LUMINANCE: {
       // Luminance-based detection (original behavior)
-      // Only blend where UI luminance exceeds threshold
-      // Preserves black pixels but may miss very dark UI elements
       if (hasUIContent) {
         float3 uiHDR = convertUIToHDR(uiColor.rgb);
         result = float4(lerp(hdrColor.rgb, uiHDR, baseAlpha), 1.0f);
@@ -227,8 +224,7 @@ void main(uint2 threadId : SV_DispatchThreadID)
     }
     
     case BLEND_MODE_ALPHA_REPLACE: {
-      // Hard replacement where alpha > 0 or luminance detected (no blending)
-      // Good for crisp UI elements
+      // Hard replacement where alpha > 0 or luminance detected
       if (baseAlpha > 0.0f) {
         float3 uiHDR = convertUIToHDR(uiColor.rgb);
         result = float4(uiHDR, 1.0f);
@@ -239,24 +235,15 @@ void main(uint2 threadId : SV_DispatchThreadID)
     }
     
     case BLEND_MODE_ADDITIVE: {
-      // Additive blend - naturally preserves black (adding 0 = no change)
-      // Great for glowing UI elements, may over-brighten white UI on bright scenes
+      // Additive blend
       float3 uiHDR = convertUIToHDR(uiColor.rgb);
-      // Scale additive contribution by alpha if available
       result = float4(hdrColor.rgb + uiHDR * baseAlpha, 1.0f);
       break;
     }
     
     case BLEND_MODE_PRESERVE_BLACK: {
-      // Alpha blend but treat black/near-black as transparent
-      // Uses luminance to compute an "effective alpha" that fades black to transparent
-      // This preserves black pixels while still allowing alpha blending for non-black UI
-      
-      // Compute luminance-based opacity: black (lum=0) = transparent, white (lum=1) = opaque
-      // Use threshold to control the transition
+      // Alpha blend but treat black as transparent
       float lumAlpha = saturate(uiLuminance / max(cb.uiDetectionThreshold * 10.0f, 0.1f));
-      
-      // Combine with base alpha (which may have been set to 1.0 if game doesn't use alpha)
       float effectiveAlpha = lumAlpha * baseAlpha;
       
       if (effectiveAlpha > 0.001f) {
@@ -270,56 +257,33 @@ void main(uint2 threadId : SV_DispatchThreadID)
     
     case BLEND_MODE_FULL_COLOR:
     default: {
-      // Full color mode - render UI exactly as-is with color space conversion
-      // Supports semi-transparent UI elements via proper alpha compositing
+      // Full color mode - render UI exactly as-is with color conversion
+      const float exactBlackThreshold = 0.004f;
       
-      const float exactBlackThreshold = 0.004f; // ~1/255
-      
-      // Check if this pixel has any UI content
       bool hasVisibleColor = (uiColor.r >= exactBlackThreshold || 
                               uiColor.g >= exactBlackThreshold || 
                               uiColor.b >= exactBlackThreshold);
       bool hasAlpha = (uiColor.a >= exactBlackThreshold);
-      
-      // Cleared background = no color AND no alpha
       bool isBackground = !hasVisibleColor && !hasAlpha;
       
       if (isBackground) {
-        // This is cleared background - show HDR through
         result = hdrColor;
       } else if (hasVisibleColor && !hasAlpha) {
-        // Game doesn't use alpha channel - treat UI as fully opaque
         float3 uiHDR = convertUIToHDR(uiColor.rgb);
         result = float4(uiHDR, 1.0f);
       } else if (hasAlpha) {
-        // Game uses alpha - handle semi-transparent UI properly
-        // The UI was rendered onto black, so the color is pre-multiplied with alpha
-        // (e.g., white at 50% opacity became gray after blending with black)
-        
         float alpha = uiColor.a;
         
         if (alpha >= 1.0f - exactBlackThreshold) {
-          // Fully opaque - direct replacement
           float3 uiHDR = convertUIToHDR(uiColor.rgb);
           result = float4(uiHDR, 1.0f);
         } else {
-          // Semi-transparent - use pre-multiplied alpha compositing
-          // The UI color is already "pre-multiplied" (blended with black)
-          // So we need to un-premultiply first, then convert, then blend
-          
-          // Un-premultiply: recover original color before it was blended with black
-          // color_original = color_blended / alpha (clamped to avoid division issues)
           float3 originalColor = uiColor.rgb / max(alpha, 0.01f);
           originalColor = clamp(originalColor, float3(0.0f), float3(1.0f));
-          
-          // Convert the original color to HDR
           float3 uiHDR = convertUIToHDR(originalColor);
-          
-          // Standard alpha blend with HDR background
           result = float4(lerp(hdrColor.rgb, uiHDR, alpha), 1.0f);
         }
       } else {
-        // Edge case: has alpha but no color (shouldn't happen often)
         result = hdrColor;
       }
       break;

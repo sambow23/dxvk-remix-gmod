@@ -1797,7 +1797,7 @@ namespace dxvk {
       Logger::info(str::format("HDR UI Composite: Created stash buffer ", extent.width, "x", extent.height));
     }
     
-    // Copy HDR output to stash
+    // Copy HDR output to stash for later compositing
     copyImage(
         m_hdrUIStashImage,
         { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
@@ -1807,15 +1807,19 @@ namespace dxvk {
         { 0, 0, 0 },
         extent);
     
-    // Clear the target image (backbuffer) so UI draws are detectable
-    // UI will draw on this cleared black surface
+    // Clear the target image (backbuffer) so UI draws on a clean black surface
+    // This allows us to detect UI pixels by their non-black color
     VkClearValue clearValue = {};
     clearValue.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
     
-    auto targetView = m_state.om.renderTargets.color[0].view;
-    if (targetView.ptr() != nullptr) {
-      clearImageView(targetView, { 0, 0, 0 }, extent, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
-    }
+    VkImageSubresourceRange subRange = {};
+    subRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subRange.baseMipLevel = 0;
+    subRange.levelCount = 1;
+    subRange.baseArrayLayer = 0;
+    subRange.layerCount = 1;
+    
+    clearColorImage(targetImage, clearValue.color, subRange);
     
     m_hdrUICompositePending = true;
     m_hdrUIStashExtent = extent;
