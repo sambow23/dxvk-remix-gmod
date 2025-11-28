@@ -280,12 +280,12 @@ namespace dxvk::vk {
     VkResult releaseFullscreenExclusive();
 
     /**
-     * \brief Sets HDR metadata for the swapchain
+     * \brief Sets HDR10 metadata for the swapchain
      *
-     * Sets HDR metadata (ST2086) for proper HDR display configuration.
+     * Sets HDR10 metadata (ST2086, BT.2020 + PQ) for proper HDR display configuration.
      * This should be called after swapchain creation when HDR is enabled.
      * \param [in] hdrEnabled Whether HDR is enabled
-     * \param [in] hdrFormat HDR format (0=Linear, 1=PQ, 2=HLG)
+     * \param [in] hdrFormat Reserved (always 0 for HDR10/PQ)
      * \param [in] maxLuminance Maximum display luminance in nits
      * \param [in] minLuminance Minimum display luminance in nits
      * \param [in] paperWhiteLuminance Paper white luminance in nits

@@ -39,7 +39,7 @@ RWTexture2D<float4> OutColorBuffer;
 layout(binding = HDR_PROCESSING_EXPOSURE_INPUT)
 RWTexture1D<float> InExposure;
 
-// HDR Processing Arguments
+// HDR Processing Arguments (HDR10/PQ only)
 struct HDRProcessingArgs {
   uint enableAutoExposure;
   float hdrMaxLuminance;
@@ -47,7 +47,7 @@ struct HDRProcessingArgs {
   float hdrPaperWhiteLuminance;
   float exposureFactor;
   uint frameIndex;
-  uint hdrFormat;  // 0=Linear, 1=PQ, 2=HLG
+  uint pad_hdrFormat;  // Reserved (HDR10/PQ is always used)
   float hdrExposureBias;
   float hdrBrightness;
   uint hdrToneMapper;  // 0=None, 1=ACES_HDR, 2=Frostbite
@@ -143,74 +143,23 @@ float3 pqToLinear(float3 pq)
   return result;
 }
 
-// Convert from linear RGB to HLG (Hybrid Log-Gamma) for HDR
-float3 linearToHLG(float3 color) 
-{
-  // HLG constants (ITU-R BT.2100)
-  const float a = 0.17883277f;
-  const float b = 0.28466892f; // 1.0 - 4.0 * a
-  const float c = 0.55991073f; // 0.5 - a * ln(4.0 * a)
-  const float gamma = 1.2f;
-  const float threshold = 1.0f / 12.0f;
-  
-  // Clamp input to valid range [0, 1] for HLG
-  color = clamp(color, float3(0.0f), float3(1.0f));
-  
-  float3 result;
-  for (int i = 0; i < 3; ++i) {
-    float channel = color[i];
-    if (channel <= 0.0f) {
-      result[i] = 0.0f;
-    } else if (channel <= threshold) {
-      result[i] = sqrt(3.0f * channel);
-    } else {
-      result[i] = a * log(12.0f * channel - b) + c;
-    }
-  }
-  
-  // Apply system gamma with safety check
-  return pow(max(result, float3(0.0f)), 1.0f / gamma);
-}
 
-// Enhanced color space conversion with HDR10, HLG, and scRGB support
-float3 convertColorSpace(float3 color, bool usePQ, bool useHLG) 
+// HDR10 color space conversion (BT.2020 + PQ)
+float3 convertToHDR10(float3 color) 
 {
-  // Convert to target gamut only if using HDR transfer functions (BT.2020 gamut)
-  if (usePQ || useHLG) {
-    color = rec709ToRec2020(color);
-  }
+  // Convert from BT.709/sRGB to BT.2020 wide color gamut
+  color = rec709ToRec2020(color);
   
-  // Apply appropriate transfer function
-  if (usePQ) {
-    // For PQ: Input colors are assumed to be in relative [0-1] range where 1.0 = paper white
-    // Scale to nits first: multiply by paper white to get actual nits, then clamp to display range
-    float3 colorInNits = color * cb.hdrPaperWhiteLuminance;
-    colorInNits = clamp(colorInNits, float3(cb.hdrMinLuminance), float3(cb.hdrMaxLuminance));
-    // Then normalize by PQ reference peak (10,000 nits) for PQ encoding
-    const float PQ_MAX_NITS = 10000.0f;
-    float3 normalizedColor = colorInNits / PQ_MAX_NITS;
-    return linearToPQ(normalizedColor);
-  } else if (useHLG) {
-    // For HLG: Input colors are assumed to be in relative [0-1] range where 1.0 = paper white
-    // Scale to the display peak range for HLG and clamp to display range
-    float3 colorInNits = color * cb.hdrPaperWhiteLuminance;
-    colorInNits = clamp(colorInNits, float3(cb.hdrMinLuminance), float3(cb.hdrMaxLuminance));
-    // HLG system gamma is designed for [0,1] input where 1.0 = display peak
-    float3 normalizedColor = colorInNits / cb.hdrMaxLuminance;
-    return linearToHLG(normalizedColor);
-  } else {
-    // Linear/scRGB mode: 
-    // scRGB uses linear values where 1.0 = 80 nits (SDR white reference)
-    // Scale by paper white ratio to get proper brightness
-    // Values can exceed 1.0 for HDR content (up to ~125.0 for 10000 nits)
-    const float SCRGB_REFERENCE_WHITE = 80.0f;
-    float scrgbScale = cb.hdrPaperWhiteLuminance / SCRGB_REFERENCE_WHITE;
-    float3 scrgbColor = color * scrgbScale;
-    
-    // Clamp to valid scRGB range (can go negative for wide gamut, but typically 0 to maxValue)
-    float maxScrgbValue = cb.hdrMaxLuminance / SCRGB_REFERENCE_WHITE;
-    return clamp(scrgbColor, float3(0.0f), float3(maxScrgbValue));
-  }
+  // For PQ: Input colors are assumed to be in relative [0-1] range where 1.0 = paper white
+  // Scale to nits first: multiply by paper white to get actual nits, then clamp to display range
+  float3 colorInNits = color * cb.hdrPaperWhiteLuminance;
+  colorInNits = clamp(colorInNits, float3(cb.hdrMinLuminance), float3(cb.hdrMaxLuminance));
+  
+  // Normalize by PQ reference peak (10,000 nits) for PQ encoding
+  const float PQ_MAX_NITS = 10000.0f;
+  float3 normalizedColor = colorInNits / PQ_MAX_NITS;
+  
+  return linearToPQ(normalizedColor);
 }
 
 // Note: Old dithering functions removed - now using high-quality blue noise dithering
@@ -531,10 +480,8 @@ float3 processHDR(float3 inputColor, uint2 pixelPosition)
   // Ensure no negative values before color space conversion
   color = max(color, float3(0.0f));
   
-  // Enhanced color space conversion with HDR format support
-  bool usePQ = (cb.hdrFormat == 1);  // PQ/HDR10
-  bool useHLG = (cb.hdrFormat == 2); // HLG
-  color = convertColorSpace(color, usePQ, useHLG);
+  // Convert to HDR10 (BT.2020 + PQ)
+  color = convertToHDR10(color);
   
   // Apply high-quality blue noise dithering AFTER color space conversion
   // This uses the same blue noise infrastructure as SDR for consistent quality
@@ -544,40 +491,25 @@ float3 processHDR(float3 inputColor, uint2 pixelPosition)
     cb.frameIndex,
     cb.hdrEnableDithering != 0,
     true, // Enable temporal dithering for smoothest results
-    cb.hdrFormat,
+    0, // Reserved (HDR10/PQ is always used)
     cb.hdrBlueNoiseAmplitude
   );
   
   // Debug visualizations (applied after all processing)
   if (cb.hdrShowLuminanceHeatmap != 0) {
-    // Show luminance heatmap - convert back to PQ for display
+    // Show luminance heatmap - convert to HDR10 for display
     float3 heatmap = luminanceHeatmap(debugLuminance);
-    // Convert heatmap to HDR output format
-    if (cb.hdrFormat == 1) { // PQ
-      heatmap = rec709ToRec2020(heatmap);
-      heatmap = heatmap * cb.hdrPaperWhiteLuminance / 10000.0f;
-      color = linearToPQ(heatmap);
-    } else if (cb.hdrFormat == 2) { // HLG
-      heatmap = rec709ToRec2020(heatmap);
-      heatmap = heatmap * cb.hdrPaperWhiteLuminance / cb.hdrMaxLuminance;
-      color = linearToHLG(heatmap);
-    } else {
-      color = heatmap;
-    }
+    // Convert heatmap to HDR10 output (BT.2020 + PQ)
+    heatmap = rec709ToRec2020(heatmap);
+    heatmap = heatmap * cb.hdrPaperWhiteLuminance / 10000.0f;
+    color = linearToPQ(heatmap);
   } else if (cb.hdrShowGamutWarning != 0 && outOfGamut) {
     // Show out-of-gamut pixels in magenta
     float3 magenta = float3(1.0f, 0.0f, 1.0f);
-    if (cb.hdrFormat == 1) { // PQ
-      magenta = rec709ToRec2020(magenta);
-      magenta = magenta * cb.hdrPaperWhiteLuminance / 10000.0f;
-      color = linearToPQ(magenta);
-    } else if (cb.hdrFormat == 2) { // HLG
-      magenta = rec709ToRec2020(magenta);
-      magenta = magenta * cb.hdrPaperWhiteLuminance / cb.hdrMaxLuminance;
-      color = linearToHLG(magenta);
-    } else {
-      color = magenta;
-    }
+    // Convert magenta to HDR10 output (BT.2020 + PQ)
+    magenta = rec709ToRec2020(magenta);
+    magenta = magenta * cb.hdrPaperWhiteLuminance / 10000.0f;
+    color = linearToPQ(magenta);
   }
   
   return color;

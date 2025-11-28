@@ -511,24 +511,20 @@ namespace dxvk {
     recreate   |= m_dialog != m_lastDialog;
     
     // NV-DXVK start: HDR setting change detection
-    // Check if HDR setting or format has changed since last frame (per-swapchain tracking)
+    // Check if HDR setting has changed since last frame (per-swapchain tracking)
     bool currentHDRState = false;
-    uint32_t currentHDRFormat = 0;
     try {
       auto common = m_device->getCommon();
       currentHDRState = common->metaToneMapping().enableHDR();
-      currentHDRFormat = static_cast<uint32_t>(common->metaToneMapping().hdrFormat());
     } catch (...) {
       currentHDRState = false;
-      currentHDRFormat = 0;
     }
 
-    if (m_hdrStateInitialized && (currentHDRState != m_prevHdrEnabled || currentHDRFormat != m_prevHdrFormat)) {
+    if (m_hdrStateInitialized && currentHDRState != m_prevHdrEnabled) {
       recreate = true;
     }
 
     m_prevHdrEnabled = currentHDRState;
-    m_prevHdrFormat = currentHDRFormat;
     m_hdrStateInitialized = true;
     // NV-DXVK end
 
@@ -568,10 +564,10 @@ namespace dxvk {
           const float curMax = common->metaToneMapping().hdrMaxLuminance();
           const float curMin = common->metaToneMapping().hdrMinLuminance();
           const float curPaper = common->metaToneMapping().hdrPaperWhiteLuminance();
-          const uint32_t curFormat = static_cast<uint32_t>(common->metaToneMapping().hdrFormat());
-          if (m_prevHdrEnabled && curFormat == m_prevHdrFormat && (
+          if (m_prevHdrEnabled && (
                 curMax != m_prevHdrMaxLuminance || curMin != m_prevHdrMinLuminance || curPaper != m_prevHdrPaperWhiteLuminance)) {
-            GetPresenter()->setHdrMetadata(true, curFormat, curMax, curMin, curPaper);
+            // HDR10 format (PQ) = 0
+            GetPresenter()->setHdrMetadata(true, 0, curMax, curMin, curPaper);
             m_prevHdrMaxLuminance = curMax;
             m_prevHdrMinLuminance = curMin;
             m_prevHdrPaperWhiteLuminance = curPaper;
@@ -1404,7 +1400,6 @@ namespace dxvk {
       auto common = m_device->getCommon();
       bool hdrEnabled = common->metaToneMapping().enableHDR();
       if (hdrEnabled) {
-        uint32_t hdrFormat = static_cast<uint32_t>(common->metaToneMapping().hdrFormat());
         float maxLuminance = common->metaToneMapping().hdrMaxLuminance();
         float minLuminance = common->metaToneMapping().hdrMinLuminance();
         float paperWhiteLuminance = common->metaToneMapping().hdrPaperWhiteLuminance();
@@ -1413,7 +1408,8 @@ namespace dxvk {
         m_prevHdrMinLuminance = minLuminance;
         m_prevHdrPaperWhiteLuminance = paperWhiteLuminance;
 
-        GetPresenter()->setHdrMetadata(hdrEnabled, hdrFormat, maxLuminance, minLuminance, paperWhiteLuminance);
+        // HDR10 format (PQ) = 0
+        GetPresenter()->setHdrMetadata(hdrEnabled, 0, maxLuminance, minLuminance, paperWhiteLuminance);
       }
     } catch (...) {
       Logger::warn("D3D9SwapChain: Failed to set HDR metadata");
@@ -1662,23 +1658,20 @@ namespace dxvk {
           VkSurfaceFormatKHR*       pDstFormats) {
     uint32_t n = 0;
 
-    // Check if HDR is enabled in RTX context and get format
+    // Check if HDR is enabled in RTX context
     bool hdrEnabled = false;
-    uint32_t hdrFormat = 0; // 0=Linear, 1=PQ, 2=HLG
     try {
       // Access HDR setting through the device's common objects
       auto common = m_device->getCommon();
       hdrEnabled = common->metaToneMapping().enableHDR();
-      hdrFormat = static_cast<uint32_t>(common->metaToneMapping().hdrFormat());
     } catch (...) {
       // Fallback if cast fails
       hdrEnabled = false;
-      hdrFormat = 0;
     }
 
-    // If HDR is enabled, prioritize HDR formats and color spaces
+    // If HDR is enabled, use HDR10 format (BT.2020 + PQ + 10-bit per spec)
     if (hdrEnabled) {
-      Logger::info(str::format("D3D9SwapChain: HDR enabled with format ", hdrFormat, " (0=Linear, 1=PQ, 2=HLG)"));
+      Logger::info("D3D9SwapChain: HDR10 enabled (BT.2020 + PQ + 10-bit)");
       
       switch (Format) {
         default:
@@ -1686,24 +1679,12 @@ namespace dxvk {
         case D3D9Format::X8R8G8B8:
         case D3D9Format::A8B8G8R8:
         case D3D9Format::X8B8G8R8: {
-          // Select color space based on HDR format
-          if (hdrFormat == 1) {
-            // PQ/HDR10 format - use HDR10 color space (BT.2020 + ST2084)
-            // Prioritize 16-bit float for better PQ precision, then 10-bit UNORM
-            pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
-          } else if (hdrFormat == 2) {
-            // HLG format - prefer HDR10 HLG color space (BT.2020 + HLG)
-            pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_HLG_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_HLG_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_HLG_EXT };
-          } else {
-            // Linear format (0) - use extended linear sRGB (scRGB / BT.709)
-            pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
-          }
+          // HDR10 spec: BT.2020 + PQ + A2B10G10R10_UNORM (10-bit)
+          // Prioritize 10-bit UNORM as per HDR10 specification
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          // 16-bit float as fallback if 10-bit not available
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
           // Fallback to SDR formats if HDR not supported
           pDstFormats[n++] = { VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
           pDstFormats[n++] = { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
@@ -1711,30 +1692,18 @@ namespace dxvk {
 
         case D3D9Format::A2R10G10B10:
         case D3D9Format::A2B10G10R10: {
-          // Select color space based on HDR format for 10-bit formats
-          if (hdrFormat == 1) {
-            // PQ/HDR10 - prefer 16-bit float for better precision
-            pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
-          } else if (hdrFormat == 2) {
-            // HLG
-            pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_HLG_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_HLG_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_HLG_EXT };
-          } else {
-            // Linear
-            pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
-            pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT };
-          }
+          // HDR10 spec: 10-bit formats are ideal
+          pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          pDstFormats[n++] = { VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+          // 16-bit float as fallback
+          pDstFormats[n++] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_HDR10_ST2084_EXT };
           pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
         } break;
 
         case D3D9Format::X1R5G5B5:
         case D3D9Format::A1R5G5B5:
         case D3D9Format::R5G6B5: {
-          // Upgrade low bit depth to HDR formats
+          // Upgrade low bit depth to HDR10 format
           pDstFormats[n++] = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
           pDstFormats[n++] = { VK_FORMAT_B5G5R5A1_UNORM_PACK16, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
           pDstFormats[n++] = { VK_FORMAT_R5G5B5A1_UNORM_PACK16, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };

@@ -65,19 +65,16 @@ float3 ditherTo8Bit(
   return value + float3(adjustment);
 }
 
-// Todo: 10 bit dither in the future for HDR output.
-
-// Applies high-quality dithering for HDR output using blue noise
-// This handles PQ/HLG transfer functions and 10/12-bit precision
-// Uses the same blue noise infrastructure as SDR for consistent quality
+// Applies high-quality dithering for HDR10/PQ output using blue noise
+// Uses 10-bit quantization matching the HDR10 specification
 float3 ditherToHDR(
   const float3 value,
   const uint2 pixelPosition,
   const uint frameIndex,
   const bool enableDithering,
   const bool enableTemporalDithering,
-  const uint hdrFormat, // 0=Linear, 1=PQ, 2=HLG
-  const float ditherAmplitude // Multiplier on format-appropriate base amplitude
+  const uint hdrFormat, // Reserved (always HDR10/PQ)
+  const float ditherAmplitude // Multiplier on base amplitude
 )
 {
   // Early out if dithering is not enabled
@@ -93,19 +90,8 @@ float3 ditherToHDR(
   // Get high-quality blue noise sample
   const float blueNoise = getNextSampleBlueNoise(rng) - 0.5f; // [-0.5, 0.5)
 
-  // Calculate format-appropriate base amplitude (similar to SDR's 1/255 approach)
-  float baseAmplitude;
-  
-  if (hdrFormat == 1) {
-    // PQ (HDR10): 10-bit quantization in PQ space
-    baseAmplitude = 1.0f / 1024.0f; // ≈ 0.00098
-  } else if (hdrFormat == 2) {
-    // HLG: 10-bit quantization in HLG space  
-    baseAmplitude = 1.0f / 1024.0f; // ≈ 0.00098
-  } else {
-    // Linear HDR: Use SDR-like amplitude since linear values can vary widely
-    baseAmplitude = 1.0f / 512.0f; // ≈ 0.00195, slightly stronger for linear
-  }
+  // HDR10/PQ uses 10-bit quantization in PQ space
+  const float baseAmplitude = 1.0f / 1024.0f; // ≈ 0.00098
 
   // Apply user-configurable multiplier to the base amplitude
   const float finalAmplitude = baseAmplitude * ditherAmplitude;

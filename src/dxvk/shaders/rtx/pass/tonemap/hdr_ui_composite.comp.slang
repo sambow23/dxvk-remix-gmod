@@ -87,30 +87,6 @@ float3 linearToPQ(float3 color)
   return result;
 }
 
-// Linear to HLG (Hybrid Log-Gamma) transfer function
-float3 linearToHLG(float3 color) 
-{
-  const float a = 0.17883277f;
-  const float b = 0.28466892f;
-  const float c = 0.55991073f;
-  const float gamma = 1.2f;
-  const float threshold = 1.0f / 12.0f;
-  
-  color = clamp(color, float3(0.0f), float3(1.0f));
-  
-  float3 result;
-  for (int i = 0; i < 3; ++i) {
-    if (color[i] <= 0.0f) {
-      result[i] = 0.0f;
-    } else if (color[i] <= threshold) {
-      result[i] = sqrt(3.0f * color[i]);
-    } else {
-      result[i] = a * log(12.0f * color[i] - b) + c;
-    }
-  }
-  
-  return pow(max(result, float3(0.0f)), 1.0f / gamma);
-}
 
 // Convert SDR UI color (sRGB) to PQ-encoded HDR
 // This properly scales UI brightness relative to paper white
@@ -132,45 +108,11 @@ float3 convertUIToPQ(float3 uiColor)
   return linearToPQ(normalized);
 }
 
-// Convert SDR UI color (sRGB) to HLG-encoded HDR
-float3 convertUIToHLG(float3 uiColor)
-{
-  // 1. Decode sRGB gamma to linear
-  float3 linear = sRGBToLinear(uiColor);
-  
-  // 2. Convert to Rec.2020 gamut
-  float3 rec2020 = rec709ToRec2020(linear);
-  
-  // 3. Scale for HLG (normalize to display peak)
-  float3 scaledNits = rec2020 * cb.paperWhiteNits;
-  float3 normalized = scaledNits / max(cb.maxLuminanceNits, 1.0f);
-  
-  // 4. Apply HLG transfer function
-  return linearToHLG(normalized);
-}
-
-// Blend mode constants (must match HDRUIBlendMode enum in rtx_tone_mapping.h)
-static const uint BLEND_MODE_ALPHA = 0;           // Standard alpha blend
-static const uint BLEND_MODE_LUMINANCE = 1;       // Luminance-based detection (original)
-static const uint BLEND_MODE_ALPHA_REPLACE = 2;   // Hard replacement where alpha > 0
-static const uint BLEND_MODE_ADDITIVE = 3;        // Additive blend (preserves black naturally)
-static const uint BLEND_MODE_PRESERVE_BLACK = 4;  // Alpha blend but treat black as transparent
-static const uint BLEND_MODE_FULL_COLOR = 5;      // Render UI as-is, only exact black is transparent
-
-// Convert UI color to HDR based on current format setting
+// Convert UI color to HDR10 (BT.2020 + PQ)
 float3 convertUIToHDR(float3 uiColor)
 {
-  if (cb.hdrFormat == 1) {
-    // PQ/HDR10 format
-    return convertUIToPQ(uiColor);
-  } else if (cb.hdrFormat == 2) {
-    // HLG format - uses configured max luminance
-    return convertUIToHLG(uiColor);
-  } else {
-    // Linear format - just decode sRGB and scale by paper white
-    float3 linear = sRGBToLinear(uiColor);
-    return linear * (cb.paperWhiteNits / 100.0f); // Normalize relative to 100 nits SDR reference
-  }
+  // Always use PQ/HDR10 format
+  return convertUIToPQ(uiColor);
 }
 
 [shader("compute")]
@@ -185,109 +127,41 @@ void main(uint2 threadId : SV_DispatchThreadID)
   
   float4 result;
   
-  // Compute luminance for detection modes
-  float uiLuminance = calcBt709Luminance(uiColor.rgb);
+  // Full color mode - render UI exactly as-is with proper HDR10 color conversion
+  // Only exact black (cleared background) is treated as transparent
+  const float exactBlackThreshold = 0.004f; // ~1/255 to catch cleared background
   
-  // Determine effective alpha - many games (like Source Engine) render UI without proper alpha,
-  // so we need to detect UI presence via luminance when alpha is 0
-  bool hasUIContent = uiLuminance > cb.uiDetectionThreshold;
-  float baseAlpha = uiColor.a;
+  bool hasVisibleColor = (uiColor.r >= exactBlackThreshold || 
+                          uiColor.g >= exactBlackThreshold || 
+                          uiColor.b >= exactBlackThreshold);
+  bool hasAlpha = (uiColor.a >= exactBlackThreshold);
+  bool isBackground = !hasVisibleColor && !hasAlpha;
   
-  // If alpha is 0 but we have visible UI content, the game isn't using alpha properly
-  // In this case, treat it as fully opaque UI
-  if (baseAlpha <= 0.0f && hasUIContent) {
-    baseAlpha = 1.0f;
-  }
-  
-  // Select blending strategy based on mode
-  switch (cb.blendMode) {
-    case BLEND_MODE_ALPHA: {
-      // Standard alpha blend - use UI alpha channel directly
-      if (baseAlpha > 0.0f) {
-        float3 uiHDR = convertUIToHDR(uiColor.rgb);
-        result = float4(lerp(hdrColor.rgb, uiHDR, baseAlpha), 1.0f);
-      } else {
-        result = hdrColor;
-      }
-      break;
-    }
+  if (isBackground) {
+    // Cleared background - show HDR content
+    result = hdrColor;
+  } else if (hasVisibleColor && !hasAlpha) {
+    // Opaque UI without alpha - common in Source Engine games
+    float3 uiHDR = convertUIToHDR(uiColor.rgb);
+    result = float4(uiHDR, 1.0f);
+  } else if (hasAlpha) {
+    // Semi-transparent UI with alpha
+    float alpha = uiColor.a;
     
-    case BLEND_MODE_LUMINANCE: {
-      // Luminance-based detection (original behavior)
-      if (hasUIContent) {
-        float3 uiHDR = convertUIToHDR(uiColor.rgb);
-        result = float4(lerp(hdrColor.rgb, uiHDR, baseAlpha), 1.0f);
-      } else {
-        result = hdrColor;
-      }
-      break;
-    }
-    
-    case BLEND_MODE_ALPHA_REPLACE: {
-      // Hard replacement where alpha > 0 or luminance detected
-      if (baseAlpha > 0.0f) {
-        float3 uiHDR = convertUIToHDR(uiColor.rgb);
-        result = float4(uiHDR, 1.0f);
-      } else {
-        result = hdrColor;
-      }
-      break;
-    }
-    
-    case BLEND_MODE_ADDITIVE: {
-      // Additive blend
+    if (alpha >= 1.0f - exactBlackThreshold) {
+      // Fully opaque
       float3 uiHDR = convertUIToHDR(uiColor.rgb);
-      result = float4(hdrColor.rgb + uiHDR * baseAlpha, 1.0f);
-      break;
+      result = float4(uiHDR, 1.0f);
+    } else {
+      // Semi-transparent - un-premultiply and blend
+      float3 originalColor = uiColor.rgb / max(alpha, 0.01f);
+      originalColor = clamp(originalColor, float3(0.0f), float3(1.0f));
+      float3 uiHDR = convertUIToHDR(originalColor);
+      result = float4(lerp(hdrColor.rgb, uiHDR, alpha), 1.0f);
     }
-    
-    case BLEND_MODE_PRESERVE_BLACK: {
-      // Alpha blend but treat black as transparent
-      float lumAlpha = saturate(uiLuminance / max(cb.uiDetectionThreshold * 10.0f, 0.1f));
-      float effectiveAlpha = lumAlpha * baseAlpha;
-      
-      if (effectiveAlpha > 0.001f) {
-        float3 uiHDR = convertUIToHDR(uiColor.rgb);
-        result = float4(lerp(hdrColor.rgb, uiHDR, effectiveAlpha), 1.0f);
-      } else {
-        result = hdrColor;
-      }
-      break;
-    }
-    
-    case BLEND_MODE_FULL_COLOR:
-    default: {
-      // Full color mode - render UI exactly as-is with color conversion
-      const float exactBlackThreshold = 0.004f;
-      
-      bool hasVisibleColor = (uiColor.r >= exactBlackThreshold || 
-                              uiColor.g >= exactBlackThreshold || 
-                              uiColor.b >= exactBlackThreshold);
-      bool hasAlpha = (uiColor.a >= exactBlackThreshold);
-      bool isBackground = !hasVisibleColor && !hasAlpha;
-      
-      if (isBackground) {
-        result = hdrColor;
-      } else if (hasVisibleColor && !hasAlpha) {
-        float3 uiHDR = convertUIToHDR(uiColor.rgb);
-        result = float4(uiHDR, 1.0f);
-      } else if (hasAlpha) {
-        float alpha = uiColor.a;
-        
-        if (alpha >= 1.0f - exactBlackThreshold) {
-          float3 uiHDR = convertUIToHDR(uiColor.rgb);
-          result = float4(uiHDR, 1.0f);
-        } else {
-          float3 originalColor = uiColor.rgb / max(alpha, 0.01f);
-          originalColor = clamp(originalColor, float3(0.0f), float3(1.0f));
-          float3 uiHDR = convertUIToHDR(originalColor);
-          result = float4(lerp(hdrColor.rgb, uiHDR, alpha), 1.0f);
-        }
-      } else {
-        result = hdrColor;
-      }
-      break;
-    }
+  } else {
+    // Fallback - show HDR content
+    result = hdrColor;
   }
   
   Output[threadId] = result;

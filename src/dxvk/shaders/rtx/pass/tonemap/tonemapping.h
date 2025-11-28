@@ -144,13 +144,13 @@ struct ToneMappingApplyToneMappingArgs {
   uint pad1;
 };
 
-// HDR UI Composite arguments - for compositing SDR UI onto PQ-encoded HDR output
+// HDR UI Composite arguments - for compositing SDR UI onto HDR10/PQ output
 struct HDRUICompositeArgs {
   float paperWhiteNits;         // Reference white point luminance (typically 100-203 nits)
-  float uiDetectionThreshold;   // Luminance threshold for detecting UI pixels
-  uint hdrFormat;               // 0=Linear, 1=PQ, 2=HLG
-  uint blendMode;               // 0=Alpha, 1=Luminance, 2=AlphaReplace, 3=Additive, 4=PreserveBlack
-  float maxLuminanceNits;       // Maximum display luminance for HLG scaling
+  float pad_uiDetectionThreshold; // Reserved (not used with Full Color mode)
+  uint pad_hdrFormat;           // Reserved (HDR10/PQ is always used)
+  uint pad_blendMode;           // Reserved (Full Color mode is always used)
+  float maxLuminanceNits;       // Maximum display luminance
   uint pad0;
   uint pad1;
   uint pad2;

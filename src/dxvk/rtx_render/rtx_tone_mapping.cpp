@@ -422,7 +422,7 @@ namespace dxvk {
     pushArgs.hdrPaperWhiteLuminance = hdrPaperWhiteLuminance();
     pushArgs.exposureFactor = 1.0f; // Neutral exposure factor, rely on hdrExposureBias instead
     pushArgs.frameIndex = ctx->getDevice()->getCurrentFrameId();
-    pushArgs.hdrFormat = static_cast<uint32_t>(hdrFormat()); // 0=Linear, 1=PQ, 2=HLG
+    pushArgs.pad_hdrFormat = 0; // Reserved (HDR10/PQ is always used)
     pushArgs.hdrExposureBias = hdrExposureBias();
     pushArgs.hdrBrightness = hdrBrightness();
     pushArgs.hdrToneMapper = static_cast<uint32_t>(hdrToneMapper());

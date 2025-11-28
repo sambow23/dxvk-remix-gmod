@@ -268,10 +268,9 @@ namespace dxvk {
     void HookWindowProc(HWND window);
     // NV-DXVK end
 
-    // HDR tracking (per swapchain)
+    // HDR tracking (per swapchain) - HDR10/PQ format only
     bool                      m_hdrStateInitialized = false;
     bool                      m_prevHdrEnabled = false;
-    uint32_t                  m_prevHdrFormat = 0;
     float                     m_prevHdrMaxLuminance = 0.0f;
     float                     m_prevHdrMinLuminance = 0.0f;
     float                     m_prevHdrPaperWhiteLuminance = 0.0f;

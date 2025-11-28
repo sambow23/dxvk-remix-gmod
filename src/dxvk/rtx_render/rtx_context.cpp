@@ -1848,9 +1848,9 @@ namespace dxvk {
     // Use dedicated UI paper white if set, otherwise fall back to main paper white
     float uiPaperWhite = DxvkToneMapping::hdrUIPaperWhite();
     pushArgs.paperWhiteNits = (uiPaperWhite > 0.0f) ? uiPaperWhite : toneMapping.hdrPaperWhiteLuminance();
-    pushArgs.uiDetectionThreshold = DxvkToneMapping::hdrUIDetectionThreshold();
-    pushArgs.hdrFormat = static_cast<uint32_t>(toneMapping.hdrFormat());
-    pushArgs.blendMode = static_cast<uint32_t>(DxvkToneMapping::hdrUIBlendMode());
+    pushArgs.pad_uiDetectionThreshold = 0.0f; // Reserved (not used with Full Color mode)
+    pushArgs.pad_hdrFormat = 0; // Reserved (HDR10/PQ is always used)
+    pushArgs.pad_blendMode = 0; // Reserved (Full Color mode is always used)
     pushArgs.maxLuminanceNits = toneMapping.hdrMaxLuminance();
     
     // Create a view for the target image if needed

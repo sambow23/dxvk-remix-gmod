@@ -675,25 +675,23 @@ namespace dxvk::vk {
     hdrMetadata.sType = VK_STRUCTURE_TYPE_HDR_METADATA_EXT;
     hdrMetadata.pNext = nullptr;
 
-    // Only provide static HDR metadata for PQ/HDR10 (ST2084). For HLG and linear/scRGB leave defaults.
-    if (hdrFormat == 1) {
-      // ST2086: primaries (BT.2020) and D65 white
-      hdrMetadata.displayPrimaryRed.x   = 0.708f;
-      hdrMetadata.displayPrimaryRed.y   = 0.292f;
-      hdrMetadata.displayPrimaryGreen.x = 0.170f;
-      hdrMetadata.displayPrimaryGreen.y = 0.797f;
-      hdrMetadata.displayPrimaryBlue.x  = 0.131f;
-      hdrMetadata.displayPrimaryBlue.y  = 0.046f;
-      hdrMetadata.whitePoint.x          = 0.3127f;
-      hdrMetadata.whitePoint.y          = 0.3290f;
+    // HDR10 (BT.2020 + PQ) static metadata
+    // ST2086: primaries (BT.2020) and D65 white
+    hdrMetadata.displayPrimaryRed.x   = 0.708f;
+    hdrMetadata.displayPrimaryRed.y   = 0.292f;
+    hdrMetadata.displayPrimaryGreen.x = 0.170f;
+    hdrMetadata.displayPrimaryGreen.y = 0.797f;
+    hdrMetadata.displayPrimaryBlue.x  = 0.131f;
+    hdrMetadata.displayPrimaryBlue.y  = 0.046f;
+    hdrMetadata.whitePoint.x          = 0.3127f;
+    hdrMetadata.whitePoint.y          = 0.3290f;
 
-      hdrMetadata.maxLuminance = maxLuminance;    // display peak (nits)
-      hdrMetadata.minLuminance = minLuminance;    // display black level (nits)
+    hdrMetadata.maxLuminance = maxLuminance;    // display peak (nits)
+    hdrMetadata.minLuminance = minLuminance;    // display black level (nits)
 
-      // If content CLL/FALL not measured, set to 0 to indicate unknown
-      hdrMetadata.maxContentLightLevel        = 0;
-      hdrMetadata.maxFrameAverageLightLevel   = 0;
-    }
+    // If content CLL/FALL not measured, set to 0 to indicate unknown
+    hdrMetadata.maxContentLightLevel        = 0;
+    hdrMetadata.maxFrameAverageLightLevel   = 0;
 
     // Set the HDR metadata for our swapchain
     // Note: vkSetHdrMetadataEXT returns void, not VkResult
@@ -705,8 +703,7 @@ namespace dxvk::vk {
     );
 
     Logger::debug(str::format(
-      "Presenter: HDR metadata set"
-      " | format=", (hdrFormat == 1 ? "PQ" : hdrFormat == 2 ? "HLG" : "Linear"),
+      "Presenter: HDR10 metadata set"
       " | max=", maxLuminance,
       " | min=", minLuminance,
       " | paperWhite=", paperWhiteLuminance));

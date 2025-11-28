@@ -4410,11 +4410,6 @@ namespace dxvk {
         if (common->metaToneMapping().enableHDR()) {
           ImGui::Indent();
           
-          // HDR Format Selection
-          const char* hdrFormats[] = { "Linear (Compatibility)", "PQ/HDR10 (Most Displays)", "HLG (Broadcast)" };
-          ImGui::Combo("HDR Format", &common->metaToneMapping().hdrFormatObject(), hdrFormats, IM_ARRAYSIZE(hdrFormats));
-          ImGui::Separator();
-          
           // HDR Tone Mapping
           ImGui::Text("HDR Tone Mapping");
           ImGui::Combo("HDR Tone Mapper", &common->metaToneMapping().hdrToneMapperObject(), 
@@ -4500,28 +4495,9 @@ namespace dxvk {
           if (common->metaToneMapping().hdrSeparateUICompositing()) {
             ImGui::Indent();
             
-            // Blend mode dropdown
-            ImGui::Combo("UI Blend Mode", &common->metaToneMapping().hdrUIBlendModeObject(), 
-                "Alpha Blend\0Luminance Detect\0Alpha Replace\0Additive\0Preserve Black\0Full Color (Recommended)\0");
-            if (ImGui::IsItemHovered()) {
-              ImGui::SetTooltip(
-                "How UI is blended with HDR background:\n"
-                "- Alpha Blend: Standard blend. Black UI may darken background.\n"
-                "- Luminance Detect: Only blend non-black UI pixels.\n"
-                "- Alpha Replace: Hard replacement where alpha > 0.\n"
-                "- Additive: Add UI to background. Black = transparent.\n"
-                "- Preserve Black: Treat black/near-black as transparent.\n"
-                "- Full Color: Render UI as-is. Only exact black is transparent (Recommended)."
-              );
-            }
-            
             ImGui::DragFloat("UI Paper White (nits)", &common->metaToneMapping().hdrUIPaperWhiteObject(), 1.0f, 0.0f, 400.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
             if (ImGui::IsItemHovered()) {
               ImGui::SetTooltip("Paper white for UI elements. 0 = use main Paper White.\nAdjust to control UI brightness independently from scene.");
-            }
-            ImGui::DragFloat("UI Detection Threshold", &common->metaToneMapping().hdrUIDetectionThresholdObject(), 0.0001f, 0.0000f, 0.1f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
-            if (ImGui::IsItemHovered()) {
-              ImGui::SetTooltip("Luminance threshold for detecting UI pixels.\nLower = more sensitive, Higher = less sensitive.\nUsed by Luminance Detect and Preserve Black modes.");
             }
             ImGui::Unindent();
           }
