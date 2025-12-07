@@ -386,6 +386,14 @@ void resolveVertex<T: IBasePayloadState>(
     return;
   }
 
+  // Handle occluder surfaces - treat them as misses so sky is shown instead
+  // This allows occluders to hide geometry behind them while showing the sky
+  if (surface.isOccluder)
+  {
+    resolveVertexFinalMiss<true>(resolveVertexState, rayInteraction, radianceAttenuation);
+    return;
+  }
+
   // Create a Surface Material and Surface Material Interaction from the Surface
 
   const MemoryPolymorphicSurfaceMaterial memoryPolymorphicSurfaceMaterial = surfaceMaterials[uint(rayInteraction.surfaceIndex)];
@@ -801,7 +809,8 @@ void resolveVertexUnordered<let RAY_FLAGS : uint8_t>(
   inout bool decalEncountered,
   inout uint4 decalMemory,
   inout f16vec3 decalEmissiveRadiance,
-  inout int surfaceIndex)
+  inout int surfaceIndex,
+  inout float decalHitDistance)
 {
   // Early out if approximations are not desired to be separated out
 
@@ -810,6 +819,7 @@ void resolveVertexUnordered<let RAY_FLAGS : uint8_t>(
   if (!separateUnorderedApproximations)
   {
     surfaceIndex = -1;
+    decalHitDistance = -1.0f;
     numInteractions = 0;
     return;
   }
@@ -1048,6 +1058,7 @@ void resolveVertexUnordered<let RAY_FLAGS : uint8_t>(
           {
             surfaceIndex = rayInteraction.surfaceIndex;
             maxSortOrder = decalSortKey;
+            decalHitDistance = rayHitInfo.hitDistance;
             // TODO[REMIX-3080] Unusued for now, will be needed for normal blending
             // Note: Ideally this should be the final surface's tangent space, but in practice any decal's tangent space should work.
             // worldToDecalTangent = f16mat3(surfaceInteraction.interpolatedTangent, surfaceInteraction.interpolatedBitangent, surfaceInteraction.interpolatedNormal);
@@ -1072,6 +1083,7 @@ void resolveVertexUnordered<let RAY_FLAGS : uint8_t>(
             decalMemory = memory.packed;
             decalEmissiveRadiance = memory.emissiveRadiance;
             surfaceIndex = rayInteraction.surfaceIndex;
+            decalHitDistance = rayHitInfo.hitDistance;
             sampledSortOrder = decalSortKey;
             minDecalSample = rngValue;
           }

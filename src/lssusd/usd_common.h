@@ -3,7 +3,7 @@
 namespace dxvk {
   // Used when readin/writing with Remix USD mods.
   static const char* getInstanceCategorySubKey(InstanceCategories cat) {
-    static_assert((uint32_t) InstanceCategories::Count == 25, "Please add/remove the category to the below table.");
+    static_assert((uint32_t) InstanceCategories::Count == 26, "Please add/remove the category to the below table.");
     switch (cat) {
     case InstanceCategories::WorldUI:
       return "remix_category:world_ui";
@@ -55,6 +55,8 @@ namespace dxvk {
       return "remix_category:particle_emitter";
     case InstanceCategories::LegacyEmissive:
       return "remix_category:legacy_emissive";
+    case InstanceCategories::Occluder:
+      return "remix_category:occluder";
     default:
       Logger::err("Category key name requested, but no category found.");
       return "";
