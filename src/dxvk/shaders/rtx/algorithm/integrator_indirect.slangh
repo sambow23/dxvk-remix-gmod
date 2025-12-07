@@ -233,7 +233,8 @@ void integratePathVertex(
   
   uint4 decalMemory = 0;
   f16vec3 decalEmissiveRadiance = f16vec3(0);
-  int unorderedSurfaceIndex = -1;  
+  int unorderedSurfaceIndex = -1;
+  float decalHitDistanceIndirect = -1.0f;
   bool isNeeEnabledOnBounce = useNeeCacheOnThisBounce(pathState.bounceIteration, pathState.enableNeeCacheAfterFirstBounce);
   if (separateUnorderedApproximations)
   {
@@ -256,7 +257,7 @@ void integratePathVertex(
       pathState.accumulatedHitDistance, pathState.getUnorderedApproximationSelectionProbability(),
       radianceAttenuation, emissiveRadiance,
       numUnorderedInteractions, 
-      pathState.decalEncountered, decalMemory, decalEmissiveRadiance, unorderedSurfaceIndex);
+      pathState.decalEncountered, decalMemory, decalEmissiveRadiance, unorderedSurfaceIndex, decalHitDistanceIndirect);
 
     if ((cb.debugView == DEBUG_VIEW_SECONDARY_UNORDERED_INTERACTIONS 
          || cb.debugView == DEBUG_VIEW_SECONDARY_RAY_AND_UNORDERED_INTERACTIONS)

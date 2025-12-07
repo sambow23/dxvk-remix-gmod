@@ -249,6 +249,7 @@ struct RaytraceArgs {
   uint enableUnorderedEmissiveParticlesInIndirectRays;
   uint enableTransmissionApproximationInIndirectRays;
   uint enableDecalMaterialBlending;
+  uint enableDecalsOnSky;
   uint enableBillboardOrientationCorrection;
   uint enablePlayerModelInPrimarySpace;
   uint enablePlayerModelPrimaryShadows;
