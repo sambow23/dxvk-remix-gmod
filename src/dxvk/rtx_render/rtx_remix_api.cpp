@@ -801,11 +801,16 @@ dxvk::ExternalDrawState dxvk::RemixAPIPrivateAccessor::toRtDrawState(const remix
     prototype.transformData.texgenMode = TexGenMode::None;
     prototype.materialData.colorTextures[0] = TextureRef {};
     prototype.materialData.colorTextures[1] = TextureRef {};
+    
+    // Start with user-provided categories (allows manual override)
     prototype.categories = convert::toRtCategories(info.categoryFlags);
   }
 
   if (auto objectPicking = pnext::find<remixapi_InstanceInfoObjectPickingEXT>(&info)) {
     prototype.drawCallID = objectPicking->objectPickingValue;
+    ONCE(Logger::info(str::format("[RTX-ObjectPicking] Found objectPickingValue: ", objectPicking->objectPickingValue)));
+  } else {
+    ONCE(Logger::warn("[RTX-ObjectPicking] No objectPickingValue in InstanceInfo pNext chain!"));
   }
 
   if (auto extBones = pnext::find<remixapi_InstanceInfoBoneTransformsEXT>(&info)) {

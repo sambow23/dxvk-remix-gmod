@@ -1718,15 +1718,64 @@ namespace dxvk {
       state.drawCall.geometryData = submesh;
       state.drawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
 
+      // Declare textureHash outside the if block so it can be used in logging
+      XXH64_hash_t textureHash = 0;
+
       const MaterialData* material = m_pReplacer->accessExternalMaterial(submesh.externalMaterial);
       if (material != nullptr) {
         state.drawCall.materialData.setHashOverride(material->getHash());
+        
+        // Auto-apply texture categories for API-submitted content (matches D3D9 behavior)
+        // For API materials, we need to get the actual albedo texture handle/hash
+        // The material was created with CreateMaterial(hash = albedoTextureHash),
+        // so we need to extract that from the material's texture reference
+        
+        // Try to get texture hash from the material's opaque data
+        if (material->getType() == MaterialDataType::Opaque) {
+          const auto& opaqueMat = std::get<OpaqueMaterialData>(material->m_data);
+          if (opaqueMat.getAlbedoOpacityTexture().isValid()) {
+            textureHash = opaqueMat.getAlbedoOpacityTexture().getImageHash();
+            
+            ONCE(Logger::info(str::format("[RTX-Category] Texture hash from OpaqueMaterial: 0x", std::hex, textureHash, std::dec)));
+            ONCE(Logger::info(str::format("[RTX-Category] Sky set size: ", RtxOptions::skyBoxTextures().size())));
+            ONCE(Logger::info(str::format("[RTX-Category] Ignore set size: ", RtxOptions::ignoreTextures().size())));
+          }
+        }
+        
+        if (textureHash != 0 && textureHash != kEmptyHash) {
+          // Apply categories based on texture hash (same logic as setupCategoriesForTexture)
+          auto applyCategory = [&](const fast_unordered_set& hashSet, InstanceCategories cat, const char* catName) {
+            if (hashSet.find(textureHash) != hashSet.end()) {
+              state.drawCall.categories.set(cat);
+              // Logger::info(str::format("[RTX-Category] Applied category '", catName, "' to texture 0x", std::hex, textureHash, std::dec));
+            }
+          };
+          
+          applyCategory(RtxOptions::skyBoxTextures(), InstanceCategories::Sky, "Sky");
+          applyCategory(RtxOptions::ignoreTextures(), InstanceCategories::Ignore, "Ignore");
+          applyCategory(RtxOptions::worldSpaceUiTextures(), InstanceCategories::WorldUI, "WorldUI");
+          applyCategory(RtxOptions::worldSpaceUiBackgroundTextures(), InstanceCategories::WorldMatte, "WorldMatte");
+          applyCategory(RtxOptions::particleTextures(), InstanceCategories::Particle, "Particle");
+          applyCategory(RtxOptions::beamTextures(), InstanceCategories::Beam, "Beam");
+          applyCategory(RtxOptions::decalTextures(), InstanceCategories::DecalStatic, "Decal");
+          applyCategory(RtxOptions::terrainTextures(), InstanceCategories::Terrain, "Terrain");
+          applyCategory(RtxOptions::animatedWaterTextures(), InstanceCategories::AnimatedWater, "AnimatedWater");
+          applyCategory(RtxOptions::legacyEmissiveTextures(), InstanceCategories::LegacyEmissive, "LegacyEmissive");
+          applyCategory(RtxOptions::ignoreLights(), InstanceCategories::IgnoreLights, "IgnoreLights");
+          applyCategory(RtxOptions::antiCullingTextures(), InstanceCategories::IgnoreAntiCulling, "IgnoreAntiCulling");
+          applyCategory(RtxOptions::motionBlurMaskOutTextures(), InstanceCategories::IgnoreMotionBlur, "IgnoreMotionBlur");
+          applyCategory(RtxOptions::hideInstanceTextures(), InstanceCategories::Hidden, "Hidden");
+        }
       } 
 
       const RtxParticleSystemDesc* pParticles = nullptr;
       if(state.optionalParticleDesc.has_value()) {
         pParticles = &state.optionalParticleDesc.value();
       }
+
+      // Log object picking value for external draws
+      ONCE(Logger::info(str::format("[RTX-ObjectPicking] External draw has drawCallID: ", state.drawCall.drawCallID)));
+      ONCE(Logger::info(str::format("[RTX-ObjectPicking] Texture hash for picking meta: 0x", std::hex, textureHash, std::dec)));
 
       processDrawCallState(ctx, state.drawCall, material != nullptr ? MaterialData(*material) : LegacyMaterialData().as<OpaqueMaterialData>(), nullptr, pParticles);
     }
