@@ -1777,6 +1777,21 @@ namespace dxvk {
       ONCE(Logger::info(str::format("[RTX-ObjectPicking] External draw has drawCallID: ", state.drawCall.drawCallID)));
       ONCE(Logger::info(str::format("[RTX-ObjectPicking] Texture hash for picking meta: 0x", std::hex, textureHash, std::dec)));
 
+      // Store texture hash metadata for object picking (like D3D9 draws do)
+      const bool objectPickingActive = m_device->getCommon()->getResources().getRaytracingOutput()
+        .m_primaryObjectPicking.isValid();
+      
+      if (objectPickingActive && state.drawCall.drawCallID != 0 && textureHash != 0 && textureHash != kEmptyHash) {
+        auto meta = DrawCallMetaInfo {};
+        meta.legacyTextureHash = textureHash;
+        
+        std::lock_guard lock { m_drawCallMeta.mutex };
+        auto [iter, isNew] = m_drawCallMeta.infos[m_drawCallMeta.ticker].emplace(state.drawCall.drawCallID, meta);
+        ONCE_IF_FALSE(isNew, Logger::warn(
+          "[RTX-ObjectPicking] Found multiple API draw calls with the same objectPickingValue. "
+          "Some objects might not be available through object picking"));
+      }
+
       processDrawCallState(ctx, state.drawCall, material != nullptr ? MaterialData(*material) : LegacyMaterialData().as<OpaqueMaterialData>(), nullptr, pParticles);
     }
   }
