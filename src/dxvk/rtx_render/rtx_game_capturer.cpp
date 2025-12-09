@@ -30,6 +30,7 @@
 #include "rtx_instance_manager.h"
 #include "rtx_scene_manager.h"
 #include "rtx_materials.h"
+#include "rtx_texture_manager.h"
 
 #include "../dxvk_device.h"
 
@@ -455,10 +456,14 @@ namespace dxvk {
     assert(meshHash != 0);
 
     const LegacyMaterialData& material = pBlas->getMaterialData(matHash);
+    
+    // For API materials, use the MaterialData hash (what runtime uses for replacement lookup)
+    // For D3D9 materials, this equals matHash, but for API materials they differ
+    const XXH64_hash_t materialLookupHash = material.getHash();
 
-    const bool bIsNewMat = (matHash != 0x0) && (m_pCap->materials.count(matHash) == 0);
+    const bool bIsNewMat = (materialLookupHash != 0x0) && (m_pCap->materials.count(materialLookupHash) == 0);
     if (bIsNewMat) {
-      captureMaterial(ctx, material, !rtInstance.surface.alphaState.isFullyOpaque);
+      captureMaterial(ctx, rtInstance, materialLookupHash, material, !rtInstance.surface.alphaState.isFullyOpaque);
     }
 
     bool bIsNewMesh = false;
@@ -469,7 +474,7 @@ namespace dxvk {
       if (bIsNewMesh) {
         m_pCap->meshes[meshHash] = std::make_shared<Mesh>();
         m_pCap->meshes[meshHash]->instanceCount = 0;
-        m_pCap->meshes[meshHash]->matHash = matHash;
+        m_pCap->meshes[meshHash]->matHash = materialLookupHash;  // Use the lookup hash for USD references
       }
       instanceNum = m_pCap->meshes[meshHash]->instanceCount++;
     }
@@ -480,37 +485,107 @@ namespace dxvk {
     const XXH64_hash_t instanceId = rtInstance.getId();
     Instance& instance = m_pCap->instances[instanceId];
     instance.meshHash = meshHash;
-    instance.matHash = matHash;
+    instance.matHash = materialLookupHash;  // Use the lookup hash, not the BLAS hash
     instance.meshInstNum = instanceNum;
     instance.lssData.firstTime = m_pCap->currentFrameNum;
 
     Logger::debug("[GameCapturer][" + m_pCap->idStr + "][Inst:" + hashToString(instanceId) + "] New");
   }
 
-  void GameCapturer::captureMaterial(const Rc<DxvkContext> ctx, const LegacyMaterialData& materialData, const bool bEnableOpacity) {
+  void GameCapturer::captureMaterial(const Rc<DxvkContext> ctx, const RtInstance& rtInstance, const XXH64_hash_t runtimeMaterialHash, const LegacyMaterialData& materialData, const bool bEnableOpacity) {
     lss::Material lssMat; // to be populated
 
-    // Resolve material name
-    const std::string matName = dxvk::hashToString(materialData.getHash());
+    // Use runtime material hash for proper replacement lookup
+    const std::string matName = dxvk::hashToString(runtimeMaterialHash);
     lssMat.matName = matName;
-    // Export Textures
-    const std::string albedoTexFilename(matName + lss::ext::dds);
-    m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                               albedoTexFilename,
-                               materialData.getColorTexture().getImageView()->image());
-    const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-    lssMat.albedoTexPath = albedoTexPath;
+    
+    Logger::info(str::format("[GameCapturer] captureMaterial called for: ", matName));
+    
+    // Check if material has a valid color texture
+    const auto& colorTexture = materialData.getColorTexture();
+    XXH64_hash_t textureHash = colorTexture.getImageHash();
+    
+    // For API materials, get texture hash from the albedo texture index
+    if (textureHash == 0 || textureHash == kEmptyHash) {
+      uint32_t albedoTexIndex = rtInstance.getAlbedoOpacityTextureIndex();
+      if (albedoTexIndex != kSurfaceMaterialInvalidTextureIndex) {
+        const RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
+        const auto& textureTable = textureManager.getTextureTable();
+        if (albedoTexIndex < textureTable.size() && textureTable[albedoTexIndex].isValid()) {
+          textureHash = textureTable[albedoTexIndex].getImageHash();
+          Logger::info(str::format("[GameCapturer]   API material - got texture hash from albedo index ", albedoTexIndex, ": 0x", std::hex, textureHash, std::dec));
+        }
+      }
+    }
+    
+    Logger::info(str::format("[GameCapturer]   colorTexture.isValid: ", colorTexture.isValid(), 
+                             ", hasImageView: ", (colorTexture.getImageView() != nullptr),
+                             ", imageHash: 0x", std::hex, textureHash, std::dec));
+    
+    if (colorTexture.isValid() && colorTexture.getImageView()) {
+      // Export Textures (standard D3D9 textures)
+      const std::string albedoTexFilename(matName + lss::ext::dds);
+      m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
+                                 albedoTexFilename,
+                                 colorTexture.getImageView()->image());
+      const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
+      lssMat.albedoTexPath = albedoTexPath;
+    } else {
+      // API-submitted material with texture hash - try to resolve from texture manager
+      if (textureHash != 0 && textureHash != kEmptyHash) {
+        RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
+        const auto& textureTable = textureManager.getTextureTable();
+        
+        // Search for texture by hash
+        const TextureRef* pFoundTexture = nullptr;
+        for (const auto& textureRef : textureTable) {
+          if (textureRef.isValid() && textureRef.getImageHash() == textureHash) {
+            pFoundTexture = &textureRef;
+            break;
+          }
+        }
+        
+        if (pFoundTexture && pFoundTexture->getImageView()) {
+          // Export API texture
+          const std::string albedoTexFilename(matName + lss::ext::dds);
+          Logger::info(str::format("[GameCapturer] Attempting to export API texture: ", matName, " (hash: 0x", std::hex, textureHash, std::dec, ")"));
+          Logger::info(str::format("[GameCapturer]   Image: ", pFoundTexture->getImageView()->image()->info().extent.width, "x", 
+                                   pFoundTexture->getImageView()->image()->info().extent.height, 
+                                   " format: ", pFoundTexture->getImageView()->image()->info().format));
+          
+          try {
+            m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
+                                       albedoTexFilename,
+                                       pFoundTexture->getImageView()->image());
+            const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
+            lssMat.albedoTexPath = albedoTexPath;
+            Logger::info(str::format("[GameCapturer] Successfully exported API texture to: ", albedoTexPath));
+          } catch (const std::exception& e) {
+            Logger::err(str::format("[GameCapturer] Failed to export API texture: ", e.what()));
+          }
+        } else {
+          Logger::warn(str::format("[GameCapturer] Could not resolve API texture hash for material: ", matName, 
+                                   " (hash: 0x", std::hex, textureHash, std::dec, 
+                                   ", textureTable size: ", textureTable.size(), ")"));
+        }
+      }
+    }
+    
     // Opacity
     lssMat.enableOpacity = bEnableOpacity;
-    // Collect sampler info
-    const auto& samplerCreateInfo = materialData.getSampler()->info();
-    lssMat.sampler.addrModeU = samplerCreateInfo.addressModeU;
-    lssMat.sampler.addrModeV = samplerCreateInfo.addressModeV;
-    lssMat.sampler.filter = samplerCreateInfo.magFilter;
-    lssMat.sampler.borderColor = samplerCreateInfo.borderColor;
+    
+    // Collect sampler info (if available)
+    const auto& sampler = materialData.getSampler();
+    if (sampler != nullptr) {
+      const auto& samplerCreateInfo = sampler->info();
+      lssMat.sampler.addrModeU = samplerCreateInfo.addressModeU;
+      lssMat.sampler.addrModeV = samplerCreateInfo.addressModeV;
+      lssMat.sampler.filter = samplerCreateInfo.magFilter;
+      lssMat.sampler.borderColor = samplerCreateInfo.borderColor;
+    }
 
-    // Set populated LSS Material in our cache
-    m_pCap->materials[materialData.getHash()].lssData = lssMat;
+    // Set populated LSS Material in our cache (use runtime hash for proper lookup)
+    m_pCap->materials[runtimeMaterialHash].lssData = lssMat;
     Logger::debug("[GameCapturer][" + m_pCap->idStr + "][Mat:" + matName + "] New");
   }
 

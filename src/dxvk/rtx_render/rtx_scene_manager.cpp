@@ -1723,6 +1723,18 @@ namespace dxvk {
 
       const MaterialData* material = m_pReplacer->accessExternalMaterial(submesh.externalMaterial);
       if (material != nullptr) {
+        XXH64_hash_t materialHandleHash = reinterpret_cast<XXH64_hash_t>(submesh.externalMaterial);
+        XXH64_hash_t materialDataHash = material->getHash();
+        Logger::info(str::format("[RTX-Material] External material - handle: 0x", std::hex, materialHandleHash, 
+                                      ", materialData.getHash(): 0x", materialDataHash, std::dec));
+        
+        // Check for material replacement (same as D3D9 path)
+        MaterialData* pReplacementMaterial = m_pReplacer->getReplacementMaterial(material->getHash());
+        if (pReplacementMaterial != nullptr) {
+          //Logger::info(str::format("[RTX-Material] Found replacement for external material: 0x", std::hex, material->getHash(), std::dec));
+          material = pReplacementMaterial;
+        }
+        
         state.drawCall.materialData.setHashOverride(material->getHash());
         
         // Auto-apply texture categories for API-submitted content (matches D3D9 behavior)
