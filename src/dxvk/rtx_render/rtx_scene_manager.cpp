@@ -1716,17 +1716,31 @@ namespace dxvk {
 
     // Check for mesh/light replacements for external meshes (same as D3D9 path)
     const XXH64_hash_t meshHash = reinterpret_cast<XXH64_hash_t>(state.mesh);
+    ONCE(Logger::info(str::format("[RTX-Mesh] Checking external mesh hash: 0x", std::hex, meshHash, std::dec)));
     std::vector<AssetReplacement>* pReplacements = m_pReplacer->getReplacementsForMesh(meshHash);
+    
+    // Get submeshes - we need geometry data even if we have replacements
+    const std::vector<RasterGeometry>& submeshes = m_pReplacer->accessExternalMesh(state.mesh);
+    if (submeshes.empty()) {
+      Logger::err(str::format("[RTX-Mesh] External mesh has no submeshes: 0x", std::hex, meshHash, std::dec));
+      return;
+    }
     
     if (pReplacements != nullptr) {
       Logger::info(str::format("[RTX-Mesh] Found replacement for external mesh: 0x", std::hex, meshHash, std::dec));
-      // Create a DrawCallState for the replacement system - use the state's drawCall directly
-      MaterialData renderMaterialData = determineMaterialData(nullptr, state.drawCall);
-      drawReplacements(ctx, &state.drawCall, pReplacements, renderMaterialData);
+      // For replacements, create a separate DrawCallState so we don't modify the original
+      DrawCallState replacementDrawCall = state.drawCall;
+      replacementDrawCall.geometryData = submeshes[0];
+      replacementDrawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+      replacementDrawCall.geometryData.externalMaterial = nullptr;  // Clear material reference
+      
+      // Use a default material - the replacement will provide its own from USD
+      MaterialData renderMaterialData = LegacyMaterialData().as<OpaqueMaterialData>();
+      drawReplacements(ctx, &replacementDrawCall, pReplacements, renderMaterialData);
       return;
     }
 
-    for (const RasterGeometry& submesh : m_pReplacer->accessExternalMesh(state.mesh)) {
+    for (const RasterGeometry& submesh : submeshes) {
       state.drawCall.geometryData = submesh;
       state.drawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
 
@@ -1737,8 +1751,8 @@ namespace dxvk {
       if (material != nullptr) {
         XXH64_hash_t materialHandleHash = reinterpret_cast<XXH64_hash_t>(submesh.externalMaterial);
         XXH64_hash_t materialDataHash = material->getHash();
-        Logger::info(str::format("[RTX-Material] External material - handle: 0x", std::hex, materialHandleHash, 
-                                      ", materialData.getHash(): 0x", materialDataHash, std::dec));
+        //Logger::info(str::format("[RTX-Material] External material - handle: 0x", std::hex, materialHandleHash, 
+        //                              ", materialData.getHash(): 0x", materialDataHash, std::dec));
         
         // Check for material replacement (same as D3D9 path)
         MaterialData* pReplacementMaterial = m_pReplacer->getReplacementMaterial(material->getHash());

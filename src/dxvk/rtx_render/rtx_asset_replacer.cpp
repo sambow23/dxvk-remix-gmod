@@ -195,6 +195,11 @@ void AssetReplacer::registerExternalMesh(remixapi_MeshHandle handle, std::vector
     return;
   }
 
+  // Set the external mesh handle for each submesh
+  for (auto& submesh : submeshes) {
+    submesh.externalMesh = handle;
+  }
+
   m_extMeshes.emplace(handle, std::move(submeshes));
 }
 
