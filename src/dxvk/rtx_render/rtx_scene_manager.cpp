@@ -1714,6 +1714,18 @@ namespace dxvk {
       state.drawCall.transformData.objectToView = state.drawCall.transformData.worldToView * state.drawCall.transformData.objectToWorld;
     }
 
+    // Check for mesh/light replacements for external meshes (same as D3D9 path)
+    const XXH64_hash_t meshHash = reinterpret_cast<XXH64_hash_t>(state.mesh);
+    std::vector<AssetReplacement>* pReplacements = m_pReplacer->getReplacementsForMesh(meshHash);
+    
+    if (pReplacements != nullptr) {
+      Logger::info(str::format("[RTX-Mesh] Found replacement for external mesh: 0x", std::hex, meshHash, std::dec));
+      // Create a DrawCallState for the replacement system - use the state's drawCall directly
+      MaterialData renderMaterialData = determineMaterialData(nullptr, state.drawCall);
+      drawReplacements(ctx, &state.drawCall, pReplacements, renderMaterialData);
+      return;
+    }
+
     for (const RasterGeometry& submesh : m_pReplacer->accessExternalMesh(state.mesh)) {
       state.drawCall.geometryData = submesh;
       state.drawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
