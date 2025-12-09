@@ -1077,10 +1077,16 @@ namespace dxvk {
     }
     // Prep global transform
     exportPrep.globalXform = pxr::GfMatrix4d{1.0};
-    const bool bInvX = (!exportPrep.camera.view.bInv) && (exportPrep.camera.proj.bInv || exportPrep.camera.isLHS());
-    const bool bInvY = (!exportPrep.camera.view.bInv) && exportPrep.camera.proj.bInv;
-    const pxr::GfVec3d scale{ bInvX ? -1.0 : 1.0, bInvY ? -1.0 : 1.0, 1.0 };
-    exportPrep.globalXform.SetScale(scale);
+    
+    // For external API content with explicit left-handed coordinate system setting,
+    // skip the coordinate transformation - it's already in consistent Y-up space
+    // External API cameras are always LHS, so if the game is configured as LHS, assume external content
+    if (!RtxOptions::leftHandedCoordinateSystem()) {
+      const bool bInvX = (!exportPrep.camera.view.bInv) && (exportPrep.camera.proj.bInv || exportPrep.camera.isLHS());
+      const bool bInvY = (!exportPrep.camera.view.bInv) && exportPrep.camera.proj.bInv;
+      const pxr::GfVec3d scale{ bInvX ? -1.0 : 1.0, bInvY ? -1.0 : 1.0, 1.0 };
+      exportPrep.globalXform.SetScale(scale);
+    }
     if(exportPrep.meta.bCorrectBakedTransforms) {
       exportPrep.globalXform.SetTranslateOnly(-exportPrep.stageOrigin);
     }
