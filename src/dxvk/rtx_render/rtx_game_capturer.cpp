@@ -535,12 +535,22 @@ namespace dxvk {
     
     if (colorTexture.isValid() && colorTexture.getImageView()) {
       // Export Textures (standard D3D9 textures)
-      const std::string albedoTexFilename(matName + lss::ext::dds);
-      m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                                 albedoTexFilename,
-                                 colorTexture.getImageView()->image());
-      const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-      lssMat.albedoTexPath = albedoTexPath;
+      auto* imageView = colorTexture.getImageView();
+      if (imageView && imageView->image().ptr()) {
+        try {
+          const std::string albedoTexFilename(matName + lss::ext::dds);
+          m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
+                                     albedoTexFilename,
+                                     imageView->image());
+          const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
+          lssMat.albedoTexPath = albedoTexPath;
+          Logger::debug(str::format("[GameCapturer] Exported D3D9 texture: ", albedoTexFilename));
+        } catch (const std::exception& e) {
+          Logger::err(str::format("[GameCapturer] Failed to export D3D9 texture for material '", matName, "': ", e.what()));
+        }
+      } else {
+        Logger::warn(str::format("[GameCapturer] D3D9 texture has invalid image for material: ", matName));
+      }
     } else {
       // API-submitted material with texture hash - try to resolve from texture manager
       if (textureHash != 0 && textureHash != kEmptyHash) {
@@ -557,22 +567,35 @@ namespace dxvk {
         }
         
         if (pFoundTexture && pFoundTexture->getImageView()) {
-          // Export API texture
-          const std::string albedoTexFilename(matName + lss::ext::dds);
-          Logger::info(str::format("[GameCapturer] Attempting to export API texture: ", matName, " (hash: 0x", std::hex, textureHash, std::dec, ")"));
-          Logger::info(str::format("[GameCapturer]   Image: ", pFoundTexture->getImageView()->image()->info().extent.width, "x", 
-                                   pFoundTexture->getImageView()->image()->info().extent.height, 
-                                   " format: ", pFoundTexture->getImageView()->image()->info().format));
-          
-          try {
-            m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                                       albedoTexFilename,
-                                       pFoundTexture->getImageView()->image());
-            const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-            lssMat.albedoTexPath = albedoTexPath;
-            Logger::info(str::format("[GameCapturer] Successfully exported API texture to: ", albedoTexPath));
-          } catch (const std::exception& e) {
-            Logger::err(str::format("[GameCapturer] Failed to export API texture: ", e.what()));
+          // Export API texture - add safety checks
+          auto* apiImageView = pFoundTexture->getImageView();
+          if (apiImageView && apiImageView->image().ptr()) {
+            const auto& imageInfo = apiImageView->image()->info();
+            
+            // Validate image has valid dimensions and format
+            if (imageInfo.extent.width > 0 && imageInfo.extent.height > 0) {
+              const std::string albedoTexFilename(matName + lss::ext::dds);
+              Logger::info(str::format("[GameCapturer] Attempting to export API texture: ", matName, " (hash: 0x", std::hex, textureHash, std::dec, ")"));
+              Logger::info(str::format("[GameCapturer]   Image: ", imageInfo.extent.width, "x", 
+                                       imageInfo.extent.height, 
+                                       " format: ", imageInfo.format));
+              
+              try {
+                m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
+                                           albedoTexFilename,
+                                           apiImageView->image());
+                const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
+                lssMat.albedoTexPath = albedoTexPath;
+                Logger::info(str::format("[GameCapturer] Successfully exported API texture to: ", albedoTexPath));
+              } catch (const std::exception& e) {
+                Logger::err(str::format("[GameCapturer] Failed to export API texture: ", e.what()));
+              }
+            } else {
+              Logger::warn(str::format("[GameCapturer] API texture has invalid dimensions for material: ", matName, 
+                                       " (", imageInfo.extent.width, "x", imageInfo.extent.height, ")"));
+            }
+          } else {
+            Logger::warn(str::format("[GameCapturer] API texture has null image for material: ", matName, " (hash: 0x", std::hex, textureHash, std::dec, ")"));
           }
         } else {
           Logger::warn(str::format("[GameCapturer] Could not resolve API texture hash for material: ", matName, 
