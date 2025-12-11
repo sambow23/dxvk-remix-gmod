@@ -1389,7 +1389,7 @@ namespace dxvk {
     presenterDesc.fullScreenExclusive = PickFullscreenMode();
 
     if (GetPresenter()->recreateSwapChain(presenterDesc) != VK_SUCCESS)
-      throw DxvkError("D3D9SwapChainEx: Failed to recreate swap chain");
+      //throw DxvkError("D3D9SwapChainEx: Failed to recreate swap chain");
     // NV-DXVK end
     
     // Set HDR metadata if HDR is enabled
