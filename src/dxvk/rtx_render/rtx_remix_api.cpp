@@ -1591,7 +1591,7 @@ namespace {
 
     dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Option found and is HashSet type"));
 
-    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
+    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::PendingValue].hashSet;
 
     dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Parsing hash string"));
 
@@ -1608,6 +1608,7 @@ namespace {
 
     if (textureIterator == textureSet.end()) {
       textureSet.insert(h);
+      found->second->markDirty();
       dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Successfully added hash 0x", std::hex, h));
     } else {
       dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Hash already exists"));
@@ -1638,13 +1639,14 @@ namespace {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
 
-    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
+    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::PendingValue].hashSet;
 
     const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
     const auto textureIterator = textureSet.find(h);
 
     if (textureIterator != textureSet.end()) {
        textureSet.erase(textureIterator);
+       found->second->markDirty();
     } else {
       return REMIXAPI_ERROR_CODE_SUCCESS; // does not exist
     }
