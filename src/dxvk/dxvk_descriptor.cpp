@@ -93,14 +93,14 @@ namespace dxvk {
     std::array<VkDescriptorPoolSize, 10> pools = { {
       { VK_DESCRIPTOR_TYPE_SAMPLER,                     maxSets * 2  },
       { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,               maxSets * 2  },
-      { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,               maxSets / 16 },
+      { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,               maxSets / 64 },
       { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,              maxSets * 4  },
       { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,              maxSets * 1  },
       { VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,        maxSets * 1  },
       { VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,        maxSets / 64 },
       { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,      maxSets * 1  },
       { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,      maxSets },
-      { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,  64 } } };
+      { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,  10 } } };
 
     VkDescriptorPoolCreateInfo info;
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
