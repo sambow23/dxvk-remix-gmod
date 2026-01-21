@@ -187,8 +187,6 @@ dxvk_src = files([
   'rtx_render/rtx_asset_package.h',
   'rtx_render/rtx_asset_replacer.cpp',
   'rtx_render/rtx_asset_replacer.h',
-  'rtx_render/rtx_atmosphere.cpp',
-  'rtx_render/rtx_atmosphere.h',
   'rtx_render/rtx_auto_exposure.cpp',
   'rtx_render/rtx_auto_exposure.h',
   'rtx_render/rtx_bindless_resource_manager.cpp',
@@ -215,17 +213,21 @@ dxvk_src = files([
   'rtx_render/rtx_dlfg.h',
   'rtx_render/rtx_dlss.cpp', 
   'rtx_render/rtx_dlss.h',
-  'rtx_render/rtx_xess.cpp',
-  'rtx_render/rtx_xess.h',
   'rtx_render/rtx_draw_call_cache.cpp',
   'rtx_render/rtx_draw_call_cache.h',
+  'rtx_render/rtx_dust_particles.cpp',
+  'rtx_render/rtx_dust_particles.h',
   'rtx_render/rtx_env.cpp',
   'rtx_render/rtx_env.h',
+  'rtx_render/rtx_file_watch.cpp',
+  'rtx_render/rtx_file_watch.h',
   'rtx_render/rtx_game_capturer.cpp',
   'rtx_render/rtx_game_capturer.h',
   'rtx_render/rtx_game_capturer_utils.h',
   'rtx_render/rtx_geometry_utils.cpp',
   'rtx_render/rtx_geometry_utils.h',
+  'rtx_render/rtx_global_volumetrics.cpp',
+  'rtx_render/rtx_global_volumetrics.h',
   'rtx_render/rtx_hashing.cpp',
   'rtx_render/rtx_hashing.h',
   'rtx_render/rtx_hash_collision_detection.cpp',
@@ -283,6 +285,8 @@ dxvk_src = files([
   'rtx_render/rtx_opacity_micromap_manager.h',
   'rtx_render/rtx_option.cpp',
   'rtx_render/rtx_option.h',
+  'rtx_render/rtx_option_layer_manager.cpp',
+  'rtx_render/rtx_option_layer_manager.h',
   'rtx_render/rtx_options.cpp',
   'rtx_render/rtx_options.h',
   'rtx_render/rtx_pathtracer_gbuffer.cpp',
@@ -328,10 +332,16 @@ dxvk_src = files([
   'rtx_render/rtx_types.cpp',
   'rtx_render/rtx_types.h',
   'rtx_render/rtx_utils.h',
-  'rtx_render/rtx_global_volumetrics.cpp',
-  'rtx_render/rtx_global_volumetrics.h',
-  'rtx_render/rtx_dust_particles.cpp',
-  'rtx_render/rtx_dust_particles.h',
+  'rtx_render/rtx_xess.cpp',
+  'rtx_render/rtx_xess.h',
+  'rtx_render/rtx_fsr.cpp',
+  'rtx_render/rtx_fsr.h',
+  'rtx_render/rtx_fsr_framegen.cpp',
+  'rtx_render/rtx_fsr_framegen.h',
+  'rtx_render/rtx_rcas.cpp',
+  'rtx_render/rtx_rcas.h',
+
+  # NOTE: FSR 3.1 links against the prebuilt amd_fidelityfx_vk.dll via import library
 
   'rtx_render/rtx_system_info.cpp',
   'rtx_render/rtx_system_info.h',
@@ -340,9 +350,17 @@ dxvk_src = files([
   'rtx_render/rtx_particle_system.h',
 
   'rtx_render/graph/rtx_component_list.h',
+  'rtx_render/graph/rtx_component_list.cpp',
+  'rtx_render/graph/components/add.cpp',
+  'rtx_render/graph/components/divide.cpp',
+  'rtx_render/graph/components/equal_to.cpp',
+  'rtx_render/graph/components/multiply.cpp',
+  'rtx_render/graph/components/subtract.cpp',
   'rtx_render/graph/rtx_graph_batch.cpp',
   'rtx_render/graph/rtx_graph_batch.h',
   'rtx_render/graph/rtx_graph_component_macros.h',
+  'rtx_render/graph/rtx_graph_gui.cpp',
+  'rtx_render/graph/rtx_graph_gui.h',
   'rtx_render/graph/rtx_graph_instance.cpp',
   'rtx_render/graph/rtx_graph_instance.h',
   'rtx_render/graph/rtx_graph_manager.h',
@@ -354,6 +372,9 @@ dxvk_src = files([
   'rtx_render/graph/rtx_graph_types.h',
   'rtx_render/graph/rtx_graph_usd_parser.cpp',
   'rtx_render/graph/rtx_graph_usd_parser.h',
+
+  'rtx_render/rtx_overlay_window.cpp',
+  'rtx_render/rtx_overlay_window.h',
 
   'rtx_render/rtx_constants.h',
 
@@ -397,8 +418,6 @@ dxvk_src = files([
   'imgui/implot_demo.cpp',
   'imgui/implot_internal.h',
   'imgui/implot_items.cpp',
-  'imgui/imgui_remix_exports.cpp',
-  'imgui/imgui_remix_exports.h',
 ])
 
 thread_dep = dependency('threads')
@@ -423,10 +442,29 @@ dlss_dep = declare_dependency(
   include_directories : [ dlss_include_dir, dlfg_include_dir ]
 )
 
-# XeSS dependency - using direct library path
-xess_lib_path = join_paths(global_src_root_norm, 'external/xess/lib')
-xess_lib = cc.find_library('libxess', dirs : xess_lib_path, required : false)
-xess_dep = declare_dependency(dependencies : [ xess_lib ])
+# XeSS dependency
+xess_lib_path = join_paths(global_src_root_norm, 'submodules/xess/lib')
+xess_include_dir = include_directories('../../submodules/xess/inc')
+xess_lib = dxvk_compiler.find_library('libxess', dirs : xess_lib_path, required : false)
+xess_dep = declare_dependency(
+  dependencies : [ xess_lib ],
+  include_directories : xess_include_dir
+)
+
+# FSR3 (FidelityFX SDK) dependency
+# Link against the prebuilt import library for the signed DLL
+fsr3_lib_path = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/PrebuiltSignedDLL')
+fsr3_include_dir = include_directories(
+  '../../submodules/FidelityFX-SDK/ffx-api/include'
+)
+fsr3_lib = dxvk_compiler.find_library('amd_fidelityfx_vk', dirs : fsr3_lib_path, required : true)
+fsr3_dep = declare_dependency(
+  dependencies : [ fsr3_lib ],
+  include_directories : fsr3_include_dir
+)
+
+# FidelityFX API dependency
+ffx_api_dep = fsr3_dep
 
 nrc_dll_path = join_paths(meson.global_source_root(), 'submodules/nrc/bin/')
 nrc_lib_path = join_paths(meson.global_source_root(), 'submodules/nrc/lib/')
@@ -455,7 +493,7 @@ dxvk_embedded_data_files = files([
 
 dxvk_generated_embedded_files = embedding_compiler.process(dxvk_embedded_data_files)
 
-dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, submodules_dep, xess_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep ]
+dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, submodules_dep, xess_dep, fsr3_dep, ffx_api_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep, usd_plugin_deps ]
 
 if enable_rtxio
   dxvk_deps += rtxio_dep
@@ -477,7 +515,9 @@ dxvk_lib = static_library('dxvk', dxvk_src, dxvk_version, [generated_dxvk_shader
   include_directories : [ dxvk_include_path, dxvk_shader_include_path, rtxdi_include_path, remix_api_include_path, rtxcr_include_path, submodules_include_path  ],
   override_options    : ['cpp_std='+dxvk_cpp_std],
   # Force switch statements over enums to either cover all cases or have a default case.
-  cpp_args            : dxvk_is_msvc ? ['/we4062'] : ['-Wswitch'])
+  cpp_args            : dxvk_is_msvc ? ['/we4062'] : ['-Wswitch'],
+  cpp_pch             : ['pch/dxvk.pch.h']
+  )
 
 dxvk_dep = declare_dependency(
   link_with           : [ dxvk_lib ],

@@ -238,6 +238,15 @@ endif
 lib_shlwapi  = dxvk_compiler.find_library('shlwapi')
 dxvk_extradep += lib_shlwapi
 
+if dxvk_is_msvc
+  lib_dbghelp = dxvk_compiler.find_library('dbghelp', required : true)
+else
+  lib_dbghelp = dxvk_compiler.find_library('dbghelp', dirs : dxvk_library_path, required : false)
+endif
+if lib_dbghelp.found()
+  dxvk_extradep += lib_dbghelp
+endif
+
 if enable_rtxio == true
   rtxio_bin_path = join_paths(global_src_root_norm, 'external/rtxio/bin')
   external_dll_paths += rtxio_bin_path
@@ -550,6 +559,10 @@ external_dll_paths += dlfg_lib_path
 nrc_dll_name = 'NRC_Vulkan.dll'
 nrc_dll_path = join_paths(global_src_root_norm, 'submodules/nrc/bin/')
 
+xess_dll_path = join_paths(global_src_root_norm, 'submodules/xess/bin/')
+
+fsr3_dll_path = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/PrebuiltSignedDLL/')
+
 nrd_lib_path = join_paths(global_src_root_norm, 'external/nrd/Lib/Release/')
 if get_option('buildtype') == 'debug'  
   nrd_lib_path = join_paths(global_src_root_norm, 'external/nrd/Lib/Debug/')
@@ -608,6 +621,8 @@ dxvkrt_output_targets = {
   '_hdremix': '',
   'unit_test': '',
 }
+
+subdir('tests/rtx')
 
 if dxvk_is_ninja
   # this is how we force meson to reconfigure when external files change
@@ -734,6 +749,10 @@ if dxvk_is_ninja
     install_data(join_paths(nrc_dll_path, 'nvrtc-builtins64_125.dll'), install_dir : output_path, install_tag: target_suffix) 
 
     install_data(join_paths(nrd_lib_path, 'NRD.dll'), install_dir : output_path, install_tag: target_suffix) 
+    
+    install_data(join_paths(xess_dll_path, 'libxess.dll'), install_dir : output_path, install_tag: target_suffix)
+
+    install_data(join_paths(fsr3_dll_path, 'amd_fidelityfx_vk.dll'), install_dir : output_path, install_tag: target_suffix)
 
     install_data(join_paths(dlss_lib_path, 'nvngx_dlss.dll'), install_dir : output_path, install_tag: target_suffix) 
     install_data(join_paths(dlss_lib_path, 'nvngx_dlssd.dll'), install_dir : output_path, install_tag: target_suffix) 
@@ -800,3 +819,7 @@ if dxvk_is_ninja
     error('generate_vs_project_files failed')
   endif
 endif # dxvk_is_ninja
+
+if fs.is_dir('nv-private')
+  subdir('nv-private')
+endif

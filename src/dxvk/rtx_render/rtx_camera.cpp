@@ -29,6 +29,7 @@
 #include "rtx_options.h"
 #include "rtx_matrix_helpers.h"
 #include "rtx_imgui.h"
+#include "rtx_xess.h"
 
 /*
 *             Free/Debug Camera
@@ -447,17 +448,9 @@ namespace dxvk
         }
       }
 
-
-
-      POINT p;
-      if (GetCursorPos(&p)) {
-        if (!lockFreeCamera() && ImGui::IsMouseDown(ImGuiMouseButton_Left) && ((m_mouseX != p.x) || (m_mouseY != p.y))) {
-          freeCameraYaw.setDeferred( freeCameraYaw() + coordSystemScale * (m_mouseX - p.x) * 0.1f * elapsedSec.count());
-          freeCameraPitch.setDeferred( freeCameraPitch() + coordSystemScale * pitchDirection * (m_mouseY - p.y) * 0.2f * elapsedSec.count());
-        }
-
-        m_mouseX = p.x;
-        m_mouseY = p.y;
+      if (!lockFreeCamera() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        freeCameraYaw.setDeferred( freeCameraYaw() - coordSystemScale * ImGui::GetIO().MouseDelta.x * 0.1f * elapsedSec.count());
+        freeCameraPitch.setDeferred( freeCameraPitch() - coordSystemScale * pitchDirection * ImGui::GetIO().MouseDelta.y * 0.2f * elapsedSec.count());
       }
 
       // Reset
@@ -468,13 +461,6 @@ namespace dxvk
         moveDownUp = 0;
         freeCameraYaw.setDeferred(0.0f);
         freeCameraPitch.setDeferred(0.0f);
-      }
-    } else {
-      // track mouse position when out of focus to avoid uncontrollable camera flips when we're back in focus
-      POINT p;
-      if (GetCursorPos(&p)) {
-        m_mouseX = p.x;
-        m_mouseY = p.y;
       }
     }
 
@@ -665,9 +651,7 @@ namespace dxvk
     applyAndGetJitter(
       newViewToProjectionJittered,
       m_jitter,
-      m_context.jitterFrameIdx,
-      m_renderResolution[0],
-      m_renderResolution[1]);
+      m_context.jitterFrameIdx);
 
     m_context.jitter[0] = m_jitter[0];
     m_context.jitter[1] = m_jitter[1];
@@ -735,20 +719,14 @@ namespace dxvk
     jitter[0] = m_jitter[0];
     jitter[1] = m_jitter[1];
   }
-
-  // Static variable to track the actual jitter sequence length being used
-  static uint32_t s_currentJitterSequenceLength = 64;
   
-  // Static variable to track the current upscaling ratio for dynamic jitter calculation
-  static float s_currentUpscalingRatio = 1.0f;
-
-  Vector2 RtCamera::calcPixelJitter(uint32_t jitterFrameIdx) {
-    // Only apply jittering when DLSS/XeSS/TAA is enabled, or if forced by settings
+  Vector2 RtCamera::calcPixelJitter(uint32_t jitterFrameIdx) const {
+    // Only apply jittering when DLSS/XeSS/FSR/TAA is enabled, or if forced by settings
     if (!RtxOptions::isDLSSOrRayReconstructionEnabled() &&
         !RtxOptions::isXeSSEnabled() &&
+        !RtxOptions::isFSREnabled() &&
         !RtxOptions::isTAAEnabled() &&
         !RtxOptions::forceCameraJitter()) {
-      s_currentJitterSequenceLength = 0; // No jitter being used
       return Vector2{ 0, 0 };
     }
 
@@ -756,85 +734,55 @@ namespace dxvk
 #if USE_DLSS_DEMO_JITTER_PATTERN
     uint32_t jitterSequenceLength = RtxOptions::cameraJitterSequenceLength();
 
-    if (RtxOptions::isXeSSEnabled() && RtxOptions::xessUseRecommendedJitterSequenceLength()) {
-      float scaleFactor = s_currentUpscalingRatio;
-      uint32_t xessLength = static_cast<uint32_t>(std::ceil(scaleFactor * scaleFactor * 8.0f));
+    if (RtxOptions::isXeSSEnabled() && DxvkXeSS::XessOptions::useRecommendedJitterSequenceLength()) {
+      float upscaleFactor = static_cast<float>(m_finalResolution[1]) / m_renderResolution[1];
+
+      // XeSS 2.1 formula: ceil(upscale_factor^2 * 8)
+      // The 8.0 multiplier ensures sufficient temporal samples for higher upscaling factors
+      uint32_t xessLength = static_cast<uint32_t>(std::ceil(upscaleFactor * upscaleFactor * 8.0f));
       
       // Apply minimum jitter sequence length
-      uint32_t minLength = RtxOptions::xessMinJitterSequenceLength();
+      uint32_t minLength = DxvkXeSS::XessOptions::minJitterSequenceLength();
       xessLength = std::max(xessLength, minLength);
       
-      // Clamp to reasonable range
-      xessLength = std::clamp(xessLength, minLength, 1024u);
       jitterSequenceLength = xessLength;
     }
     
-    // Track the actual jitter sequence length being used
-    s_currentJitterSequenceLength = jitterSequenceLength;
+    // FSR3 uses: int32_t(8.0f * pow(displayWidth / renderWidth, 2.0f))
+    // This matches ffxFsr3UpscalerGetJitterPhaseCount exactly
+    if (RtxOptions::isFSREnabled()) {
+      float upscaleFactor = static_cast<float>(m_finalResolution[0]) / static_cast<float>(m_renderResolution[0]);
+      jitterSequenceLength = static_cast<uint32_t>(8.0f * upscaleFactor * upscaleFactor);
+      // Ensure at least 1 to avoid division by zero
+      jitterSequenceLength = std::max(jitterSequenceLength, 1u);
+    }
     
     return calculateHaltonJitter(jitterFrameIdx, jitterSequenceLength);
 #else
-    s_currentJitterSequenceLength = 1; // Halton sequence is effectively length 1
     return m_halton.next();
 #endif
   }
 
-  uint32_t RtCamera::getCurrentJitterSequenceLength() {
-    return s_currentJitterSequenceLength;
-  }
-  
-  void RtCamera::setCurrentUpscalingRatio(float upscalingRatio) {
-    if (s_currentUpscalingRatio != upscalingRatio) {
-      s_currentUpscalingRatio = upscalingRatio;
-    }
-  }
-  
-  float RtCamera::getCurrentUpscalingRatio() {
-    return s_currentUpscalingRatio;
-  }
-  
-  Vector2 RtCamera::calcPixelJitterWithXeSS(uint32_t jitterFrameIdx, uint32_t xessLength) {
-    // Only apply jittering when DLSS/XeSS/TAA is enabled, or if forced by settings
-    if (!RtxOptions::isDLSSOrRayReconstructionEnabled() &&
-        !RtxOptions::isXeSSEnabled() &&
-        !RtxOptions::isTAAEnabled() &&
-        !RtxOptions::forceCameraJitter()) {
-      return Vector2{ 0, 0 };
-    }
-
-#define USE_DLSS_DEMO_JITTER_PATTERN 1
-#if USE_DLSS_DEMO_JITTER_PATTERN
-  if (RtxOptions::isXeSSEnabled() && RtxOptions::xessUseRecommendedJitterSequenceLength() && xessLength > 0) {
-    // XeSS-specific: Use the recommended jitter sequence length
-    return calculateHaltonJitter(jitterFrameIdx, xessLength);
-  } else {
-    // Original behavior for DLSS, TAA, and other upscalers
-    return calculateHaltonJitter(jitterFrameIdx, RtxOptions::cameraJitterSequenceLength());
-  }
-#else
-    return m_halton.next();
-#endif
-  }
-
-  Vector2 RtCamera::calcClipSpaceJitter(Vector2 pixelJitter, 
-                                           uint32_t renderResolutionX, uint32_t renderResolutionY,
-                                           float ratioX, float ratioY) {
-    if (renderResolutionX == 0 || renderResolutionY == 0) {
+  Vector2 RtCamera::calcClipSpaceJitter(
+    const Vector2& pixelJitter, 
+    float ratioX,
+    float ratioY) const {
+    if (m_renderResolution[0] == 0 || m_renderResolution[1] == 0) {
       return Vector2{ 0, 0 };
     }
     return Vector2{
-      pixelJitter[0] / float(renderResolutionX) * ratioX * 2.f,
-      pixelJitter[1] / float(renderResolutionY) * ratioY * 2.f,
+      pixelJitter[0] / static_cast<float>(m_renderResolution[0]) * ratioX * 2.f,
+      pixelJitter[1] / static_cast<float>(m_renderResolution[1]) * ratioY * 2.f,
     };
   }
 
-  void RtCamera::applyJitterTo(Matrix4& inoutProjection, uint32_t jitterFrameIdx, uint32_t renderResolutionX, uint32_t renderResolutionY) {
+  void RtCamera::applyJitterTo(
+    Matrix4& inoutProjection,
+    uint32_t jitterFrameIdx) const {
     Vector2 pixelJitter = calcPixelJitter(jitterFrameIdx);
     float ratioX = Sign(inoutProjection[2][3]);
     float ratioY = -Sign(inoutProjection[2][3]);
-    Vector2 clipSpaceJitter = calcClipSpaceJitter(pixelJitter,
-                                                     renderResolutionX, renderResolutionY,
-                                                     ratioX, ratioY);
+    Vector2 clipSpaceJitter = calcClipSpaceJitter(pixelJitter,ratioX, ratioY);
     if (std::abs(clipSpaceJitter[0]) < std::numeric_limits<float>::min() &&
         std::abs(clipSpaceJitter[1]) < std::numeric_limits<float>::min()) {
       return;
@@ -843,13 +791,14 @@ namespace dxvk
     inoutProjection[2][1] += clipSpaceJitter[1];
   }
 
-  void RtCamera::applyAndGetJitter(Matrix4d& inoutProjection, float (&outPixelJitter)[2], uint32_t jitterFrameIdx, uint32_t renderResolutionX, uint32_t renderResolutionY) {
+  void RtCamera::applyAndGetJitter(
+    Matrix4d& inoutProjection, 
+    float (&outPixelJitter)[2], 
+    uint32_t jitterFrameIdx) const {
     Vector2 pixelJitter = calcPixelJitter(jitterFrameIdx);
     float ratioX = Sign(inoutProjection[2][3]);
     float ratioY = -Sign(inoutProjection[2][3]);
-    Vector2 clipSpaceJitter = calcClipSpaceJitter(pixelJitter,
-                                                  renderResolutionX, renderResolutionY,
-                                                  ratioX, ratioY);
+    Vector2 clipSpaceJitter = calcClipSpaceJitter(pixelJitter, ratioX, ratioY);
     {
       outPixelJitter[0] = pixelJitter[0];
       outPixelJitter[1] = pixelJitter[1];
@@ -887,7 +836,6 @@ namespace dxvk
     camera.projectionToView = projectionToView;
     camera.viewToProjectionJittered = viewToProjectionJittered;
     camera.projectionToViewJittered = projectionToViewJittered;
-    camera.worldToProjection = viewToProjection * worldToView;
     camera.worldToProjectionJittered = viewToProjectionJittered * worldToView;
     camera.projectionToWorldJittered = viewToWorld * projectionToViewJittered;
     camera.translatedWorldToView = translatedWorldToView;
@@ -940,7 +888,6 @@ namespace dxvk
 
     camera.viewToProjection = viewToProjection;
     camera.translatedWorldToView = translatedWorldToView;
-    camera.translatedWorldToProjection = viewToProjection * translatedWorldToView;
     camera.translatedWorldToProjectionJittered = viewToProjectionJittered * translatedWorldToView;
     camera.projectionToTranslatedWorld = viewToTranslatedWorld * projectionToView;
     camera.prevTranslatedWorldToView = prevTranslatedWorldToView;
@@ -986,6 +933,7 @@ namespace dxvk
 
       ImGui::Checkbox("Enable Free Camera", &enableFreeCameraObject());
       ImGui::Checkbox("Lock Free Camera", &lockFreeCameraObject());
+      ImGui::Checkbox("Use Free Camera for Components", &useFreeCameraForComponentsObject());
       ImGui::DragFloat3("Position", &freeCameraPositionObject(), 0.1f, -1e5, -1e5, "%.3f", sliderFlags);
       ImGui::DragFloat("Yaw", &freeCameraYawObject(), 0.1f, -Pi<float>(2), Pi<float>(2), "%.3f", sliderFlags);
       ImGui::DragFloat("Pitch", &freeCameraPitchObject(), 0.1f, -Pi<float>(2), Pi<float>(2), "%.3f", sliderFlags);

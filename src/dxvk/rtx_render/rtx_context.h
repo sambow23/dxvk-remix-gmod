@@ -25,12 +25,10 @@
 #include "rtx_resources.h"
 #include "rtx_asset_exporter.h"
 #include "rtx_camera_manager.h"
-#include "rtx_atmosphere.h"
 #include "rtx/pass/nrd_args.h"
 
 #include <cstdint>
 #include <chrono>
-#include <optional>
 #include "rtx_options.h"
 
 struct VolumeArgs;
@@ -115,9 +113,6 @@ namespace dxvk {
     void commitGeometryToRT(const DrawParameters& params, DrawCallState& drawCallState);
     void commitExternalGeometryToRT(ExternalDrawState&& state);
 
-    void setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity);
-    void setScreenTint(float r, float g, float b, float a);
-
     static void blitImageHelper(Rc<DxvkContext> ctx, const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& dstImage, VkFilter filter);
 
     virtual void flushCommandList() override;
@@ -129,10 +124,6 @@ namespace dxvk {
     static void triggerUsdCapture() { s_triggerUsdCapture = true; }
 
     void bindCommonRayTracingResources(const Resources::RaytracingOutput& rtOutput);
-
-    // HDR Support methods
-    bool isHDREnabled() const;
-    void processHDROutput(const Resources::RaytracingOutput& rtOutput);
 
     void bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView);
 
@@ -176,6 +167,7 @@ namespace dxvk {
       NIS,
       TAAU,
       XeSS,
+      FSR,
       DLSS_RR,
     };
 
@@ -203,6 +195,8 @@ namespace dxvk {
     void dispatchReplaceCompositeWithDebugView(const Resources::RaytracingOutput& rtOutput);
     void dispatchNIS(const Resources::RaytracingOutput& rtOutput);
     void dispatchXeSS(const Resources::RaytracingOutput& rtOutput);
+    void dispatchFSR(const Resources::RaytracingOutput& rtOutput);
+    void dispatchRCAS(const Resources::RaytracingOutput& rtOutput);
     void dispatchTemporalAA(const Resources::RaytracingOutput& rtOutput);
     void dispatchToneMapping(const Resources::RaytracingOutput& rtOutput, bool performSRGBConversion);
     void dispatchBloom(const Resources::RaytracingOutput& rtOutput);
@@ -210,8 +204,7 @@ namespace dxvk {
     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
-    void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
-    void dispatchScreenTint(Resources::RaytracingOutput& rtOutput);
+    void dispatchFSRFrameGen(const Rc<DxvkImage>& hudLessBackBuffer);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
 
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
@@ -240,16 +233,14 @@ namespace dxvk {
     VkFormat m_skyRtColorFormat = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     VkClearValue m_skyClearValue;
     bool m_skyClearDirty = false;
-    SkyMode m_lastSkyMode = SkyMode::SkyboxRasterization;
-
-    std::unique_ptr<RtxAtmosphere> m_atmosphere;
 
     bool shouldUseDLSS() const;
     bool shouldUseRayReconstruction() const;
     bool shouldUseNIS() const;
     bool shouldUseTAA() const;
     bool shouldUseXeSS() const;
-    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA() || shouldUseXeSS(); }
+    bool shouldUseFSR() const;
+    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA() || shouldUseXeSS() || shouldUseFSR(); }
 
     inline static bool s_triggerScreenshot = false;
     inline static bool s_triggerUsdCapture = false;
@@ -270,31 +261,6 @@ namespace dxvk {
     uint32_t m_screenshotFrameNum = -1;
     uint32_t m_terminateAppFrameNum = -1;
     bool m_previousInjectRtxHadScene = false;
-
-    // Screen overlay state
-    struct ScreenOverlayFrame {
-      Rc<DxvkBuffer> stagingBuffer;
-      uint32_t width = 0;
-      uint32_t height = 0;
-      VkFormat format = VK_FORMAT_UNDEFINED;
-      float opacity = 1.0f;
-    };
-    std::optional<ScreenOverlayFrame> m_pendingScreenOverlay;
-    Rc<DxvkImage> m_screenOverlayImage;
-    Rc<DxvkImageView> m_screenOverlayView;
-    uint32_t m_screenOverlayWidth = 0;
-    uint32_t m_screenOverlayHeight = 0;
-    VkFormat m_screenOverlayFormat = VK_FORMAT_UNDEFINED;
-
-    // Screen tint state (fullscreen solid-color alpha tint applied after screen overlay).
-    struct ScreenTintState {
-      float r = 0.0f;
-      float g = 0.0f;
-      float b = 0.0f;
-      float a = 0.0f;
-    };
-    ScreenTintState m_screenTint {};
-
     IntegrateIndirectMode m_prevIntegrateIndirectMode = IntegrateIndirectMode::Count;
 
     DxvkRaytracingInstanceState m_rtState;
@@ -306,22 +272,6 @@ namespace dxvk {
     } m_objectPickingReadback {};
 
     std::vector<DrawCallState> m_delayedRayTracedSky;
-    
-    // Sky camera state tracking
-    uint32_t m_lastSkyCameraFrame = 0;         // Frame when sky camera was last seen
-    uint32_t m_skyGeometryQueuedFrame = 0;     // Frame when sky geometry was first queued
-    XXH64_hash_t m_lastSkyCameraSignature = 0; // Signature of the last seen sky camera
-    XXH64_hash_t m_lastMainCameraSignature = 0; // Signature of the last seen main camera
-    
-    // Sky camera helper methods
-    bool isSkyCameraStale() const;
-    void updateSkyCameraState();
-    void cleanupStaleDelayedSkyGeometry();
-    bool isSkyCameraDataValid(const DrawCallState& skyGeometry) const;
-    bool shouldFallbackToRasterization() const;
-    XXH64_hash_t calculateCameraSignature(const DrawCallTransforms& transforms) const;
-    bool isConflictingCameraRender(const DrawCallState& drawCallState) const;
-    void resetCameraSignatures();
 
 #ifdef REMIX_DEVELOPMENT
     void queryAvailableResourceAliasing();

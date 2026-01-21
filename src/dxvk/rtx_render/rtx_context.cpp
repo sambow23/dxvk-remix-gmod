@@ -23,8 +23,6 @@
 #include <cmath>
 #include <cassert>
 #include <array>
-#include <fstream>
-#include <chrono>
 
 #include "dxvk_device.h"
 #include "dxvk_scoped_annotation.h"
@@ -40,6 +38,9 @@
 #include "rtx_texture_manager.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_ray_reconstruction.h"
+#include "rtx_xess.h"
+#include "rtx_fsr.h"
+#include "rtx_fsr_framegen.h"
 #include "rtx_rtxdi_rayquery.h"
 #include "rtx_restir_gi_rayquery.h"
 #include "rtx_composite.h"
@@ -73,42 +74,10 @@
 #include "rtx_matrix_helpers.h"
 #include "../util/util_fastops.h"
 
-#include "rtx/pass/screen_overlay/screen_overlay.h"
-#include <rtx_shaders/screen_overlay.h>
-#include "rtx/pass/screen_tint/screen_tint.h"
-#include <rtx_shaders/screen_tint.h>
-
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
 
 namespace dxvk {
-
-  namespace {
-    class ScreenOverlayShader : public ManagedShader {
-      SHADER_SOURCE(ScreenOverlayShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_overlay)
-
-      PUSH_CONSTANTS(ScreenOverlayArgs)
-
-      BEGIN_PARAMETER()
-        RW_TEXTURE2D(SCREEN_OVERLAY_INPUT_OUTPUT)
-        SAMPLER2D(SCREEN_OVERLAY_TEXTURE)
-      END_PARAMETER()
-    };
-
-    PREWARM_SHADER_PIPELINE(ScreenOverlayShader);
-
-    class ScreenTintShader : public ManagedShader {
-      SHADER_SOURCE(ScreenTintShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_tint)
-
-      PUSH_CONSTANTS(ScreenTintArgs)
-
-      BEGIN_PARAMETER()
-        RW_TEXTURE2D(SCREEN_TINT_INPUT_OUTPUT)
-      END_PARAMETER()
-    };
-
-    PREWARM_SHADER_PIPELINE(ScreenTintShader);
-  }
 
   Metrics Metrics::s_instance;
 
@@ -223,9 +192,6 @@ namespace dxvk {
     reportCpuSimdSupport();
 
     GlobalTime::get().init(RtxOptions::timeDeltaBetweenFrames());
-
-    // Initialize atmosphere system
-    m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
   }
 
   RtxContext::~RtxContext() {
@@ -275,16 +241,26 @@ namespace dxvk {
       DxvkXeSS& xess = m_common->metaXeSS();
       uint32_t displaySize[2] = { upscaleExtent.width, upscaleExtent.height };
       uint32_t renderSize[2];
-      xess.setSetting(displaySize, RtxOptions::xessProfile(), renderSize);
+      xess.setSetting(displaySize, DxvkXeSS::XessOptions::preset(), renderSize);
       downscaleExtent.width = renderSize[0];
       downscaleExtent.height = renderSize[1];
       downscaleExtent.depth = 1;
       
       // XeSS: Apply recommended jitter sequence length if enabled
-      if (RtxOptions::xessUseRecommendedJitterSequenceLength() && xess.isActive()) {
-        uint32_t recommendedJitterLength = xess.getRecommendedJitterSequenceLength();
+      if (DxvkXeSS::XessOptions::useRecommendedJitterSequenceLength() && xess.isActive()) {
+        uint32_t recommendedJitterLength = xess.calcRecommendedJitterSequenceLength();
         uint32_t currentJitterLength = RtxOptions::cameraJitterSequenceLength();
       }
+    } else if (shouldUseFSR()) {
+      DxvkFSR& fsr = m_common->metaFSR();
+      uint32_t displaySize[2] = { upscaleExtent.width, upscaleExtent.height };
+      uint32_t renderSize[2];
+      fsr.setSetting(displaySize, DxvkFSR::FSROptions::preset(), renderSize);
+      downscaleExtent.width = renderSize[0];
+      downscaleExtent.height = renderSize[1];
+      downscaleExtent.depth = 1;
+      Logger::debug(str::format("FSR setDownscaleExtent: display=", displaySize[0], "x", displaySize[1], 
+                                 " render=", renderSize[0], "x", renderSize[1]));
     } else if (shouldUseNIS() || shouldUseTAA()) {
       auto resolutionScale = RtxOptions::resolutionScale();
       downscaleExtent.width = uint32_t(std::roundf(upscaleExtent.width * resolutionScale));
@@ -342,6 +318,8 @@ namespace dxvk {
       return InternalUpscaler::DLSS_RR;
     } else if (shouldUseXeSS() && m_common->metaXeSS().isActive()) {
       return InternalUpscaler::XeSS;
+    } else if (shouldUseFSR() && m_common->metaFSR().isActive()) {
+      return InternalUpscaler::FSR;
     } else if (shouldUseNIS()) {
       return InternalUpscaler::NIS;
     } else if (shouldUseTAA()) {
@@ -465,6 +443,28 @@ namespace dxvk {
       __debugbreak();
     }
 
+#ifdef REMIX_DEVELOPMENT
+    // Crash Hotkey Feature: When armed via the Development tab checkbox, pressing the crash hotkey
+    // triggers a deliberate null pointer dereference crash. This is useful for testing crash handling,
+    // crash dumps, and crash reporting systems.
+    {
+      static bool crashHotkeyStartupLogged = false;
+      if (!crashHotkeyStartupLogged && RtxOptions::enableCrashHotkey()) {
+        const auto crashHotkeyStr = buildKeyBindDescriptorString(RtxOptions::crashHotkey());
+        Logger::warn(str::format("Crash hotkey is ARMED at startup (via config/environment) - press ", crashHotkeyStr, " to trigger crash"));
+        crashHotkeyStartupLogged = true;
+      }
+      
+      if (RtxOptions::enableCrashHotkey() && ImGUI::checkHotkeyState(RtxOptions::crashHotkey(), false)) {
+        const auto crashHotkeyStr = buildKeyBindDescriptorString(RtxOptions::crashHotkey());
+        Logger::err(str::format("Deliberate crash triggered via crash hotkey (", crashHotkeyStr, ")"));
+        // Trigger a null pointer dereference to cause a crash
+        volatile int* nullPtr = nullptr;
+        *nullPtr = 0xDEAD;
+      }
+    }
+#endif
+
     commitGraphicsState<true, false>();
 
     auto common = getCommonObjects();
@@ -525,6 +525,8 @@ namespace dxvk {
 
     ShaderManager::getInstance()->update();
 #endif
+
+    common->getTextureManager().processAllHotReloadRequests();
 
     const float gpuIdleTimeMilliseconds = getGpuIdleTimeSinceLastCall();
 
@@ -668,6 +670,9 @@ namespace dxvk {
         } else if (m_currentUpscaler == InternalUpscaler::XeSS) {
           m_common->metaAutoExposure().createResources(this);
           dispatchXeSS(rtOutput);
+        } else if (m_currentUpscaler == InternalUpscaler::FSR) {
+          m_common->metaAutoExposure().createResources(this);
+          dispatchFSR(rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::NIS) {
           dispatchNIS(rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::TAAU){
@@ -682,6 +687,7 @@ namespace dxvk {
             { 0, 0, 0 },
             rtOutput.m_compositeOutputExtent);
         }
+        dispatchRCAS(rtOutput);
         m_previousUpscaler = m_currentUpscaler;
 
         RtxDustParticles& dust = m_common->metaDustParticles();
@@ -709,14 +715,6 @@ namespace dxvk {
           }
         }
 
-        // Apply solid-color screen tint (from external C API) before the HUD
-        // overlay so the HUD is drawn over the tinted scene (used for effects
-        // like the vanilla underwater overlay).
-        dispatchScreenTint(rtOutput);
-
-        // Composite screen overlay (from external C API) after tone mapping
-        dispatchScreenOverlay(rtOutput);
-
         // Set up output src
         Rc<DxvkImage> srcImage = rtOutput.m_finalOutput.resource(Resources::AccessType::Read).image;
 
@@ -724,6 +722,9 @@ namespace dxvk {
         dispatchDebugView(srcImage, rtOutput, captureScreenImage);
 
         dispatchDLFG();
+
+        // Match FSR-3.1 sequencing: configure/prepare frame generation before final game-target blit.
+        dispatchFSRFrameGen(srcImage);
 
         // Blit to the game target
         {
@@ -748,8 +749,10 @@ namespace dxvk {
 
       m_previousInjectRtxHadScene = true;
     } else {
-      getSceneManager().clear(this, m_previousInjectRtxHadScene);
-      m_previousInjectRtxHadScene = false;
+      if (!isRaytracingEnabled || !isCameraValid) {
+        getSceneManager().clear(this, m_previousInjectRtxHadScene);
+        m_previousInjectRtxHadScene = false;
+      }
 
       getSceneManager().onFrameEndNoRTX();
     }
@@ -758,7 +761,8 @@ namespace dxvk {
     getSceneManager().clearFogState();
 
     // apply changes to RtxOptions after the frame has ended
-    RtxOption<bool>::applyPendingValues(m_device.ptr());
+    RtxOptionManager::applyPendingValuesOptionLayers();
+    RtxOptionManager::applyPendingValues(m_device.ptr(), /* forceOnChange */ false);
 
     // Update stats
     updateMetrics(gpuIdleTimeMilliseconds);
@@ -767,9 +771,6 @@ namespace dxvk {
   }
 
   void RtxContext::endFrame(std::uint64_t cachedReflexFrameId, Rc<DxvkImage> targetImage, bool callInjectRtx) {
-    
-    // Clean up stale delayed sky geometry
-    cleanupStaleDelayedSkyGeometry();
 
     if (callInjectRtx) {
       // Fallback inject (is a no-op if already injected this frame, or no valid RT scene)
@@ -901,19 +902,6 @@ namespace dxvk {
         drawCallState.cameraType = CameraType::Enum::Main;
       }
 
-      // Check for conflicting camera renders before processing
-      if (isConflictingCameraRender(drawCallState)) {
-        if (RtxOptions::skyReprojectLogFallbacks()) {
-          ONCE(Logger::debug("[RTX-Sky] Skipping conflicting camera render"));
-        }
-        return;
-      }
-
-      // Update main camera signature tracking
-      if (drawCallState.cameraType == CameraType::Main) {
-        m_lastMainCameraSignature = calculateCameraSignature(drawCallState.transformData);
-      }
-
       if (tryHandleSky(&params, &drawCallState) == TryHandleSkyResult::SkipSubmit) {
         return;
       }
@@ -958,21 +946,6 @@ namespace dxvk {
 
   void RtxContext::commitExternalGeometryToRT(ExternalDrawState&& state) {
     getSceneManager().submitExternalDraw(this, std::move(state));
-  }
-
-  void RtxContext::setScreenTint(float r, float g, float b, float a) {
-    m_screenTint.r = r;
-    m_screenTint.g = g;
-    m_screenTint.b = b;
-    m_screenTint.a = std::clamp(a, 0.0f, 1.0f);
-  }
-
-  void RtxContext::setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity) {
-    m_pendingScreenOverlay = ScreenOverlayFrame {
-      std::move(stagingBuffer),
-      width, height,
-      format, opacity
-    };
   }
 
   static uint32_t jenkinsHash(uint32_t a) {
@@ -1128,7 +1101,6 @@ namespace dxvk {
     constants.enableTransmissionApproximationInIndirectRays = RtxOptions::enableTransmissionApproximationInIndirectRays();
     constants.enableUnorderedEmissiveParticlesInIndirectRays = RtxOptions::enableUnorderedEmissiveParticlesInIndirectRays();
     constants.enableDecalMaterialBlending = RtxOptions::enableDecalMaterialBlending();
-    constants.enableDecalsOnSky = RtxOptions::enableDecalsOnSky();
     constants.enableBillboardOrientationCorrection = RtxOptions::enableBillboardOrientationCorrection() && RtxOptions::enableSeparateUnorderedApproximations();
     constants.useIntersectionBillboardsOnPrimaryRays = RtxOptions::useIntersectionBillboardsOnPrimaryRays() && constants.enableBillboardOrientationCorrection;
     constants.enableDirectLightBoilingFilter = m_common->metaDemodulate().enableDirectLightBoilingFilter() && RtxOptions::useRTXDI();
@@ -1313,43 +1285,7 @@ namespace dxvk {
     constants.resolveOpaquenessThreshold = RtxOptions::resolveOpaquenessThreshold();
     constants.resolveStochasticAlphaBlendThreshold = m_common->metaComposite().stochasticAlphaBlendOpacityThreshold();
 
-    constants.skyBrightness = RtxOptions::skyBrightness();
-    constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
-    
-    // Detect sky mode change and clear sky buffers when switching to Physical Atmosphere
-    SkyMode currentSkyMode = RtxOptions::skyMode();
-    if (currentSkyMode != m_lastSkyMode) {
-      if (currentSkyMode == SkyMode::PhysicalAtmosphere) {
-        // Clear the rasterized skybox buffers when switching to physical atmosphere
-        auto skyProbe = getResourceManager().getSkyProbe(this, m_skyColorFormat);
-        auto skyMatte = getResourceManager().getSkyMatte(this, m_skyRtColorFormat);
-        
-        VkClearValue clearValue = {};
-        clearValue.color.float32[0] = 0.0f;
-        clearValue.color.float32[1] = 0.0f;
-        clearValue.color.float32[2] = 0.0f;
-        clearValue.color.float32[3] = 0.0f;
-        
-        if (skyProbe.view != nullptr) {
-          DxvkContext::clearRenderTarget(skyProbe.view, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
-        }
-        if (skyMatte.view != nullptr) {
-          DxvkContext::clearRenderTarget(skyMatte.view, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
-        }
-      }
-      m_lastSkyMode = currentSkyMode;
-    }
-    
-    // Update atmosphere parameters
-    if (RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere) {
-      if (!m_atmosphere) {
-        m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
-      }
-      m_atmosphere->initialize(this);
-      m_atmosphere->computeLuts(this);
-      constants.atmosphereArgs = m_atmosphere->getAtmosphereArgs();
-    }
-    
+    constants.skyBrightness = RtxOptions::skyBrightness();RtxOptions::skyBrightness();
     constants.isLastCompositeOutputValid = restirGI.isActive() && restirGI.getLastCompositeOutput().matchesWriteFrameIdx(frameIdx - 1);
     constants.isZUp = RtxOptions::zUp();
     constants.enableCullingSecondaryRays = RtxOptions::enableCullingInSecondaryRays();
@@ -1425,29 +1361,6 @@ namespace dxvk {
     bindResourceView(BINDING_VALUE_NOISE_SAMPLER, valueNoiseLut, nullptr);
     bindResourceSampler(BINDING_VALUE_NOISE_SAMPLER, linearSampler);
     bindResourceBuffer(BINDING_SAMPLER_READBACK_BUFFER, DxvkBufferSlice(samplerFeedbackBuffer, 0, samplerFeedbackBuffer.ptr() ? samplerFeedbackBuffer->info().size : 0));
-
-    // Bind atmosphere LUTs - must always bind since they're declared in common_bindings.slangh
-    // Initialize atmosphere if not already done (needed for dummy resources)
-    if (!m_atmosphere) {
-      m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
-    }
-    // Always call initialize - it's idempotent (has internal m_initialized check)
-    m_atmosphere->initialize(this);
-    
-    auto transmittanceLut = m_atmosphere->getTransmittanceLut();
-    auto multiscatteringLut = m_atmosphere->getMultiscatteringLut();
-    auto skyViewLut = m_atmosphere->getSkyViewLut();
-    
-    // Always bind the LUTs (they're declared in shaders unconditionally)
-    if (transmittanceLut.isValid()) {
-      bindResourceView(BINDING_ATMOSPHERE_TRANSMITTANCE_LUT, transmittanceLut.view, nullptr);
-    }
-    if (multiscatteringLut.isValid()) {
-      bindResourceView(BINDING_ATMOSPHERE_MULTISCATTERING_LUT, multiscatteringLut.view, nullptr);
-    }
-    if (skyViewLut.isValid()) {
-      bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, skyViewLut.view, nullptr);
-    }
   }
 
   void RtxContext::bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView)
@@ -1714,7 +1627,10 @@ namespace dxvk {
   void RtxContext::dispatchNIS(const Resources::RaytracingOutput& rtOutput) {
     ScopedGpuProfileZone(this, "NIS");
     setFramePassStage(RtxFramePassStage::NIS);
-    m_common->metaNIS().dispatch(this, rtOutput);
+    DxvkNIS& nis = m_common->metaNIS();
+    const float sharedSharpness = DxvkFSR::FSROptions::sharpness();
+    nis.m_sharpness = sharedSharpness < 0.0f ? 0.0f : (sharedSharpness > 1.0f ? 1.0f : sharedSharpness);
+    nis.dispatch(this, rtOutput);
   }
 
   void RtxContext::dispatchXeSS(const Resources::RaytracingOutput& rtOutput) {
@@ -1722,6 +1638,49 @@ namespace dxvk {
     setFramePassStage(RtxFramePassStage::XeSS);
     DxvkXeSS& xess = m_common->metaXeSS();
     xess.dispatch(this, m_execBarriers, rtOutput, m_resetHistory);
+  }
+
+  void RtxContext::dispatchFSR(const Resources::RaytracingOutput& rtOutput) {
+    ScopedGpuProfileZone(this, "FSR");
+    setFramePassStage(RtxFramePassStage::FSR);
+    DxvkFSR& fsr = m_common->metaFSR();
+    RtCamera& mainCamera = getSceneManager().getCamera();
+    fsr.dispatch(this, m_execBarriers, rtOutput, mainCamera, m_resetHistory, GlobalTime::get().deltaTimeMs());
+  }
+
+  void RtxContext::dispatchRCAS(const Resources::RaytracingOutput& rtOutput) {
+    const bool shouldApplyRcas =
+      m_currentUpscaler == InternalUpscaler::DLSS ||
+      m_currentUpscaler == InternalUpscaler::DLSS_RR ||
+      m_currentUpscaler == InternalUpscaler::XeSS ||
+      m_currentUpscaler == InternalUpscaler::TAAU;
+
+    if (!shouldApplyRcas) {
+      return;
+    }
+
+    const float sharpness = DxvkFSR::FSROptions::sharpness();
+    if (sharpness <= 0.0f) {
+      return;
+    }
+
+    ScopedGpuProfileZone(this, "RCAS");
+
+    m_common->metaRCAS().dispatch(
+      this,
+      rtOutput.m_finalOutput.resource(Resources::AccessType::Read),
+      rtOutput.m_postFxIntermediateTexture,
+      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
+      sharpness);
+
+    copyImage(
+      rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
+      { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+      { 0, 0, 0 },
+      rtOutput.m_postFxIntermediateTexture.image,
+      { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+      { 0, 0, 0 },
+      rtOutput.m_finalOutputExtent);
   }
 
   void RtxContext::dispatchTemporalAA(const Resources::RaytracingOutput& rtOutput) {
@@ -1757,8 +1716,7 @@ namespace dxvk {
     bool isNRDPreCompositionDenoiserEnabled = RtxOptions::useDenoiser() && !RtxOptions::useDenoiserReferenceMode();
 
     CompositePass::Settings settings;
-    settings.fog = getSceneManager().getEffectiveFogState();
-    settings.useExternalFogColor = getSceneManager().hasExternalFogState();
+    settings.fog = getSceneManager().getFogState();
     settings.isNRDPreCompositionDenoiserEnabled = isNRDPreCompositionDenoiserEnabled;
     settings.useUpscaler = shouldUseUpscaler();
     settings.useDLSS = shouldUseDLSS();
@@ -1785,54 +1743,25 @@ namespace dxvk {
       getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
       rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion);
 
-    // Check if HDR is enabled
-    const bool hdrEnabled = isHDREnabled();
-    
     // We don't reset history for tonemapper on m_resetHistory for easier comparison when toggling raytracing modes.
     // The tone curve shouldn't be too different between raytracing modes, 
     // but the reset of denoised buffers causes wide tone curve differences
     // until it converges and thus making comparison of raytracing mode outputs more difficult
     setFramePassStage(RtxFramePassStage::ToneMapping);
-
-    if (hdrEnabled) {
-      // HDR Mode: Use native HDR processing (bypass SDR tone mapping entirely)
+    if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
       DxvkToneMapping& toneMapper = m_common->metaToneMapping();
-      
-      // Apply HDR processing directly to the composite output
-      toneMapper.dispatchHDRProcessing(this,
+      toneMapper.dispatch(this, 
         getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
         autoExposure.getExposureTexture().view,
-        rtOutput.m_finalOutput.resource(Resources::AccessType::Read),
-        rtOutput.m_finalOutput.resource(Resources::AccessType::Write),
-        GlobalTime::get().deltaTimeMs(),
-        autoExposure.enabled());
-    } else {
-      // SDR Mode: Apply the selected tonemapping mode
-      if (RtxOptions::tonemappingMode() == TonemappingMode::Global ||
-          RtxOptions::tonemappingMode() == TonemappingMode::Direct) {
-        DxvkToneMapping& toneMapper = m_common->metaToneMapping();
-        
-        toneMapper.dispatch(this, 
-          getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
-          autoExposure.getExposureTexture().view,
-          rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
-      } else {
-        // Local tonemapping mode
-        DxvkLocalToneMapping& localTonemapper = m_common->metaLocalToneMapping();
-        if (localTonemapper.isActive()) {
-          localTonemapper.dispatch(this,
-            getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
-            autoExposure.getExposureTexture().view,
-            rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
-        }
-      }
+        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
     }
-  }
-
-  bool RtxContext::isHDREnabled() const {
-    // HDR is considered enabled when the tone mapping module has HDR output toggled on
-    // Additional platform/display capability checks can be added here if needed
-    return m_common->metaToneMapping().enableHDR();
+    DxvkLocalToneMapping& localTonemapper = m_common->metaLocalToneMapping();
+    if (localTonemapper.isActive()) {
+      localTonemapper.dispatch(this,
+        getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
+        autoExposure.getExposureTexture().view,
+        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+    }
   }
 
   void RtxContext::dispatchBloom(const Resources::RaytracingOutput& rtOutput) {
@@ -1866,119 +1795,6 @@ namespace dxvk {
       RtxOptions::rngSeedWithFrameIndex() ? m_device->getCurrentFrameId() : 0,
       rtOutput,
       mainCamera.isCameraCut());
-  }
-
-  void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
-    if (!m_pendingScreenOverlay.has_value()) {
-      return;
-    }
-
-    ScopedGpuProfileZone(this, "Screen Overlay");
-    auto& overlay = *m_pendingScreenOverlay;
-
-    // Recreate overlay image if dimensions or format changed
-    if (m_screenOverlayWidth != overlay.width || m_screenOverlayHeight != overlay.height
-        || m_screenOverlayFormat != overlay.format || !m_screenOverlayImage.ptr()) {
-      DxvkImageCreateInfo imageInfo = {};
-      imageInfo.type = VK_IMAGE_TYPE_2D;
-      imageInfo.format = overlay.format;
-      imageInfo.flags = 0;
-      imageInfo.sampleCount = VK_SAMPLE_COUNT_1_BIT;
-      imageInfo.extent = { overlay.width, overlay.height, 1 };
-      imageInfo.numLayers = 1;
-      imageInfo.mipLevels = 1;
-      imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-      imageInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-      imageInfo.access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-      imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-      imageInfo.layout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-      m_screenOverlayImage = m_device->createImage(
-        imageInfo,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        DxvkMemoryStats::Category::RTXRenderTarget,
-        "Screen overlay image");
-
-      DxvkImageViewCreateInfo viewInfo = {};
-      viewInfo.type = VK_IMAGE_VIEW_TYPE_2D;
-      viewInfo.format = overlay.format;
-      viewInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-      viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-      viewInfo.minLevel = 0;
-      viewInfo.numLevels = 1;
-      viewInfo.minLayer = 0;
-      viewInfo.numLayers = 1;
-
-      m_screenOverlayView = m_device->createImageView(m_screenOverlayImage, viewInfo);
-
-      m_screenOverlayWidth = overlay.width;
-      m_screenOverlayHeight = overlay.height;
-      m_screenOverlayFormat = overlay.format;
-    }
-
-    // Copy staging buffer to overlay image
-    {
-      VkImageSubresourceLayers subresource = {};
-      subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-      subresource.mipLevel = 0;
-      subresource.baseArrayLayer = 0;
-      subresource.layerCount = 1;
-
-      VkOffset3D offset = { 0, 0, 0 };
-      VkExtent3D extent = { overlay.width, overlay.height, 1 };
-
-      copyBufferToImage(m_screenOverlayImage, subresource, offset, extent,
-                        overlay.stagingBuffer, 0, 0, 0);
-    }
-
-    // Dispatch overlay blend compute shader
-    this->setPushConstantBank(DxvkPushConstantBank::RTX);
-
-    auto& finalOutput = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
-    const VkExtent3D outputSize = finalOutput.image->info().extent;
-    const VkExtent3D workgroups = util::computeBlockCount(outputSize, VkExtent3D { SCREEN_OVERLAY_TILE_SIZE, SCREEN_OVERLAY_TILE_SIZE, 1 });
-
-    ScreenOverlayArgs pushArgs = {};
-    pushArgs.imageSize = { outputSize.width, outputSize.height };
-    pushArgs.opacity = overlay.opacity;
-    this->pushConstants(0, sizeof(pushArgs), &pushArgs);
-
-    this->bindResourceView(SCREEN_OVERLAY_INPUT_OUTPUT, finalOutput.view, nullptr);
-    this->bindResourceView(SCREEN_OVERLAY_TEXTURE, m_screenOverlayView, nullptr);
-    this->bindResourceSampler(SCREEN_OVERLAY_TEXTURE,
-      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
-
-    this->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, ScreenOverlayShader::getShader());
-    this->dispatch(workgroups.width, workgroups.height, workgroups.depth);
-
-    // Clear pending overlay after dispatch
-    m_pendingScreenOverlay.reset();
-  }
-
-  void RtxContext::dispatchScreenTint(Resources::RaytracingOutput& rtOutput) {
-    if (m_screenTint.a <= 0.0f) {
-      return;
-    }
-
-    ScopedGpuProfileZone(this, "Screen Tint");
-
-    this->setPushConstantBank(DxvkPushConstantBank::RTX);
-
-    auto& finalOutput = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
-    const VkExtent3D outputSize = finalOutput.image->info().extent;
-    const VkExtent3D workgroups = util::computeBlockCount(outputSize, VkExtent3D { SCREEN_TINT_TILE_SIZE, SCREEN_TINT_TILE_SIZE, 1 });
-
-    ScreenTintArgs pushArgs = {};
-    pushArgs.imageSize = { outputSize.width, outputSize.height };
-    pushArgs.colorR = m_screenTint.r;
-    pushArgs.colorG = m_screenTint.g;
-    pushArgs.colorB = m_screenTint.b;
-    pushArgs.alpha = m_screenTint.a;
-    this->pushConstants(0, sizeof(pushArgs), &pushArgs);
-
-    this->bindResourceView(SCREEN_TINT_INPUT_OUTPUT, finalOutput.view, nullptr);
-    this->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, ScreenTintShader::getShader());
-    this->dispatch(workgroups.width, workgroups.height, workgroups.depth);
   }
 
   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {
@@ -2318,6 +2134,53 @@ namespace dxvk {
     m_device->setupFrameInterpolation(dlfgInfo);
   }
 
+  void RtxContext::dispatchFSRFrameGen(const Rc<DxvkImage>& hudLessBackBuffer) {
+    if (RtxOptions::frameGenerationType() != FrameGenerationType::FSR) {
+      return;
+    }
+
+    DxvkFSRFrameGen& fsrFrameGen = m_common->metaFSRFrameGen();
+    
+    if (!fsrFrameGen.enable()) {
+      return;
+    }
+
+    // Force vsync off if FSR Frame Gen is enabled, as we don't properly support FG + vsync
+    if (RtxOptions::enableVsyncState != EnableVsync::Off) {
+      RtxOptions::enableVsync.setDeferred(EnableVsync::Off);
+      RtxOptions::enableVsyncState = EnableVsync::Off;
+    }
+
+    Resources::RaytracingOutput& rtOutput = getResourceManager().getRaytracingOutput();
+    RtCamera& camera = getSceneManager().getCamera();
+    const bool viewModelActive = getSceneManager().getCameraManager().isCameraValid(CameraType::ViewModel);
+
+    Rc<DxvkImageView> fgMotionVectors = rtOutput.m_primaryScreenSpaceMotionVector.view;
+    Rc<DxvkImageView> fgDepth = rtOutput.m_primaryDepth.view;
+
+    // Note: Display size is set by the presenter during swapchain creation/recreation
+    // Don't set it here based on composite output size, as these can differ during upscaling
+    // (e.g., render at 720p, display at 1080p)
+
+    // Prepare frame generation with motion vectors and depth
+    // Note: prepareFrameGeneration() internally calls configureFrameGeneration() first,
+    // per AMD docs which require configure before prepare dispatch.
+    fsrFrameGen.setFrameGenerationPresentColorSource(hudLessBackBuffer);
+
+    // Interpolation input is explicitly provided via setFrameGenerationPresentColorSource()
+    // and consumed through the frame generation callback override.
+    fsrFrameGen.prepareFrameGeneration(
+      this,
+      m_execBarriers,
+      camera,
+      fgMotionVectors,
+      fgDepth,
+      viewModelActive,
+      m_resetHistory,
+      m_device->getCurrentFrameId(),
+      GlobalTime::get().deltaTimeMs());
+  }
+
   void RtxContext::flushCommandList() {
     ScopedCpuProfileZone();
 
@@ -2403,6 +2266,10 @@ namespace dxvk {
     return RtxOptions::upscalerType() == UpscalerType::XeSS;
   }
 
+  bool RtxContext::shouldUseFSR() const {
+    return RtxOptions::upscalerType() == UpscalerType::FSR;
+  }
+
   D3D9RtxVertexCaptureData& RtxContext::allocAndMapVertexCaptureConstantBuffer() {
     DxvkBufferSliceHandle slice = m_rtState.vertexCaptureCB->allocSlice();
     invalidateBuffer(m_rtState.vertexCaptureCB, slice);
@@ -2426,7 +2293,8 @@ namespace dxvk {
   void RtxContext::rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState) {
     ScopedGpuProfileZone(this, "rasterizeToSkyMatte");
 
-    const uint32_t* renderResolution = getSceneManager().getCamera().m_renderResolution;
+    const RtCamera& camera = getSceneManager().getCamera();
+    const uint32_t* renderResolution = camera.m_renderResolution;
 
     union UnifiedCB {
       D3D9RtxVertexCaptureData programmablePipeline;
@@ -2482,12 +2350,11 @@ namespace dxvk {
         // so apply jitter directly on gl_Position
         float ratioX = Sign(drawCallState.getTransformData().viewToProjection[2][3]);
         float ratioY = -Sign(drawCallState.getTransformData().viewToProjection[2][3]);
-        Vector2 clipSpaceJitter = RtCamera::calcClipSpaceJitter(RtCamera::calcPixelJitter(m_device->getCurrentFrameId()),
-                                                                renderResolution[0], renderResolution[1],
-                                                                ratioX, ratioY);
+        Vector2 clipSpaceJitter = camera.calcClipSpaceJitter(camera.calcPixelJitter(m_device->getCurrentFrameId()), ratioX, ratioY);
         modified.jitterX = clipSpaceJitter.x;
         modified.jitterY = clipSpaceJitter.y;
       }
+
       // Ensure that memcpy can be used for fewer memory interactions
       static_assert(std::is_trivially_copyable_v<D3D9RtxVertexCaptureData>);
       allocAndMapVertexCaptureConstantBuffer() = modified;
@@ -2495,9 +2362,8 @@ namespace dxvk {
       D3D9FixedFunctionVS modified = prevCB.fixedFunction;
       {
         // Jittered projection for DLSS
-        RtCamera::applyJitterTo(modified.Projection,
-                                m_device->getCurrentFrameId(), 
-                                renderResolution[0], renderResolution[1]);
+        camera.applyJitterTo(modified.Projection,
+                             m_device->getCurrentFrameId());
       }
       // Ensure that memcpy can be used for fewer memory interactions
       static_assert(std::is_trivially_copyable_v<D3D9FixedFunctionVS>);
@@ -2774,11 +2640,6 @@ namespace dxvk {
   }
 
   void RtxContext::rasterizeSky(const DrawParameters& params, const DrawCallState& drawCallState) {
-    // Skip rasterization when using physical atmosphere mode
-    if (RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere) {
-      return;
-    }
-    
     // Grab and apply replacement texture if any
     // NOTE: only the original color texture will be replaced with albedo-opacity texture
     MaterialData* replacementMaterial = getSceneManager().getAssetReplacer()->getReplacementMaterial(drawCallState.getMaterialData().getHash());
@@ -2842,138 +2703,6 @@ namespace dxvk {
     if (curColorView != nullptr) {
       bindResourceView(drawCallState.materialData.colorTextureSlot[0], curColorView, nullptr);
     }
-  }
-
-  // Sky camera helper methods
-  bool RtxContext::isSkyCameraStale() const {
-    if (RtxOptions::skyReprojectCameraTimeoutFrames() == 0) {
-      return false; // Timeout disabled
-    }
-    
-    const uint32_t currentFrame = m_device->getCurrentFrameId();
-    const uint32_t framesSinceLastSkyCamera = currentFrame - m_lastSkyCameraFrame;
-    
-    return framesSinceLastSkyCamera > RtxOptions::skyReprojectCameraTimeoutFrames();
-  }
-
-  void RtxContext::updateSkyCameraState() {
-    m_lastSkyCameraFrame = m_device->getCurrentFrameId();
-    
-    // Update sky camera signature if we have delayed sky geometry
-    if (!m_delayedRayTracedSky.empty()) {
-      m_lastSkyCameraSignature = calculateCameraSignature(m_delayedRayTracedSky[0].transformData);
-    }
-  }
-
-  void RtxContext::cleanupStaleDelayedSkyGeometry() {
-    if (!m_delayedRayTracedSky.empty() && isSkyCameraStale()) {
-      if (RtxOptions::skyReprojectLogFallbacks()) {
-        Logger::info("[RTX-Sky] Clearing delayed sky geometry due to stale sky camera");
-      }
-      m_delayedRayTracedSky.clear();
-      m_skyGeometryQueuedFrame = 0;
-      
-      // Reset camera signatures when clearing stale geometry
-      if (RtxOptions::skyReprojectPreventCameraConflicts()) {
-        resetCameraSignatures();
-      }
-    }
-  }
-
-  bool RtxContext::isSkyCameraDataValid(const DrawCallState& skyGeometry) const {
-    // Get a non-const reference to this for accessing scene manager
-    RtxContext* nonConstThis = const_cast<RtxContext*>(this);
-    const auto& cameraManager = nonConstThis->getSceneManager().getCameraManager();
-    
-    // Check if we have a valid sky camera
-    if (!cameraManager.isCameraValid(CameraType::Sky)) {
-      return false;
-    }
-    
-    const RtCamera& skyCam = cameraManager.getCamera(CameraType::Sky);
-    
-    // Check if sky camera was updated recently (within last few frames)
-    const uint32_t currentFrame = m_device->getCurrentFrameId();
-    const uint32_t skyFrameAge = currentFrame - skyCam.getLastUpdateFrame();
-    
-    // Allow some tolerance for frame timing differences
-    if (skyFrameAge > 3) {
-      return false;
-    }
-    
-    // Additional validation: check if transform matrices are reasonable
-    const auto& skyTransform = skyGeometry.transformData;
-    
-    // Check for degenerate matrices (determinant near zero)
-    const float det = determinant(skyTransform.worldToView);
-    if (std::abs(det) < 1e-6f) {
-      return false;
-    }
-    
-    return true;
-  }
-
-  bool RtxContext::shouldFallbackToRasterization() const {
-    if (!RtxOptions::skyReprojectFallbackToRaster() || m_delayedRayTracedSky.empty()) {
-      return false;
-    }
-    
-    // Check if any of the delayed sky geometry has invalid camera data
-    for (const auto& skyGeometry : m_delayedRayTracedSky) {
-      if (!isSkyCameraDataValid(skyGeometry)) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  XXH64_hash_t RtxContext::calculateCameraSignature(const DrawCallTransforms& transforms) const {
-    // Create a signature based on view and projection matrices
-    // We use a combination of matrices to uniquely identify camera configurations
-    XXH64_hash_t signature = 0;
-    
-    // Hash the world-to-view matrix (camera position and orientation)
-    signature = XXH64(&transforms.worldToView, sizeof(transforms.worldToView), signature);
-    
-    // Hash the view-to-projection matrix (camera intrinsics)
-    signature = XXH64(&transforms.viewToProjection, sizeof(transforms.viewToProjection), signature);
-    
-    return signature;
-  }
-
-  bool RtxContext::isConflictingCameraRender(const DrawCallState& drawCallState) const {
-    if (!RtxOptions::skyReprojectPreventCameraConflicts()) {
-      return false;
-    }
-    
-    const XXH64_hash_t currentSignature = calculateCameraSignature(drawCallState.transformData);
-    
-    // Check if this render call conflicts with known camera signatures
-    if (drawCallState.cameraType == CameraType::Sky) {
-      // If we're rendering sky geometry but the signature matches a known main camera
-      if (m_lastMainCameraSignature != 0 && currentSignature == m_lastMainCameraSignature) {
-        if (RtxOptions::skyReprojectLogFallbacks()) {
-          ONCE(Logger::info("[RTX-Sky] Detected sky geometry with main camera signature - preventing conflict"));
-        }
-        return true;
-      }
-    } else if (drawCallState.cameraType == CameraType::Main) {
-      // If we're rendering main geometry but the signature matches a known sky camera
-      if (m_lastSkyCameraSignature != 0 && currentSignature == m_lastSkyCameraSignature) {
-        if (RtxOptions::skyReprojectLogFallbacks()) {
-          ONCE(Logger::info("[RTX-Sky] Detected main geometry with sky camera signature - preventing conflict"));
-        }
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  void RtxContext::resetCameraSignatures() {
-    m_lastSkyCameraSignature = 0;
-    m_lastMainCameraSignature = 0;
   }
 
   void RtxContext::clearRenderTarget(const Rc<DxvkImageView>& imageView,
