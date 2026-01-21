@@ -310,6 +310,14 @@ struct Surface
     set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 1) : packedFlagUnset(data0b.z, 1 << 1); }
   }
 
+  // Note: Surfaces marked as occluders will show sky instead of geometry when hit by rays.
+  // This is useful for hiding unwanted geometry while still showing the sky behind it.
+  property bool isOccluder
+  {
+    get { return packedFlagGet(data0b.z, 1 << 2); }
+    set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 2) : packedFlagUnset(data0b.z, 1 << 2); }
+  }
+
   property uint16_t hashPacked
   {
     get { return data0b.w; }

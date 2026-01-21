@@ -521,6 +521,7 @@ enum class InstanceCategories : uint32_t {
   ParticleEmitter,
   SmoothNormals,
   LegacyEmissive,
+  Occluder,
 
   Count,
 };
