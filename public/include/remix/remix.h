@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2023-2025, NVIDIA CORPORATION. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -190,7 +190,17 @@ namespace remix {
     Result< void >                    DrawLightInstance(remixapi_LightHandle handle);
     // Deferred update of an analytical light definition. Applied on render thread.
     Result< void >                    UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info);
+    // Optional frame-boundary callbacks (present starting in v0.5.1+)
+    Result< void >                    RegisterCallbacks(PFN_remixapi_BridgeCallback beginSceneCallback,
+                                                        PFN_remixapi_BridgeCallback endSceneCallback,
+                                                        PFN_remixapi_BridgeCallback presentCallback);
+    // Internal helper to auto-instance persistent external API lights once per frame
+    Result< void >                    AutoInstancePersistentLights();
     Result< void >                    SetConfigVariable(const char* key, const char* value);
+    Result< void >                    AddTextureHash(const char* textureCategory, const char* textureHash);
+    Result< void >                    RemoveTextureHash(const char* textureCategory, const char* textureHash);
+    Result< remixapi_TextureHandle >  CreateTexture(const remixapi_TextureInfo& info);
+    Result< void >                    DestroyTexture(remixapi_TextureHandle handle);
 
     // DXVK interoperability
     Result< IDirect3D9Ex* >                  dxvk_CreateD3D9(bool editorModeEnabled = false);
@@ -227,7 +237,11 @@ namespace remix {
         return status;
       }
 
+<<<<<<< HEAD
       static_assert(sizeof(remixapi_Interface) == 240,
+=======
+      static_assert(sizeof(remixapi_Interface) == 232,
+>>>>>>> c15c6b5d (RemixApi: add AddTextureHash and RemoveTextureHash methods)
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -270,11 +284,80 @@ namespace remix {
     return m_CInterface.SetConfigVariable(key, value);
   }
 
+  inline Result< void > Interface::AddTextureHash(const char* textureCategory, const char* textureHash) {
+    if (!m_CInterface.AddTextureHash) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.AddTextureHash(textureCategory, textureHash);
+  }
+
+  inline Result< void > Interface::RemoveTextureHash(const char* textureCategory, const char* textureHash) {
+    if (!m_CInterface.RemoveTextureHash) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.RemoveTextureHash(textureCategory, textureHash);
+  }
+
+  inline Result< remixapi_TextureHandle > Interface::CreateTexture(const remixapi_TextureInfo& info) {
+    if (!m_CInterface.CreateTexture) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    remixapi_TextureHandle handle = nullptr;
+    remixapi_ErrorCode status = m_CInterface.CreateTexture(&info, &handle);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return handle;
+  }
+
+  inline Result< void > Interface::DestroyTexture(remixapi_TextureHandle handle) {
+    if (!m_CInterface.DestroyTexture) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.DestroyTexture(handle);
+  }
+
+  inline Result< remixapi_TextureHandle > Interface::CreateTexture(const remixapi_TextureInfo& info) {
+    if (!m_CInterface.CreateTexture) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    remixapi_TextureHandle handle = nullptr;
+    remixapi_ErrorCode status = m_CInterface.CreateTexture(&info, &handle);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return handle;
+  }
+
+  inline Result< void > Interface::DestroyTexture(remixapi_TextureHandle handle) {
+    if (!m_CInterface.DestroyTexture) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.DestroyTexture(handle);
+  }
+
   inline Result< void > Interface::Present(const remixapi_PresentInfo* info) {
     if (!m_CInterface.Present) {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.Present(info);
+  }
+
+  inline Result<UIState> Interface::GetUIState() {
+    if (!m_CInterface.GetUIState) {
+        return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    
+    remixapi_UIState state = m_CInterface.GetUIState();
+    return static_cast<UIState>(state);
+  }
+
+  inline Result<void> Interface::SetUIState(UIState state) {
+      if (!m_CInterface.SetUIState) {
+          return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+      }
+      
+      return m_CInterface.SetUIState(static_cast<remixapi_UIState>(state));
   }
 
 
@@ -1022,6 +1105,22 @@ namespace remix {
   inline Result< void > Interface::UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info) {
     if (m_CInterface.UpdateLightDefinition) {
       return m_CInterface.UpdateLightDefinition(handle, &info);
+    }
+    return REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE;
+  }
+
+  inline Result< void > Interface::RegisterCallbacks(PFN_remixapi_BridgeCallback beginSceneCallback,
+                                                     PFN_remixapi_BridgeCallback endSceneCallback,
+                                                     PFN_remixapi_BridgeCallback presentCallback) {
+    if (m_CInterface.RegisterCallbacks) {
+      return m_CInterface.RegisterCallbacks(beginSceneCallback, endSceneCallback, presentCallback);
+    }
+    return REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE;
+  }
+
+  inline Result< void > Interface::AutoInstancePersistentLights() {
+    if (m_CInterface.AutoInstancePersistentLights) {
+      return m_CInterface.AutoInstancePersistentLights();
     }
     return REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE;
   }
