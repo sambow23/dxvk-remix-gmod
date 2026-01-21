@@ -55,6 +55,8 @@ static const uint8_t surfaceMaterialTypeMask = uint8_t(0x3u);
 // approximation adds a sky-ambient term for such particles on top of the froxel radiance sample,
 // supplying the skylight that the froxel grid does not contain (its integrator has no sky term).
 #define OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(8))
+#define OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_ALPHA_MASK (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(9))
+#define OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_ALPHA_INVERT (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(10))
 
 
 #define OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_HEIGHT_TEXTURE (1 << 0)

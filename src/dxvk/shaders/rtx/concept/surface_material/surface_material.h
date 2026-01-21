@@ -93,16 +93,20 @@ struct OpaqueSurfaceMaterial
   float16_t anisotropy;
   uint16_t tangentTextureIndex;
 
-  // 24-25
+  // 24-26
+  f16vec3 emissiveColorTint;
+  uint16_t _padding_tint;  // Alignment padding
+
+  // 28-29
   uint subsurfaceMaterialIndex;
 
-  // 26
+  // 30
   uint16_t samplerFeedbackStamp;
 
   // Todo: Fixed function blend state info here in the future (Actually this should go on a Legacy Material, or some sort of non-PBR Legacy Surface)
 
   // padding (to keep size matching with MemoryPolymorphicSurfaceMaterial)
-  uint16_t data[5];
+  uint16_t data[1];
 
   bool hasValidDisplacement() {
     return flags & OPAQUE_SURFACE_MATERIAL_FLAG_HAS_DISPLACEMENT;

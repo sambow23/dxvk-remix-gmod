@@ -585,8 +585,8 @@ struct RtOpaqueSurfaceMaterial {
     float anisotropy, float emissiveIntensity,
     const Vector4& albedoOpacityConstant,
     float roughnessConstant, float metallicConstant,
-    const Vector3& emissiveColorConstant, bool enableEmission,
-    bool ignoreAlphaChannel, bool enableThinFilm, bool alphaIsThinFilmThickness, float thinFilmThicknessConstant,
+    const Vector3& emissiveColorConstant, bool enableEmission, bool emissiveAlphaMask, bool emissiveAlphaInvert,
+    const Vector3& emissiveColorTint, bool ignoreAlphaChannel, bool enableThinFilm, bool alphaIsThinFilmThickness, float thinFilmThicknessConstant,
     uint32_t samplerIndex, float displaceIn, float displaceOut,
     uint32_t subsurfaceMaterialIndex, bool isRaytracedRenderTarget, bool isHairCard,
     uint16_t samplerFeedbackStamp,
@@ -600,14 +600,15 @@ struct RtOpaqueSurfaceMaterial {
     m_anisotropy{ anisotropy }, m_emissiveIntensity{ emissiveIntensity },
     m_albedoOpacityConstant{ albedoOpacityConstant },
     m_roughnessConstant{ roughnessConstant }, m_metallicConstant{ metallicConstant },
-    m_emissiveColorConstant{ emissiveColorConstant }, m_enableEmission{ enableEmission },
-    m_ignoreAlphaChannel { ignoreAlphaChannel }, m_enableThinFilm { enableThinFilm }, m_alphaIsThinFilmThickness { alphaIsThinFilmThickness },
+    m_emissiveColorConstant{ emissiveColorConstant }, m_enableEmission{ enableEmission }, m_emissiveAlphaMask{ emissiveAlphaMask }, m_emissiveAlphaInvert{ emissiveAlphaInvert },
+    m_emissiveColorTint{ emissiveColorTint }, m_ignoreAlphaChannel { ignoreAlphaChannel }, m_enableThinFilm { enableThinFilm }, m_alphaIsThinFilmThickness { alphaIsThinFilmThickness },
     m_thinFilmThicknessConstant { thinFilmThicknessConstant }, m_samplerIndex{ samplerIndex }, m_displaceIn{ displaceIn },
     m_displaceOut{ displaceOut }, m_subsurfaceMaterialIndex(subsurfaceMaterialIndex), m_isRaytracedRenderTarget(isRaytracedRenderTarget),
     m_isHairCard(isHairCard),
     m_albedoTextureIsSrgb{ albedoTextureIsSrgb }, m_emissiveTextureIsSrgb{ emissiveTextureIsSrgb },
     m_skyLitParticle{ skyLitParticle }, m_samplerFeedbackStamp{ samplerFeedbackStamp }
   {
+
     updateCachedData();
     updateCachedHash();
   }
@@ -656,6 +657,14 @@ struct RtOpaqueSurfaceMaterial {
     // term in the resolver's opacity lighting approximation - see shared_constants.h.
     if (m_skyLitParticle) {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE;
+    }
+
+    if (m_emissiveAlphaMask) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_ALPHA_MASK;
+    }
+
+    if (m_emissiveAlphaInvert) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_ALPHA_INVERT;
     }
 
     float displaceIn = m_displaceIn * getDisplacementInFactor();
@@ -711,13 +720,19 @@ struct RtOpaqueSurfaceMaterial {
     writeGPUHelper(data, offset, glm::packHalf1x16(m_anisotropy));
     writeGPUHelperExplicit<2>(data, offset, m_tangentTextureIndex);
 
-    // data[24-25]
+    // data[24 - 26]
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorTint.x));
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorTint.y));
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorTint.z));
+    writeGPUPadding<2>(data, offset);  // Padding for tint alignment
+
+    // data[28 - 29]
     writeGPUHelper(data, offset, m_subsurfaceMaterialIndex);
 
-    // data[26]
+    // data[30]
     writeGPUHelperExplicit<2>(data, offset, m_samplerFeedbackStamp);
 
-    writeGPUPadding<10>(data, offset);
+    writeGPUPadding<2>(data, offset);
     assert(offset - oldOffset == kSurfaceMaterialGPUSize);
   }
 
@@ -833,7 +848,7 @@ struct RtOpaqueSurfaceMaterial {
 private:
   void updateCachedHash() {
     static_assert(
-      sizeof(*this) == 128,
+      sizeof(*this) == 144,
       "add new member for hashing if needed: add a MEMBER into the struct + add a VALUE into the list-init"
     );
     struct HashStruct {
@@ -851,6 +866,9 @@ private:
       float metallicConstant;
       Vector3 emissiveColorConstant;
       uint32_t enableEmission;            // NOTE: uint32_t to avoid padding
+      uint32_t emissiveAlphaMask;          // NOTE: uint32_t to avoid padding
+      uint32_t emissiveAlphaInvert;        // NOTE: uint32_t to avoid padding
+      Vector3 emissiveColorTint;
       uint32_t ignoreAlphaChannel;        // NOTE: uint32_t to avoid padding
       uint32_t enableThinFilm;            // NOTE: uint32_t to avoid padding
       uint32_t alphaIsThinFilmThickness;  // NOTE: uint32_t to avoid padding
@@ -884,6 +902,9 @@ private:
       m_metallicConstant,
       m_emissiveColorConstant,
       m_enableEmission,
+      m_emissiveAlphaMask,
+      m_emissiveAlphaInvert,
+      m_emissiveColorTint,
       m_ignoreAlphaChannel,
       m_enableThinFilm,
       m_alphaIsThinFilmThickness,
@@ -933,6 +954,9 @@ private:
   Vector3 m_emissiveColorConstant;
 
   bool m_enableEmission;
+  bool m_emissiveAlphaMask;
+  bool m_emissiveAlphaInvert;
+  Vector3 m_emissiveColorTint;
 
   bool m_ignoreAlphaChannel;
   bool m_enableThinFilm;
