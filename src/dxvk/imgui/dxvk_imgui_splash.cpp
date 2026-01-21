@@ -85,7 +85,13 @@ namespace dxvk {
 
       if (ImGui::Begin("Splash Message", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove)) {
         const auto keyBindDescriptor = buildKeyBindDescriptorString(RtxOptions::remixMenuKeyBinds());
-        std::string message = str::format("Welcome to RTX Remix. Use ", keyBindDescriptor, " to access the RTX Remix Menu and change settings. Closing in ", clampedSecondsRemaining);
+        std::string message = str::format("Welcome to Garry's Mod RTX.  At any point during gameplay press : ", keyBindDescriptor, " to access the Remix Menu.\n"
+                                        "\n"
+                                        "This is a work in progress, report any bugs you find to https://github.com/Xenthio/garrys-mod-rtx-remixed \n"
+                                        "Please read the 'Known Issues' section on the GitHub page before reporting one. \n"
+                                        "If you need support, please find us on the RTX Remix Showcase Discord server \n"
+                                        "\n"
+                                        "Closing in ", clampedSecondsRemaining);
         ImGui::Text(message.c_str());
       }
       ImGui::End();
