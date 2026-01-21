@@ -145,6 +145,12 @@ namespace remix {
     }
   }
 
+  enum class UIState {
+      None = REMIXAPI_UI_STATE_NONE,
+      Basic = REMIXAPI_UI_STATE_BASIC,
+      Advanced = REMIXAPI_UI_STATE_ADVANCED
+  };
+
   template< typename T >
   using Result = detail::Result< T >;
 
@@ -218,6 +224,8 @@ namespace remix {
     Result< void >                           pick_HighlightObjects(const uint32_t* objectPickingValues_values,
                                                                    uint32_t objectPickingValues_count,
                                                                    uint8_t colorR, uint8_t colorG, uint8_t colorB);
+    Result<UIState> GetUIState();
+    Result<void> SetUIState(UIState state);
   };
 
   namespace lib {
@@ -237,11 +245,7 @@ namespace remix {
         return status;
       }
 
-<<<<<<< HEAD
-      static_assert(sizeof(remixapi_Interface) == 240,
-=======
-      static_assert(sizeof(remixapi_Interface) == 232,
->>>>>>> c15c6b5d (RemixApi: add AddTextureHash and RemoveTextureHash methods)
+      static_assert(sizeof(remixapi_Interface) == 248,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};

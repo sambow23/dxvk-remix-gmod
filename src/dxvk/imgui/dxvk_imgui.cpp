@@ -162,6 +162,7 @@ namespace dxvk {
   fast_unordered_cache<FogState> g_imguiFogMap;
   XXH64_hash_t g_usedFogStateHash;
   std::mutex g_imguiFogMapMutex; // protects g_imguiFogMap
+  ImGUI* g_imgui = nullptr;
 
   struct RtxTextureOption {
     const char* uniqueId;
@@ -531,6 +532,8 @@ namespace dxvk {
   , m_about  (new ImGuiAbout)
   , m_splash  (new ImGuiSplash)
   , m_graphGUI  (new RtxGraphGUI) {
+    g_imgui = this;
+
     // Set up constant state
     m_rsState.polygonMode       = VK_POLYGON_MODE_FILL;
     m_rsState.cullMode          = VK_CULL_MODE_BACK_BIT;
@@ -607,6 +610,7 @@ namespace dxvk {
   }
 
   ImGUI::~ImGUI() {
+    g_imgui = nullptr;
     g_imguiTextureMap.clear();
 
     ImGui::SetCurrentContext(m_context);
