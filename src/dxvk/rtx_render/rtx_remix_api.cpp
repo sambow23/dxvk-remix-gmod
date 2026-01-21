@@ -354,7 +354,21 @@ namespace {
           {}, // subsurfaceRadiusTexture;
         };
       }
-      return {};
+      // No extension: preload the textures from the base material description.
+      return PreloadSource {
+        topath(info.albedoTexture),
+        topath(info.normalTexture),
+        topath(info.tangentTexture),
+        topath(info.emissiveTexture),
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+      };
     }
 
     MaterialData toRtMaterialFinalized(dxvk::DxvkContext& ctx, const MaterialData& materialWithoutPreload, const PreloadSource& preload) {
@@ -773,7 +787,8 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_HAIR_CARDS)                { result.set(InstanceCategories::HairCards); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE)           { result.set(InstanceCategories::LegacyEmissive); }
       
-      static_assert((int)InstanceCategories::Count == 27, "Instance categories changed, please update Remix SDK");
+      // Occluder is an internal category and is not exposed by the Remix API.
+      static_assert((int)InstanceCategories::Count == 28, "Instance categories changed, please update Remix SDK");
       return result;
     }
 

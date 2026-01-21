@@ -311,10 +311,13 @@ struct Surface
     set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 1) : packedFlagUnset(data0b.z, 1 << 1); }
   }
 
-  // flags0 bit 2 (data0b.z) is FREE again. It briefly held isDecalCategory (fork —
-  // 2026-06-18), a blend-independent decal flag read by the cloud-shadow zenith
-  // gate; that gate and flag were removed 2026-06-19 when the cloud shadow moved
-  // onto the sun term in the NEE (no geometry test needed any more).
+  // Note: Surfaces marked as occluders will show sky instead of geometry when hit by rays.
+  // This is useful for hiding unwanted geometry while still showing the sky behind it.
+  property bool isOccluder
+  {
+    get { return packedFlagGet(data0b.z, 1 << 2); }
+    set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 2) : packedFlagUnset(data0b.z, 1 << 2); }
+  }
 
   property uint16_t hashPacked
   {

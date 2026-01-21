@@ -248,6 +248,10 @@ namespace dxvk {
                   "Textures on draw calls that should be hidden from rendering, but not totally ignored.\n"
                   "This is similar to rtx.ignoreTextures but instead of completely ignoring such draw calls they are only hidden from rendering, allowing for the hidden objects to still appear in captures.\n"
                   "As such, this is mostly only a development tool to hide objects during development until they are properly replaced, otherwise the objects should be ignored with rtx.ignoreTextures instead for better performance.");
+    RTX_OPTION("rtx", fast_unordered_set, occluderTextures, {},
+                  "Textures on geometry that should act as a sky occluder.\n"
+                  "Any ray hitting surfaces with these textures will show the sky instead of the surface or any geometry behind it.\n"
+                  "This is useful for Source engine games where NODRAW materials are visible in RTX, allowing you to hide unwanted geometry while still showing the sky.");
     RTX_OPTION("rtx", fast_unordered_set, playerModelTextures, {},
                   "Textures on draw calls that are part of the third-person player model, such as body, head, or held equipment.\n"
                   "Tagged instances use the player-model ray mask so their primary-ray visibility, shadows, reflections, and portal-space virtual copies can be controlled independently from regular world geometry.");
@@ -915,6 +919,10 @@ namespace dxvk {
     RTX_OPTION("rtx", bool, enableDecalMaterialBlending, true,
                "A flag to enable or disable material blending on decals.\n"
                "This should generally always be enabled when decals are in use as this allows decals to be blended down on to the surface they sit slightly above which results in more convincing decals rendering.");
+    RTX_OPTION("rtx", bool, enableDecalsOnSky, false,
+               "A flag to enable rendering of decals even when there is no geometry behind them (e.g. when only sky is visible).\n"
+               "This is useful for detail props like grass sprites in Source engine games that may appear in front of the sky.\n"
+               "When enabled, decals will be composited over the sky with simple ambient lighting instead of being discarded.");
 
     RTX_OPTION("rtx", bool, enableBillboardOrientationCorrection, true, "");
     RTX_OPTION("rtx", bool, useIntersectionBillboardsOnPrimaryRays, false, "");

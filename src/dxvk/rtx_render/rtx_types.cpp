@@ -411,6 +411,8 @@ namespace dxvk {
     setCategory(InstanceCategories::ParticleEmitter, lookupHash(RtxOptions::particleEmitterTextures(), textureHash));
     setCategory(InstanceCategories::HairCards, lookupHash(RtxOptions::hairCardTextures(), textureHash));
 
+    setCategory(InstanceCategories::Occluder, lookupHash(RtxOptions::occluderTextures(), textureHash));
+
     // Set baked lighting category - automatically allow baked lighting for decal textures
     // since they need proper vertex color/weighting to blend correctly
     const bool isDecalTexture = testCategoryFlags(DECAL_CATEGORY_FLAGS);

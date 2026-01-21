@@ -436,6 +436,13 @@ void resolveVertex<T: IBasePayloadState>(
     return;
   }
 
+  // Occluders hide geometry behind them while exposing the sky.
+  if (surface.isOccluder)
+  {
+    resolveVertexFinalMiss<true>(resolveVertexState, rayInteraction, radianceAttenuation);
+    return;
+  }
+
   // Create a Surface Material and Surface Material Interaction from the Surface
 
   const MemoryPolymorphicSurfaceMaterial memoryPolymorphicSurfaceMaterial = surfaceMaterials[uint(rayInteraction.surfaceIndex)];

@@ -1744,15 +1744,32 @@ void geometryResolverVertex(
   uint4 decalMemory = 0;
   vec3 decalEmissiveRadiance = vec3(0.0f);
   int surfaceIndex = -1;
-  resolveVertexUnorderedParticles<
-    GBUFFER_RAY_FLAGS>(
-    resolveMode, unorderedResolveRay,
-    unorderedRayMask, geometryResolverState.portalSpace,
-    useIntersectionBillboards,
-    geometryResolverState.pixelCoordinate,
-    geometryResolverState.accumulatedRotation, geometryResolverState.accumulatedHitDistance, 1.0f,
-    radianceAttenuation, emissiveRadiance,
-    numUnorderedInteractions, surfaceIndex);
+  if (cb.enableDecalsOnSky)
+  {
+    // The separate decal pass requires an opaque surface to composite onto. Use
+    // the full resolver only for this opt-in path so decals can also be retained
+    // when the ordered ray misses and the background is the sky.
+    resolveVertexUnordered<GBUFFER_RAY_FLAGS, true, true>(
+      resolveMode, unorderedResolveRay,
+      unorderedRayMask, geometryResolverState.portalSpace,
+      useIntersectionBillboards,
+      geometryResolverState.pixelCoordinate,
+      geometryResolverState.accumulatedRotation, geometryResolverState.accumulatedHitDistance, 1.0f,
+      radianceAttenuation, emissiveRadiance,
+      numUnorderedInteractions,
+      geometryResolverState.decalEncountered, decalMemory, decalEmissiveRadiance, surfaceIndex);
+  }
+  else
+  {
+    resolveVertexUnorderedParticles<GBUFFER_RAY_FLAGS>(
+      resolveMode, unorderedResolveRay,
+      unorderedRayMask, geometryResolverState.portalSpace,
+      useIntersectionBillboards,
+      geometryResolverState.pixelCoordinate,
+      geometryResolverState.accumulatedRotation, geometryResolverState.accumulatedHitDistance, 1.0f,
+      radianceAttenuation, emissiveRadiance,
+      numUnorderedInteractions, surfaceIndex);
+  }
 
   bool ignoreTransparencyLayer = false;
   if (surfaceIndex >= 0)
@@ -1954,6 +1971,19 @@ void geometryResolverVertex(
       // Ray crossed a ray portal — its direction no longer corresponds to the
       // rasterized view, so only the direction-based probe is valid here.
       skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
+    }
+
+    if (cb.enableDecalsOnSky && geometryResolverState.decalEncountered)
+    {
+      MemoryDecalMaterialInteraction memory;
+      memory.packed = decalMemory;
+      memory.emissiveRadiance = f16vec3(decalEmissiveRadiance);
+      const DecalMaterialInteraction decal = decalMaterialInteractionUnpack(memory);
+
+      const vec3 ambientLight = skyRadiance * 0.5f;
+      const vec3 decalRadiance =
+        vec3(decal.albedo) * ambientLight + vec3(decal.emissiveRadiance);
+      skyRadiance = decalRadiance + skyRadiance * (1.0f - decal.opacity);
     }
 
     geometryResolverState.radiance += skyRadiance * vec3(geometryResolverState.attenuation);
