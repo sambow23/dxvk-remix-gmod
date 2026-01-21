@@ -1222,4 +1222,4 @@ Vector3 RtLight::getRadiance() const {
   }
 }
 
-} // namespace dxvk 
+} // namespace dxvk
