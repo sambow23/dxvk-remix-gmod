@@ -187,6 +187,7 @@ namespace dxvk {
     {"skytextures", "Sky Texture", &RtxOptions::skyBoxTexturesObject()},
     {"ignoretextures", "Ignore Texture (optional)", &RtxOptions::ignoreTexturesObject()},
     {"hidetextures", "Hide Texture Instance (optional)", &RtxOptions::hideInstanceTexturesObject()},
+    {"occludertextures", "Occluder Texture (optional)", &RtxOptions::occluderTexturesObject()},
     {"lightmaptextures","Lightmap Textures (optional)", &RtxOptions::lightmapTexturesObject()},
     {"ignorelights", "Ignore Lights (optional)", &RtxOptions::ignoreLightsObject()},
     {"particletextures", "Particle Texture (optional)", &RtxOptions::particleTexturesObject()},
@@ -3722,6 +3723,7 @@ namespace dxvk {
         RemixGui::Checkbox("Indirect Translucent Shadows", &RtxOptions::enableIndirectTranslucentShadowsObject());
         RemixGui::Checkbox("Indirect Alpha Blended Shadows", &RtxOptions::enableIndirectAlphaBlendShadowsObject());
         RemixGui::Checkbox("Decal Material Blending", &RtxOptions::enableDecalMaterialBlendingObject());
+        RemixGui::Checkbox("Render Decals on Sky", &RtxOptions::enableDecalsOnSkyObject());
         RemixGui::Checkbox("Billboard Orientation Correction", &RtxOptions::enableBillboardOrientationCorrectionObject());
         if (RtxOptions::enableBillboardOrientationCorrection()) {
           ImGui::Indent();

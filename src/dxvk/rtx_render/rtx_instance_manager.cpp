@@ -1088,6 +1088,7 @@ namespace dxvk {
         currentInstance.surface.isVertexColorBakedLighting = drawCall.getMaterialData().isVertexColorBakedLighting;
         currentInstance.surface.isMotionBlurMaskOut = currentInstance.testCategoryFlags(InstanceCategories::IgnoreMotionBlur);
         currentInstance.surface.ignoreTransparencyLayer = currentInstance.testCategoryFlags(InstanceCategories::IgnoreTransparencyLayer);
+        currentInstance.surface.isOccluder = currentInstance.testCategoryFlags(InstanceCategories::Occluder);
 
         // Note: Skip the spritesheet adjustment logic in the surface interaction when using Ray Portal materials as this logic
         // is done later in the Surface Material Interaction (and doing it in both places will just double up the animation).
@@ -1321,6 +1322,12 @@ namespace dxvk {
     // Enable backface culling for Portals to avoid additional hits to the back of Portals
     if (currentInstance.m_materialType == MaterialDataType::RayPortal) {
       currentInstance.m_vkInstance.flags &= ~VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    }
+
+    // Force occluders to be non-opaque so visibility rays can pass through them
+    // This allows occluders to not cast shadows and not block light/indirect rays
+    if (currentInstance.testCategoryFlags(InstanceCategories::Occluder)) {
+      currentInstance.m_vkInstance.flags |= VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
     }
 
     // Update mask
