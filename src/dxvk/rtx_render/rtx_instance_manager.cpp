@@ -183,6 +183,7 @@ namespace dxvk {
     m_isHidden = src.m_isHidden;
     m_isPlayerModel = src.m_isPlayerModel;
     m_isWorldSpaceUI = src.m_isWorldSpaceUI;
+    m_isLegacyEmissive = src.m_isLegacyEmissive;
     m_isUnordered = src.m_isUnordered;
     m_isObjectToWorldMirrored = src.m_isObjectToWorldMirrored;
     m_isSubsurface = src.m_isSubsurface;
@@ -446,6 +447,7 @@ namespace dxvk {
       "Is Hidden: ", m_isHidden ? "true" : "false", "\n",
       "Is Player Model: ", m_isPlayerModel ? "true" : "false", "\n",
       "Is World Space UI: ", m_isWorldSpaceUI ? "true" : "false", "\n",
+      "Is Legacy Emissive: ", m_isLegacyEmissive ? "true" : "false", "\n",
       "Is Unordered: ", m_isUnordered ? "true" : "false", "\n",
       "Is Object To World Mirrored: ", m_isObjectToWorldMirrored ? "true" : "false", "\n",
       "Is Created By Renderer: ", m_isCreatedByRenderer ? "true" : "false", "\n",
@@ -1018,6 +1020,7 @@ namespace dxvk {
     currentInstance.m_isHidden = currentInstance.testCategoryFlags(InstanceCategories::Hidden);
     currentInstance.m_isPlayerModel = currentInstance.testCategoryFlags(InstanceCategories::ThirdPersonPlayerModel);
     currentInstance.m_isWorldSpaceUI = currentInstance.testCategoryFlags(InstanceCategories::WorldUI);
+    currentInstance.m_isLegacyEmissive = currentInstance.testCategoryFlags(InstanceCategories::LegacyEmissive);
 
     // Hide the sky instance since it is not raytraced.
     // Sky mesh and material are only good for capture and replacement purposes.
@@ -1121,6 +1124,74 @@ namespace dxvk {
             tmpMaterialData.getOpaqueMaterialData().setEnableEmission(true);
             tmpMaterialData.getOpaqueMaterialData().setEmissiveIntensity(2.0f);
             tmpMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(tmpMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
+          } else if (currentInstance.m_isLegacyEmissive) {
+            // Here we need to do a deep copy before applying per-instance emissive overrides.
+            tmpMaterialData = *materialData;
+            materialData = &tmpMaterialData;
+
+            // For legacy emissive, use alpha channel if available, otherwise use albedo. Per-texture controllable intensity.
+            // Use the same texture hash that was used to categorize this as legacy emissive (from original material)
+            const XXH64_hash_t textureHash = drawCall.getMaterialData().getColorTexture().getImageHash();
+
+            // Get per-texture emissive intensity, default to 2.0f if not specified
+            float emissiveIntensity = 2.0f;
+            const auto intensityMap = RtxOptions::parseLegacyEmissiveIntensities(RtxOptions::legacyEmissiveIntensitiesString());
+            auto intensityIt = intensityMap.find(textureHash);
+            if (intensityIt != intensityMap.end()) {
+              emissiveIntensity = intensityIt->second;
+            }
+
+            tmpMaterialData.getOpaqueMaterialData().setEnableEmission(true);
+            tmpMaterialData.getOpaqueMaterialData().setEmissiveIntensity(emissiveIntensity);
+
+            // Get per-texture emissive color tint, default to white (1.0, 1.0, 1.0) if not specified
+            Vector3 emissiveColorTint = Vector3(1.0f, 1.0f, 1.0f);
+            const auto colorMap = RtxOptions::parseLegacyEmissiveColors(RtxOptions::legacyEmissiveColorsString());
+            auto colorIt = colorMap.find(textureHash);
+            if (colorIt != colorMap.end()) {
+              emissiveColorTint = colorIt->second;
+            }
+
+            tmpMaterialData.getOpaqueMaterialData().setEmissiveColorTint(emissiveColorTint);
+
+            // Check for per-texture alpha invert setting
+            bool alphaInvert = false;
+            const auto invertSet = RtxOptions::parseLegacyEmissiveAlphaInvert(RtxOptions::legacyEmissiveAlphaInvertString());
+            alphaInvert = invertSet.find(textureHash) != invertSet.end();
+
+            // Try to use alpha channel for emissive if available, otherwise use albedo
+            const auto& albedoTexture = tmpMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture();
+            if (albedoTexture.isValid() && albedoTexture.getImageView() && albedoTexture.getImageView()->info().format != VK_FORMAT_UNDEFINED) {
+              // Check if texture has alpha channel (includes uncompressed RGBA and compressed formats like BC3/DXT5)
+              const VkFormat format = albedoTexture.getImageView()->info().format;
+              const bool hasAlpha = (format == VK_FORMAT_R8G8B8A8_UNORM ||
+                                   format == VK_FORMAT_R8G8B8A8_SRGB ||
+                                   format == VK_FORMAT_B8G8R8A8_UNORM ||
+                                   format == VK_FORMAT_B8G8R8A8_SRGB ||
+                                   format == VK_FORMAT_A8B8G8R8_UNORM_PACK32 ||
+                                   format == VK_FORMAT_A8B8G8R8_SRGB_PACK32 ||
+                                   format == VK_FORMAT_BC3_UNORM_BLOCK ||  // DXT5 - commonly used by Source engine
+                                   format == VK_FORMAT_BC3_SRGB_BLOCK ||   // DXT5 sRGB variant
+                                   format == VK_FORMAT_BC7_UNORM_BLOCK ||  // BC7 with alpha
+                                   format == VK_FORMAT_BC7_SRGB_BLOCK);
+
+              if (hasAlpha) {
+                // Use the same texture, but the shader will use alpha channel for emissive masking
+                tmpMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(albedoTexture);
+                tmpMaterialData.getOpaqueMaterialData().setEmissiveAlphaMask(true);
+                tmpMaterialData.getOpaqueMaterialData().setEmissiveAlphaInvert(alphaInvert);
+              } else {
+                // No alpha channel, use albedo for emissive
+                tmpMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(albedoTexture);
+                tmpMaterialData.getOpaqueMaterialData().setEmissiveAlphaMask(false);
+                tmpMaterialData.getOpaqueMaterialData().setEmissiveAlphaInvert(false); // No invert needed without alpha
+              }
+            } else {
+              // Fallback to albedo if texture is invalid
+              tmpMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(tmpMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
+              tmpMaterialData.getOpaqueMaterialData().setEmissiveAlphaMask(false);
+              tmpMaterialData.getOpaqueMaterialData().setEmissiveAlphaInvert(false); // No invert needed without alpha
+            }
           } else if (currentInstance.surface.alphaState.emissiveBlend && RtxOptions::enableEmissiveBlendEmissiveOverride() && useLegacyAlphaState) {
             // Here we need to do deep copy and patch the material
             tmpMaterialData = *materialData;

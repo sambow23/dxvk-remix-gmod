@@ -497,6 +497,9 @@ namespace {
           src.getMetallicConstant(),
           src.getEmissiveColorConstant(),
           src.getEnableEmission(),
+          src.getEmissiveAlphaMask(),
+          src.getEmissiveAlphaInvert(),
+          src.getEmissiveColorTint(),
           src.getSkyLitParticle(), // fork (2026-07-26): sky-lit particle flag rides through preload
           src.getSpriteSheetRows(),
           src.getSpriteSheetCols(),
@@ -595,6 +598,9 @@ namespace {
           extOpaque->metallicConstant,
           tovec3(info.emissiveColorConstant),
           info.emissiveIntensity > 0.f,
+          false, // EmissiveAlphaMask - not used for API materials
+          false, // EmissiveAlphaInvert - not used for API materials
+          Vector3(1.0f, 1.0f, 1.0f), // EmissiveColorTint - white default for API materials
           false, // fork (2026-07-26): OpaqueMaterial::SkyLitParticle - not exposed via remixapi
           info.spriteSheetRow,
           info.spriteSheetCol,
@@ -858,8 +864,9 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE_EMITTER)         { result.set(InstanceCategories::ParticleEmitter); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS)            { result.set(InstanceCategories::SmoothNormals); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_HAIR_CARDS)                { result.set(InstanceCategories::HairCards); }
+      if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE)           { result.set(InstanceCategories::LegacyEmissive); }
       
-      static_assert((int)InstanceCategories::Count == 26, "Instance categories changed, please update Remix SDK");
+      static_assert((int)InstanceCategories::Count == 27, "Instance categories changed, please update Remix SDK");
       return result;
     }
 

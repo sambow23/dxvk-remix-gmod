@@ -1685,6 +1685,9 @@ namespace dxvk {
       emissiveIntensity = opaqueMaterialData.getEmissiveIntensity() * RtxOptions::emissiveIntensity();
       emissiveColorConstant = opaqueMaterialData.getEmissiveColorConstant();
       enableEmissive = opaqueMaterialData.getEnableEmission();
+      bool emissiveAlphaMask = opaqueMaterialData.getEmissiveAlphaMask();
+      bool emissiveAlphaInvert = opaqueMaterialData.getEmissiveAlphaInvert();
+      Vector3 emissiveColorTint = opaqueMaterialData.getEmissiveColorTint();
       anisotropy = opaqueMaterialData.getAnisotropyConstant();
         
       thinFilmEnable = opaqueMaterialData.getEnableThinFilm();
@@ -1772,8 +1775,8 @@ namespace dxvk {
         anisotropy, emissiveIntensity,
         albedoOpacityConstant,
         roughnessConstant, metallicConstant,
-        emissiveColorConstant, enableEmissive,
-        ignoreAlphaChannel, thinFilmEnable, alphaIsThinFilmThickness,
+        emissiveColorConstant, enableEmissive, emissiveAlphaMask, emissiveAlphaInvert,
+        emissiveColorTint, ignoreAlphaChannel, thinFilmEnable, alphaIsThinFilmThickness,
         thinFilmThicknessConstant, samplerIndex, displaceIn, displaceOut,
         subsurfaceMaterialIndex, isUsingRaytracedRenderTarget, isHairCard,
         samplerFeedbackStamp,
