@@ -77,6 +77,7 @@ d3d9_src = [
   'd3d9_swvp_emu.h',
   'd3d9_texture.cpp',
   'd3d9_texture.h',
+  'd3d9_rtx_texture_categories.h',
   'd3d9_util.cpp',
   'd3d9_util.h',
   'd3d9_vertex_declaration.cpp',
