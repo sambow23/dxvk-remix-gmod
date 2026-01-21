@@ -58,9 +58,13 @@
         pxr::VtValue val; \
         getLightAttribute(prim, pxr::TfToken(#usd_attr), pxr::TfToken("inputs:"#usd_attr)).Get(&val); \
         if(!val.IsEmpty()) { \
-          static_assert(uint32_t(DirtyFlags::k_##name) < 32); \
-          m_dirty.set(DirtyFlags::k_##name); \
-          m_##name = val.UncheckedGet<type>(); \
+          if(val.IsHolding<type>()) { \
+            static_assert(uint32_t(DirtyFlags::k_##name) < 32); \
+            m_dirty.set(DirtyFlags::k_##name); \
+            m_##name = val.UncheckedGet<type>(); \
+          } else { \
+            Logger::warn(str::format("Light attribute ", #usd_attr, " has unexpected type, using default value")); \
+          } \
         } \
       }
 
