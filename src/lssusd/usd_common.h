@@ -55,6 +55,8 @@ namespace dxvk {
       return "remix_category:particle_emitter";
     case InstanceCategories::SmoothNormals:
       return "remix_category:smooth_normals";
+    case InstanceCategories::LegacyEmissive:
+      return "remix_category:legacy_emissive";
     default:
       Logger::err("Category key name requested, but no category found.");
       return "";
