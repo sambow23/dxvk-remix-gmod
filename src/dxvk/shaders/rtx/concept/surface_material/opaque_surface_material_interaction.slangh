@@ -715,16 +715,31 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     chooseTextureArgument(textureArg1, surface.textureColorArg1Source, albedo, surfaceInteraction.vertexColor.rgb, tFactor.rgb, f16vec3(1.0));
     chooseTextureArgument(textureArg2, surface.textureColorArg2Source, albedo, surfaceInteraction.vertexColor.rgb, tFactor.rgb, f16vec3(1.0));
     chooseTextureOperationColor(albedo, surface.textureColorOperation, textureArg1, textureArg2);
-    if (surface.isTextureFactorBlend) {
-      albedo *= tFactor.rgb;
+    // Apply additional texture factor multiplication for multi-stage blending when the current
+    // stage's operations don't already use TFactor (to avoid double multiplication)
+    // Use alpha channel as a mask to control where the texture factor is applied
+    if (surface.isTextureFactorBlend && 
+        surface.textureColorArg1Source != RtTextureArgSource::TFactor &&
+        surface.textureColorArg2Source != RtTextureArgSource::TFactor) {
+      // Use alpha from the texture as a mask for texture factor blending
+      // Areas with low alpha remain unaffected, areas with high alpha get full tFactor blending
+      f16vec3 tintedAlbedo = albedo * tFactor.rgb;
+      albedo = mix(albedo, tintedAlbedo, opacity);
     }
 
     // Fixed function texture stage setting (emissive)
     chooseTextureArgument(textureArg1, surface.textureColorArg1Source, emissiveColor, surfaceInteraction.vertexColor.rgb, tFactor.rgb, f16vec3(1.0));
     chooseTextureArgument(textureArg2, surface.textureColorArg2Source, emissiveColor, surfaceInteraction.vertexColor.rgb, tFactor.rgb, f16vec3(1.0));
     chooseTextureOperationColor(emissiveColor, surface.textureColorOperation, textureArg1, textureArg2);
-    if (surface.isTextureFactorBlend) {
-      emissiveColor *= tFactor.rgb;
+    // Apply additional texture factor multiplication for multi-stage blending when the current
+    // stage's operations don't already use TFactor (to avoid double multiplication)
+    // Use alpha channel as a mask to control where the texture factor is applied
+    if (surface.isTextureFactorBlend && 
+        surface.textureColorArg1Source != RtTextureArgSource::TFactor &&
+        surface.textureColorArg2Source != RtTextureArgSource::TFactor) {
+      // Use alpha from the texture as a mask for texture factor blending
+      f16vec3 tintedEmissive = emissiveColor * tFactor.rgb;
+      emissiveColor = mix(emissiveColor, tintedEmissive, opacity);
     }
     
     // Adjust opacity via texture operations.

@@ -491,13 +491,8 @@ void integratePathVertex(
     return;
   }
 
-  // Exit on a miss
   if (!rayInteractionHasHit(rayInteraction))
   {
-    // Reduce the bounce iteration on miss so that when integrator loop exits and increments the variable one more time,
-    // the bounce iteration is + 1 since the last surface hit for both misses and hits
-    --pathState.bounceIteration;
-
     return;
   }
 
@@ -616,7 +611,7 @@ void integratePathVertex(
           lightSampleValid = sampleLightRTXDI(
             pixelCoordinate,
             surfaceInteraction,
-            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx);
+            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx, rayInteraction.customIndex);
         }
       }
 
@@ -642,7 +637,7 @@ void integratePathVertex(
           lightSampleValid = sampleLightRIS(
             randomState,
             surfaceInteraction, opaqueSurfaceMaterialInteraction, rayInteraction.viewDirection,
-            lightSample, invSelectionPdf, lightIdx);
+            lightSample, invSelectionPdf, lightIdx, rayInteraction.customIndex);
         }
       }
 
@@ -1159,7 +1154,8 @@ void writeToNrcOutputsAfterIntegration(PathState pathState)
   const NrcContext nrcContext = Nrc::createNrcContext(pixelCoordinate);
     
   // Sanitize the inputs since they occasionally have NaNs
-  Nrc::sanitizeNrcInputs(pathState.isNrcUpdate, cb.nrcArgs, pathState.throughput, pathState.radiance);
+  pathState.radiance = NrcSanitizeNansInfs(pathState.radiance);
+  pathState.throughput = NrcSanitizeNansInfs(pathState.throughput);
 
   // Note: A path had a bounce index increased when it exits, so it is the same case 
   // as if a new indirect hit was hit when debug registering radiance on NRC hit
