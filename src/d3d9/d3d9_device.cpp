@@ -4637,7 +4637,7 @@ namespace dxvk {
           lookupHash(RtxOptions::terrainTextures(), imageHash) ||
           lookupHash(RtxOptions::lightmapTextures(), imageHash) ||
           lookupHash(RtxOptions::ignoreTextures(), imageHash) ||
-          lookupHash(RtxOptions::ignoreBakedLightingTextures(), imageHash);
+          lookupHash(RtxOptions::allowBakedLightingTextures(), imageHash);
         if (imageHash != kEmptyHash && !keepConfiguredHash) {
           pResource->ClearHash();
         }
