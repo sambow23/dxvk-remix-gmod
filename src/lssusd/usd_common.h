@@ -40,11 +40,12 @@ namespace dxvk {
     { InstanceCategories::AnimatedWater,           "remix_category:animated_water",           "Animated Water",            "rtx.animatedWaterTextures" },
     { InstanceCategories::ThirdPersonPlayerModel,  "remix_category:third_person_player_model","Third Person Player Model", "rtx.playerModelTextures" },
     { InstanceCategories::ThirdPersonPlayerBody,   "remix_category:third_person_player_body", "Third Person Player Body",  "rtx.playerModelBodyTextures" },
-    { InstanceCategories::IgnoreBakedLighting,     "remix_category:ignore_baked_lighting",    "Ignore Baked Lighting",     "rtx.ignoreBakedLightingTextures" },
+    { InstanceCategories::IgnoreBakedLighting,     "remix_category:ignore_baked_lighting",    "Ignore Baked Lighting",     "rtx.allowBakedLightingTextures" },
     { InstanceCategories::IgnoreTransparencyLayer, "remix_category:ignore_transparency_layer","Ignore Transparency Layer", "rtx.ignoreTransparencyLayerTextures" },
     { InstanceCategories::ParticleEmitter,         "remix_category:particle_emitter",         "Particle Emitter",          "rtx.particleEmitterTextures" },
     { InstanceCategories::SmoothNormals,           "remix_category:smooth_normals",           "Smooth Normals",            "rtx.smoothNormalsTextures" },
     { InstanceCategories::HairCards,               "remix_category:hair_cards",               "Hair Cards",                "rtx.hairCardTextures" },
+    { InstanceCategories::LegacyEmissive,          "remix_category:legacy_emissive",          "Legacy Emissive",           "rtx.legacyEmissiveTextures" },
   };
 
   // Table must have one entry per enum value.
@@ -70,7 +71,6 @@ namespace dxvk {
     }
     return kRemixCategoryEntries[(uint32_t) cat].attr;
   }
-
   // The category's RtxOption description if it has one, else a generic fallback.
   inline std::string getRemixCategoryDoc(const RemixCategoryEntry& entry) {
     if (entry.optionName != nullptr) {
