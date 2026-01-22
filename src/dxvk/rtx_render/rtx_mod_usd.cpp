@@ -87,9 +87,28 @@ public:
     , m_usdChangeWatchdog([this] { return this->haveFilesChanged(); }, "usd-mod-watchdog")
   {}
 
+  ~Impl() {
+    // Ensure async reload thread is stopped before destruction
+    stopAsyncReload();
+  }
+
   void load(const Rc<DxvkContext>& context);
   void unload();
   bool checkForChanges(const Rc<DxvkContext>& context);
+
+  // Track all USD files and their modification times
+  std::unordered_map<std::string, std::filesystem::file_time_type> m_trackedFiles;
+  
+  // Layer selection functionality
+  std::vector<std::string> m_availableLayers;
+  std::unordered_set<std::string> m_enabledLayers;
+  bool m_layerSelectionChanged = false;
+  
+  // Layer hierarchy
+  std::unordered_map<std::string, UsdMod::LayerInfo> m_layerHierarchy;
+
+  // Check if all async mesh loading operations are complete
+  bool areAsyncOperationsComplete() const;
 
 private:
   UsdMod& m_owner;
@@ -101,13 +120,19 @@ private:
     pxr::UsdPrim& rootPrim;
     std::vector<AssetReplacement>& meshes;
     fast_unordered_cache<uint32_t> pathHashToIndexMap;
+    AssetReplacements* targetReplacements = nullptr; // Optional: if null, uses m_owner.m_replacements
   };
+
+  // Helper to get the appropriate replacements container
+  AssetReplacements* getReplacements(const Args& args) const {
+    return args.targetReplacements ? args.targetReplacements : m_owner.m_replacements.get();
+  }
 
   bool haveFilesChanged();
 
   void processUSD(const Rc<DxvkContext>& context);
 
-  void TEMP_parseSecretReplacementVariants(const fast_unordered_cache<uint32_t>& variants);
+  void TEMP_parseSecretReplacementVariants(const fast_unordered_cache<uint32_t>& variants, AssetReplacements* targetReplacements = nullptr);
   Rc<ManagedTexture> getTexture(const Args& args, const pxr::UsdPrim& shader, const pxr::TfToken& textureToken, bool forcePreload = false) const;
   MaterialData* processMaterial(Args& args, const pxr::UsdPrim& matPrim);
   MaterialData* processMaterialUser(Args& args, const pxr::UsdPrim& prim);
@@ -139,6 +164,27 @@ private:
   std::unordered_map<dxvk::DxvkCommandList*, std::thread> m_cmdListSyncThreads;
   // Asset replacement vector and hash to add when command list execution is complete
   std::unordered_map<dxvk::DxvkCommandList*, std::unordered_map<XXH64_hash_t, std::vector<AssetReplacement>>> m_meshReplacementsToAdd;
+
+  // Async reload infrastructure
+  struct ReloadedData {
+    std::unique_ptr<AssetReplacements> replacements;
+    std::filesystem::file_time_type fileModificationTime;
+    std::string openedFilePath;
+    std::string status;
+    bool success = false;
+  };
+
+  void queueAsyncReload(const Rc<DxvkContext>& context);
+  void asyncReloadThreadFunc(Rc<DxvkContext> context);
+  void stopAsyncReload();
+  bool trySwapReloadedData();
+
+  std::atomic<bool> m_asyncReloadPending{ false };
+  std::atomic<bool> m_asyncReloadComplete{ false };
+  std::atomic<bool> m_asyncReloadStopRequested{ false };
+  std::mutex m_asyncReloadMutex;
+  std::unique_ptr<dxvk::thread> m_asyncReloadThread;
+  ReloadedData m_reloadedData;
 };
 
 // context and member variable arguments to pass down to anonymous functions (to avoid having USD in the header)
@@ -339,14 +385,14 @@ MaterialData* UsdMod::Impl::processMaterial(Args& args, const pxr::UsdPrim& matP
     // This is the case when adding a particle system API to an existing legacy material in game.
     if (particleSystem.has_value()) {
       // In this case just return an empty opaque material.
-      return &m_owner.m_replacements->storeObject(materialHash, MaterialData(OpaqueMaterialData::deserialize([](const pxr::UsdPrim& shader, const pxr::TfToken& name) { return TextureRef {}; }, shader), particleSystem));
+      return &getReplacements(args)->storeObject(materialHash, MaterialData(OpaqueMaterialData::deserialize([](const pxr::UsdPrim& shader, const pxr::TfToken& name) { return TextureRef {}; }, shader), particleSystem));
     }
     return nullptr;
   }
 
   // Check if the material has already been processed
   MaterialData* materialData;
-  if (m_owner.m_replacements->getObject(materialHash, materialData)) {
+  if (getReplacements(args)->getObject(materialHash, materialData)) {
     return materialData;
   }
 
@@ -386,11 +432,11 @@ MaterialData* UsdMod::Impl::processMaterial(Args& args, const pxr::UsdPrim& matP
 
   switch (materialType) {
   case RtSurfaceMaterialType::Opaque:
-    return &m_owner.m_replacements->storeObject(materialHash, MaterialData(OpaqueMaterialData::deserialize(getTextureFunctor, shader), particleSystem, shouldIgnore));
+    return &getReplacements(args)->storeObject(materialHash, MaterialData(OpaqueMaterialData::deserialize(getTextureFunctor, shader), particleSystem, shouldIgnore));
   case RtSurfaceMaterialType::Translucent:
-    return &m_owner.m_replacements->storeObject(materialHash, MaterialData(TranslucentMaterialData::deserialize(getTextureFunctor, shader), particleSystem, shouldIgnore));
+    return &getReplacements(args)->storeObject(materialHash, MaterialData(TranslucentMaterialData::deserialize(getTextureFunctor, shader), particleSystem, shouldIgnore));
   case RtSurfaceMaterialType::RayPortal:
-    return &m_owner.m_replacements->storeObject(materialHash, MaterialData(RayPortalMaterialData::deserialize(getTextureFunctor, shader), particleSystem));
+    return &getReplacements(args)->storeObject(materialHash, MaterialData(RayPortalMaterialData::deserialize(getTextureFunctor, shader), particleSystem));
   default:
     assert(false && "Invalid materialType passed to getTextureFunctor");
   }
@@ -413,7 +459,7 @@ void UsdMod::Impl::processPrim(Args& args, const pxr::UsdPrim& prim) {
   const XXH64_hash_t usdOriginHash = getStrongestOpinionatedPathHash(prim);
 
   MeshReplacement* pTemp;
-  if (!m_owner.m_replacements->getObject(usdOriginHash, pTemp)) {
+  if (!getReplacements(args)->getObject(usdOriginHash, pTemp)) {
     // First time seeing this mesh, then process it.
     if (!processMesh(prim, args)) {
       return;
@@ -441,7 +487,7 @@ void UsdMod::Impl::processPrim(Args& args, const pxr::UsdPrim& prim) {
 
   if (geomSubsets.empty()) {
     MeshReplacement* pGeometryData;
-    if (m_owner.m_replacements->getObject(usdOriginHash, pGeometryData)) {
+    if (getReplacements(args)->getObject(usdOriginHash, pGeometryData)) {
       AssetReplacement newReplacementMesh(prim.GetPrimPath().GetString(), pGeometryData, materialData, categoryFlags, replacementToObject);
       newReplacementMesh.particleSystem = particleSystem;
       args.meshes.push_back(newReplacementMesh);
@@ -450,7 +496,7 @@ void UsdMod::Impl::processPrim(Args& args, const pxr::UsdPrim& prim) {
     for (auto subset : geomSubsets) {
       const XXH64_hash_t usdChildOriginHash = getStrongestOpinionatedPathHash(subset.GetPrim());
       MeshReplacement* childGeometryData;
-      if (m_owner.m_replacements->getObject(usdChildOriginHash, childGeometryData)) {
+      if (getReplacements(args)->getObject(usdChildOriginHash, childGeometryData)) {
         AssetReplacement newReplacementMesh(prim.GetPrimPath().GetString(), childGeometryData, materialData, categoryFlags, replacementToObject);
         MaterialData* mat = processMaterialUser(args, subset.GetPrim());
         if (mat) {
@@ -509,7 +555,7 @@ void UsdMod::Impl::processLight(Args& args, const pxr::UsdPrim& lightPrim, const
 
 void UsdMod::Impl::processGraph(Args& args, const uint32_t meshIndex) {
   pxr::UsdPrim graphPrim = args.rootPrim.GetStage()->GetPrimAtPath(pxr::SdfPath(args.meshes[meshIndex].primPath));
-  args.meshes[meshIndex].graphState.emplace(GraphUsdParser::parseGraph(*m_owner.m_replacements, graphPrim, args.pathHashToIndexMap));
+  args.meshes[meshIndex].graphState.emplace(GraphUsdParser::parseGraph(*getReplacements(args), graphPrim, args.pathHashToIndexMap));
 }
 
 template<typename T>
@@ -1054,6 +1100,9 @@ void UsdMod::Impl::unload() {
   if (m_owner.state().progressState == ProgressState::Loaded) {
     m_usdChangeWatchdog.stop();
 
+    // Stop any ongoing async reload
+    stopAsyncReload();
+
     m_owner.m_replacements->clear();
     AssetDataManager::get().clearSearchPaths();
 
@@ -1084,12 +1133,265 @@ bool UsdMod::Impl::haveFilesChanged() {
 
 bool UsdMod::Impl::checkForChanges(const Rc<DxvkContext>& context) {
   if (m_usdChangeWatchdog.hasSignaled()) {
-    unload();
-    load(context);
-    return true;
+    // Queue async reload instead of synchronous unload/load
+    queueAsyncReload(context);
+    return false; // Don't trigger scene clear yet
+  }
+
+  // Check if async reload completed and try to swap in the new data
+  if (m_asyncReloadComplete.load()) {
+    if (trySwapReloadedData()) {
+      return true; // Trigger scene clear with the new data
+    }
   }
 
   return false;
+}
+
+void UsdMod::Impl::queueAsyncReload(const Rc<DxvkContext>& context) {
+  // If already reloading, skip
+  if (m_asyncReloadPending.load()) {
+    return;
+  }
+
+  // Stop any existing reload thread
+  stopAsyncReload();
+
+  // Mark reload as pending
+  m_asyncReloadPending.store(true);
+  m_asyncReloadComplete.store(false);
+
+  // Start the async reload thread
+  m_asyncReloadThread = std::make_unique<dxvk::thread>([this, context] {
+    asyncReloadThreadFunc(context);
+  });
+  m_asyncReloadThread->set_priority(ThreadPriority::Normal);
+}
+
+void UsdMod::Impl::asyncReloadThreadFunc(Rc<DxvkContext> context) {
+  ScopedCpuProfileZone();
+  env::setThreadName("rtx-usd-async-reload");
+
+  // Create a new AssetReplacements container for the reloaded data
+  // Do this WITHOUT holding the mutex so we don't block the main thread
+  m_reloadedData.replacements = std::make_unique<AssetReplacements>();
+  m_reloadedData.success = false;
+
+  try {
+    std::string replacementsUsdPath(m_owner.m_filePath.string());
+
+    // Note: We don't call setState from background thread to avoid race conditions
+    // The UI will still show "Loaded" state during async reload, which is fine
+
+    // Open the USD stage (this is the slow part - happens without holding any locks)
+    pxr::UsdStageRefPtr stage = pxr::UsdStage::Open(replacementsUsdPath, pxr::UsdStage::LoadAll);
+
+    if (!stage) {
+      Logger::err(str::format("USD mod file failed parsing during async reload: ", 
+                              std::filesystem::weakly_canonical(replacementsUsdPath).string()));
+      m_asyncReloadPending.store(false);
+      m_asyncReloadComplete.store(false);
+      return;
+    }
+
+    std::filesystem::path modBaseDirectory = std::filesystem::path(replacementsUsdPath).remove_filename();
+    m_reloadedData.openedFilePath = replacementsUsdPath;
+
+    // Setup search paths (this is safe as AssetDataManager is thread-safe for adding paths)
+    auto sublayers = stage->GetRootLayer()->GetSubLayerPaths();
+    for (size_t i = 0, s = sublayers.size(); i < s; i++) {
+      const std::string& identifier = sublayers[i];
+      auto layerBasePath = std::filesystem::path(identifier).remove_filename();
+      auto fullLayerBasePath = modBaseDirectory / layerBasePath;
+      AssetDataManager::get().addSearchPath(i, fullLayerBasePath);
+    }
+    AssetDataManager::get().addSearchPath(sublayers.size(), modBaseDirectory);
+
+    m_reloadedData.fileModificationTime = fs::last_write_time(fs::path(m_reloadedData.openedFilePath));
+    pxr::UsdGeomXformCache xformCache;
+
+    // Store status in reloaded data (we'll update m_owner.m_status on main thread during swap)
+    pxr::VtDictionary layerData = stage->GetRootLayer()->GetCustomLayerData();
+    if (layerData.empty()) {
+      m_reloadedData.status = "Layer Data Missing";
+    } else {
+      const PXR_NS::VtValue* vtExportStatus = layerData.GetValueAtPath(kStatusKey);
+      if (vtExportStatus && !vtExportStatus->IsEmpty()) {
+        m_reloadedData.status = vtExportStatus->Get<std::string>();
+      } else {
+        m_reloadedData.status = "Status Missing";
+      }
+    }
+
+    // Process Materials (no state updates to avoid race conditions)
+
+    pxr::UsdPrim materialRoot = stage->GetPrimAtPath(pxr::SdfPath("/RootNode/Looks"));
+    if (materialRoot.IsValid()) {
+      const auto children = materialRoot.GetFilteredChildren(pxr::UsdPrimIsActive);
+      std::vector<AssetReplacement> placeholder;
+
+      // Use targetReplacements to write to the reloaded data container
+      fast_unordered_cache<uint32_t> pathHashToIndexMap;
+      Args args = {context, xformCache, materialRoot, placeholder, pathHashToIndexMap, m_reloadedData.replacements.get()};
+
+      for (pxr::UsdPrim materialPrim : children) {
+        processMaterial(args, materialPrim);
+        // No state updates to avoid race conditions
+      }
+    }
+
+    // Process Meshes
+
+    fast_unordered_cache<uint32_t> variantCounts;
+    pxr::UsdPrim meshes = stage->GetPrimAtPath(pxr::SdfPath("/RootNode/meshes"));
+    if (meshes.IsValid()) {
+      const auto children = meshes.GetFilteredChildren(pxr::UsdPrimIsActive);
+
+      for (pxr::UsdPrim child : children) {
+        const auto hash = getModelHash(child);
+
+        if (hash != 0) {
+          std::vector<AssetReplacement> replacementVec;
+          fast_unordered_cache<uint32_t> pathHashToIndexMap;
+          Args args = {context, xformCache, child, replacementVec, pathHashToIndexMap, m_reloadedData.replacements.get()};
+
+          if (processReplacement(args)) {
+            m_reloadedData.replacements->set<AssetReplacement::eMesh>(hash, std::move(replacementVec));
+          }
+
+          // Track variant counts
+          auto variantSets = child.GetVariantSets();
+          if (variantSets.GetNames().size() > 0) {
+            variantCounts[hash] = variantSets.GetVariantSet(variantSets.GetNames()[0]).GetVariantNames().size();
+          }
+        }
+        // No state updates to avoid race conditions
+      }
+    }
+
+    // Process Lights
+
+    pxr::UsdPrim lightRoot = stage->GetPrimAtPath(pxr::SdfPath("/RootNode/lights"));
+    if (lightRoot.IsValid()) {
+      const auto children = lightRoot.GetFilteredChildren(pxr::UsdPrimIsActive);
+
+      for (pxr::UsdPrim child : children) {
+        const auto hash = getLightHash(child);
+
+        if (hash != 0) {
+          std::vector<AssetReplacement> replacementVec;
+          fast_unordered_cache<uint32_t> pathHashToIndexMap;
+          Args args = {context, xformCache, child, replacementVec, pathHashToIndexMap, m_reloadedData.replacements.get()};
+
+          if (processReplacement(args)) {
+            m_reloadedData.replacements->set<AssetReplacement::eLight>(hash, std::move(replacementVec));
+          }
+        }
+        // No state updates to avoid race conditions
+      }
+    }
+
+    // Process secret replacements directly into the reloaded data
+    TEMP_parseSecretReplacementVariants(variantCounts, m_reloadedData.replacements.get());
+    
+    // Process secret replacement variants from USD files
+    for (auto& [hash, secretReplacements] : m_reloadedData.replacements->secretReplacements()) {
+      for (auto& secretReplacement : secretReplacements) {
+        const std::string variantStage(modBaseDirectory.string() + secretReplacement.replacementPath);
+
+        double dummy;
+        if (!pxr::ArchGetModificationTime(variantStage.c_str(), &dummy)) {
+          continue; // File doesn't exist
+        }
+
+        pxr::UsdStageRefPtr vStage = pxr::UsdStage::Open(variantStage, pxr::UsdStage::LoadAll);
+        if (vStage) {
+          auto rootPrim = vStage->GetDefaultPrim();
+          auto variantHash = hash + secretReplacement.variantId;
+          std::vector<AssetReplacement> replacementVec;
+          fast_unordered_cache<uint32_t> pathHashToIndexMap;
+          
+          Args args = {context, xformCache, rootPrim, replacementVec, pathHashToIndexMap, m_reloadedData.replacements.get()};
+          
+          if (processReplacement(args)) {
+            m_reloadedData.replacements->set<AssetReplacement::eMesh>(variantHash, std::move(replacementVec));
+          }
+        }
+      }
+    }
+
+    m_reloadedData.success = true;
+    Logger::info("USD mod async reload completed successfully");
+
+  } catch (const std::exception& e) {
+    Logger::err(str::format("Exception during async USD reload: ", e.what()));
+    m_reloadedData.success = false;
+  } catch (...) {
+    Logger::err("Unknown exception during async USD reload");
+    m_reloadedData.success = false;
+  }
+
+  m_asyncReloadPending.store(false);
+  m_asyncReloadComplete.store(true);
+}
+
+bool UsdMod::Impl::trySwapReloadedData() {
+  std::lock_guard<std::mutex> lock(m_asyncReloadMutex);
+
+  if (!m_reloadedData.success) {
+    Logger::warn("Async reload failed, keeping old data");
+    m_asyncReloadComplete.store(false);
+    return false;
+  }
+
+  // Clear old data
+  m_owner.m_replacements->clear();
+  AssetDataManager::get().clearSearchPaths();
+
+  // Swap in the new data
+  m_owner.m_replacements.swap(m_reloadedData.replacements);
+  m_fileModificationTime = m_reloadedData.fileModificationTime;
+  m_openedFilePath = m_reloadedData.openedFilePath;
+  m_owner.m_status = m_reloadedData.status;
+
+  // Set state to loaded
+  m_owner.setState(ProgressState::Loaded);
+
+  // Reset the reload complete flag
+  m_asyncReloadComplete.store(false);
+
+  Logger::info("Async reloaded USD data swapped in successfully");
+  return true;
+}
+
+void UsdMod::Impl::stopAsyncReload() {
+  if (m_asyncReloadThread && m_asyncReloadThread->joinable()) {
+    m_asyncReloadStopRequested.store(true);
+    m_asyncReloadThread->join();
+    m_asyncReloadThread.reset();
+    m_asyncReloadStopRequested.store(false);
+  }
+}
+
+bool UsdMod::Impl::areAsyncOperationsComplete() const {
+  // Check if there are any active async mesh loading threads
+  for (const auto& [cmdList, thread] : m_cmdListSyncThreads) {
+    if (thread.joinable()) {
+      return false; // Still have active threads
+    }
+  }
+  
+  // Check if there are any pending mesh replacements to add
+  if (!m_meshReplacementsToAdd.empty()) {
+    return false;
+  }
+  
+  // Check if async reload is in progress
+  if (m_asyncReloadPending.load()) {
+    return false;
+  }
+  
+  return true;
 }
 
 void UsdMod::Impl::processUSD(const Rc<DxvkContext>& context) {
@@ -1263,7 +1565,10 @@ void UsdMod::Impl::processUSD(const Rc<DxvkContext>& context) {
   m_owner.setState(ProgressState::Loaded);
 }
 
-void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cache<uint32_t>& variantCounts) {
+void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cache<uint32_t>& variantCounts, AssetReplacements* targetReplacements) {
+  // Use provided target or default to m_owner.m_replacements
+  AssetReplacements* replacements = targetReplacements ? targetReplacements : m_owner.m_replacements.get();
+  
   auto lookupCount = [&variantCounts](XXH64_hash_t hash) -> auto {
     // NOTE: If there's no default replacement make sure secret variants are not default.
     return variantCounts.count(hash) ? variantCounts.at(hash) : 1u;
@@ -1271,7 +1576,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
 
   static constexpr XXH64_hash_t kStorageCubeHash = 0xc728cfe75526c741;
   uint32_t numVariants = lookupCount(kStorageCubeHash);
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Ice","",
     0x60ead40e2269b3c5,
     kStorageCubeHash,
@@ -1279,7 +1584,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Lens","",
     0xa8e871f4ebc52eab,
     kStorageCubeHash,
@@ -1287,7 +1592,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Camera","",
     0xd150bdeff3f0299a,
     kStorageCubeHash,
@@ -1295,7 +1600,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Digital Skull","",
     0xb26578451f75c11a,
     kStorageCubeHash,
@@ -1303,7 +1608,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Iso-Wheatly","",
     0xc270f63a956c0c71,
     kStorageCubeHash,
@@ -1311,7 +1616,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Iso-Voyager","",
     0xaaaf0cbd8c8204cd,
     kStorageCubeHash,
@@ -1319,7 +1624,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Iso-Black-Mesa","",
     0x2f9fe4ce23a83bc2,
     kStorageCubeHash,
@@ -1327,7 +1632,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","RTX","",
     0xe361f386c03400f3,
     kStorageCubeHash,
@@ -1335,7 +1640,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Roll Cage","",
     0x0,
     kStorageCubeHash,
@@ -1343,7 +1648,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Health Pack","",
     0x0,
     kStorageCubeHash,
@@ -1351,7 +1656,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kStorageCubeHash, SecretReplacement{
+  replacements->storeObject(kStorageCubeHash, SecretReplacement{
     "Storage Cubes","Space","",
     0x0,
     kStorageCubeHash,
@@ -1362,7 +1667,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
 
   static constexpr XXH64_hash_t kCompanionCubeHash = 0x6ef165bb7e0b8512;
   numVariants = lookupCount(kCompanionCubeHash);
-  m_owner.m_replacements->storeObject(kCompanionCubeHash, SecretReplacement{
+  replacements->storeObject(kCompanionCubeHash, SecretReplacement{
     "Companion Cubes","Pillow","",
     0xc901411d90916a58,
     kCompanionCubeHash,
@@ -1370,7 +1675,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kCompanionCubeHash, SecretReplacement{
+  replacements->storeObject(kCompanionCubeHash, SecretReplacement{
     "Companion Cubes","Ceramic","",
     0x3495c5b9d210daa1,
     kCompanionCubeHash,
@@ -1378,7 +1683,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kCompanionCubeHash, SecretReplacement{
+  replacements->storeObject(kCompanionCubeHash, SecretReplacement{
     "Companion Cubes","Wood","",
     0x5e50cb7c64375acc,
     kCompanionCubeHash,
@@ -1386,7 +1691,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kCompanionCubeHash, SecretReplacement{
+  replacements->storeObject(kCompanionCubeHash, SecretReplacement{
     "Companion Cubes","Digital","",
     0xf2bda31c09fc42f6,
     kCompanionCubeHash,
@@ -1394,7 +1699,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kCompanionCubeHash, SecretReplacement{
+  replacements->storeObject(kCompanionCubeHash, SecretReplacement{
     "Companion Cubes","Steampunk","",
     0x0,
     kCompanionCubeHash,
@@ -1402,7 +1707,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kCompanionCubeHash, SecretReplacement{
+  replacements->storeObject(kCompanionCubeHash, SecretReplacement{
     "Companion Cubes","Arts and Crafts","",
     0x0,
     kCompanionCubeHash,
@@ -1410,7 +1715,7 @@ void UsdMod::Impl::TEMP_parseSecretReplacementVariants(const fast_unordered_cach
     true,
     true,
     numVariants++});
-  m_owner.m_replacements->storeObject(kCompanionCubeHash, SecretReplacement{
+  replacements->storeObject(kCompanionCubeHash, SecretReplacement{
     "Companion Cubes","Cubus","",
     0x0,
     kCompanionCubeHash,
@@ -1584,8 +1889,8 @@ bool UsdMod::Impl::processMesh(const pxr::UsdPrim& prim, Args& args) {
 
     XXH64_hash_t usdOriginHash = getStrongestOpinionatedPathHash(submesh.prim);
     MeshReplacement* childGeometryData;
-    if (!m_owner.m_replacements->getObject(usdOriginHash, childGeometryData)) {
-      MeshReplacement& newReplacement = m_owner.m_replacements->storeObject(usdOriginHash, MeshReplacement(replacement));
+    if (!getReplacements(args)->getObject(usdOriginHash, childGeometryData)) {
+      MeshReplacement& newReplacement = getReplacements(args)->storeObject(usdOriginHash, MeshReplacement(replacement));
       RasterGeometry& newGeomData = newReplacement.data;
 
       const size_t indexDataSize = submesh.GetNumIndices() * sizeof(uint32_t);
@@ -1692,6 +1997,92 @@ struct UsdModTypeInfo final : public ModTypeInfo {
 const ModTypeInfo& UsdMod::getTypeInfo() {
   static UsdModTypeInfo s_typeInfo;
   return s_typeInfo;
+}
+
+std::vector<std::string> UsdMod::getTrackedFiles() const {
+  std::vector<std::string> files;
+  for (const auto& [filePath, modTime] : m_impl->m_trackedFiles) {
+    files.push_back(filePath);
+  }
+  return files;
+}
+
+bool UsdMod::areAsyncOperationsComplete() const {
+  return m_impl->areAsyncOperationsComplete();
+}
+
+std::vector<std::string> UsdMod::getAvailableLayers() const {
+  return m_impl->m_availableLayers;
+}
+
+std::vector<std::string> UsdMod::getEnabledLayers() const {
+  std::vector<std::string> enabled;
+  for (const std::string& layer : m_impl->m_availableLayers) {
+    if (m_impl->m_enabledLayers.find(layer) != m_impl->m_enabledLayers.end()) {
+      enabled.push_back(layer);
+    }
+  }
+  return enabled;
+}
+
+void UsdMod::setEnabledLayers(const std::vector<std::string>& enabledLayers) {
+  m_impl->m_enabledLayers.clear();
+  for (const std::string& layer : enabledLayers) {
+    m_impl->m_enabledLayers.insert(layer);
+  }
+  m_impl->m_layerSelectionChanged = true;
+  Logger::info(str::format("Layer selection updated: ", enabledLayers.size(), " layers enabled"));
+}
+
+bool UsdMod::isLayerEnabled(const std::string& layerPath) const {
+  return m_impl->m_enabledLayers.find(layerPath) != m_impl->m_enabledLayers.end();
+}
+
+void UsdMod::setLayerEnabled(const std::string& layerPath, bool enabled) {
+  // Validate that the layer exists in our available layers
+  auto it = std::find(m_impl->m_availableLayers.begin(), m_impl->m_availableLayers.end(), layerPath);
+  if (it == m_impl->m_availableLayers.end()) {
+    Logger::warn(str::format("Attempted to set state for unknown layer: ", std::filesystem::path(layerPath).filename().string()));
+    return;
+  }
+  
+  if (enabled) {
+    m_impl->m_enabledLayers.insert(layerPath);
+  } else {
+    // Prevent disabling all layers - ensure at least one remains enabled
+    if (m_impl->m_enabledLayers.size() <= 1) {
+      Logger::warn("Cannot disable the last remaining layer - at least one layer must remain enabled");
+      return;
+    }
+    m_impl->m_enabledLayers.erase(layerPath);
+  }
+  
+  m_impl->m_layerSelectionChanged = true;
+  
+  std::filesystem::path layer(layerPath);
+  std::string layerName = layer.filename().string();
+  Logger::info(str::format("Layer '", layerName, "' ", enabled ? "enabled" : "disabled", " (", m_impl->m_enabledLayers.size(), "/", m_impl->m_availableLayers.size(), " layers enabled)"));
+}
+
+std::vector<UsdMod::LayerInfo> UsdMod::getLayerHierarchy() const {
+  std::vector<UsdMod::LayerInfo> hierarchy;
+  
+  for (const std::string& layerPath : m_impl->m_availableLayers) {
+    auto it = m_impl->m_layerHierarchy.find(layerPath);
+    if (it != m_impl->m_layerHierarchy.end()) {
+      const auto& implLayerInfo = it->second;
+      
+      UsdMod::LayerInfo layerInfo;
+      layerInfo.fullPath = implLayerInfo.fullPath;
+      layerInfo.parentPath = implLayerInfo.parentPath;
+      layerInfo.displayName = implLayerInfo.displayName;
+      layerInfo.depth = implLayerInfo.depth;
+      
+      hierarchy.push_back(layerInfo);
+    }
+  }
+  
+  return hierarchy;
 }
 
 } // namespace dxvk
