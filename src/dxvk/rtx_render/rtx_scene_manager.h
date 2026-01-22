@@ -236,6 +236,9 @@ public:
   void triggerUsdCapture() const;
   bool isGameCapturerIdle() const;
 
+  // Manual reload trigger for ImGui
+  void enqueueClearForNextFrame();
+
   using SamplerIndex = uint32_t;
 
   void trackTexture(const TextureRef& inputTexture,
