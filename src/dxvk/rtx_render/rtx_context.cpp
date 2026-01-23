@@ -674,6 +674,9 @@ namespace dxvk {
         }
         m_previousUpscaler = m_currentUpscaler;
 
+        // Apply RCAS sharpening after upscaling
+        dispatchRCAS(rtOutput);
+
         RtxDustParticles& dust = m_common->metaDustParticles();
         dust.simulateAndDraw(this, m_state, rtOutput);
 
@@ -1637,6 +1640,29 @@ namespace dxvk {
     setFramePassStage(RtxFramePassStage::XeSS);
     DxvkXeSS& xess = m_common->metaXeSS();
     xess.dispatch(this, m_execBarriers, rtOutput, m_resetHistory);
+  }
+
+  void RtxContext::dispatchRCAS(const Resources::RaytracingOutput& rtOutput) {
+    ScopedGpuProfileZone(this, "RCAS");
+    setFramePassStage(RtxFramePassStage::PostFX);
+
+    DxvkRCAS& rcas = m_common->metaRCAS();
+    if (!rcas.isEnabled()) {
+      return;
+    }
+
+    // RCAS needs separate input and output textures
+    // We'll read from finalOutput and write back to it after processing through a temp buffer
+    // Use the bloom mip chain's first mip as temporary storage since bloom runs after RCAS
+    const Resources::Resource& inputBuffer = rtOutput.m_finalOutput.resource(Resources::AccessType::Read);
+    const Resources::Resource& outputBuffer = rtOutput.m_finalOutput.resource(Resources::AccessType::Write);
+    
+    // Apply RCAS in-place by reading input, writing to the same output
+    // The shader samples neighbors before writing, so this should be safe with proper barriers
+    rcas.dispatch(this,
+      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
+      inputBuffer,
+      outputBuffer);
   }
 
   void RtxContext::dispatchTemporalAA(const Resources::RaytracingOutput& rtOutput) {

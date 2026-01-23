@@ -1,0 +1,72 @@
+/*
+* Copyright (c) 2021-2025, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+
+// RCAS (Robust Contrast Adaptive Sharpening) implementation
+// Based on AMD FidelityFX FSR 1.0 RCAS
+
+#ifndef RCAS_SLANGH
+#define RCAS_SLANGH
+
+// Luma weights for RCAS (2x standard weights)
+static const float3 RCAS_LUMA_WEIGHTS = float3(0.5, 1.0, 0.5);
+
+// Maximum sharpening limit before unnatural results
+static const float RCAS_LIMIT = 0.1875;
+
+// Calculate luma from RGB color using weighted sum
+float getRCASLuma(float3 rgb) {
+  return dot(rgb, RCAS_LUMA_WEIGHTS);
+}
+
+// RCAS sharpening algorithm
+// Uses a 5-tap cross pattern to adaptively sharpen
+float3 applyRCAS(float3 e, float3 b, float3 d, float3 f, float3 h, float sharpness) {
+  // Get lumas (pre-multiplied by 2 via RCAS_LUMA_WEIGHTS)
+  float bL = getRCASLuma(b);
+  float dL = getRCASLuma(d);
+  float eL = getRCASLuma(e);
+  float fL = getRCASLuma(f);
+  float hL = getRCASLuma(h);
+  
+  // Min and max of cross pattern
+  float3 minRGB = min(min(b, d), min(f, h));
+  float3 maxRGB = max(max(b, d), max(f, h));
+  
+  // Limiters to prevent clipping
+  // These solve for maximum sharpness possible before clipping
+  float3 hitMin = minRGB * rcp(4.0 * maxRGB);
+  float3 hitMax = (1.0 - maxRGB) * rcp(4.0 * minRGB - 4.0);
+  float3 lobeRGB = max(-hitMin, hitMax);
+  
+  // Select the minimum lobe weight across channels
+  // Apply RCAS_LIMIT to prevent unnatural over-sharpening
+  float lobe = max(-RCAS_LIMIT, min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.0)) * sharpness;
+  
+  // Resolve output color
+  // Formula: output = (sum_of_neighbors * lobe + center) / (4 * lobe + 1)
+  float rcpL = rcp(4.0 * lobe + 1.0);
+  float3 output = ((b + d + f + h) * lobe + e) * rcpL;
+  
+  return output;
+}
+
+#endif // RCAS_SLANGH

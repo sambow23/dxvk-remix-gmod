@@ -195,6 +195,7 @@ namespace dxvk {
     void dispatchNIS(const Resources::RaytracingOutput& rtOutput);
     void dispatchXeSS(const Resources::RaytracingOutput& rtOutput);
     void dispatchTemporalAA(const Resources::RaytracingOutput& rtOutput);
+    void dispatchRCAS(const Resources::RaytracingOutput& rtOutput);
     void dispatchToneMapping(const Resources::RaytracingOutput& rtOutput, bool performSRGBConversion);
     void dispatchBloom(const Resources::RaytracingOutput& rtOutput);
     void dispatchPostFx(Resources::RaytracingOutput& rtOutput);
@@ -267,6 +268,8 @@ namespace dxvk {
     } m_objectPickingReadback {};
 
     std::vector<DrawCallState> m_delayedRayTracedSky;
+
+    Resources::AliasedResource m_rcasTemp;
 
 #ifdef REMIX_DEVELOPMENT
     void queryAvailableResourceAliasing();

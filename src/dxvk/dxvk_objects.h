@@ -52,6 +52,7 @@
 #include "rtx_render/rtx_geometry_utils.h"
 #include "rtx_render/rtx_image_utils.h"
 #include "rtx_render/rtx_postFx.h"
+#include "rtx_render/rtx_rcas.h"
 #include "rtx_render/rtx_initializer.h"
 #include "rtx_render/rtx_scene_manager.h"
 #include "rtx_render/rtx_reflex.h"
@@ -262,6 +263,10 @@ namespace dxvk {
     DxvkPostFx& metaPostFx() {
       return m_postFx.get();
     }
+
+    DxvkRCAS& metaRCAS() {
+      return m_rcas.get();
+    }
     
     RtxReflex& metaReflex() {
       return m_reflex.get(m_device);
@@ -388,6 +393,7 @@ namespace dxvk {
     Active<RtxGeometryUtils>                m_geometryUtils;
     Active<RtxImageUtils>                   m_imageUtils;
     Active<DxvkPostFx>                      m_postFx;
+    Active<DxvkRCAS>                        m_rcas;
     Lazy<RtxReflex>                         m_reflex;
     Lazy<RtxDustParticles>                  m_dustParticles;
     Lazy<RtxParticleSystemManager>          m_particleSystem;

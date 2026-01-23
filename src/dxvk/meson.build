@@ -302,6 +302,8 @@ dxvk_src = files([
   'rtx_render/rtx_pathtracer_integrate_indirect.h',
   'rtx_render/rtx_postFx.cpp',
   'rtx_render/rtx_postFx.h',
+  'rtx_render/rtx_rcas.cpp',
+  'rtx_render/rtx_rcas.h',
   'rtx_render/rtx_ray_portal_manager.cpp',
   'rtx_render/rtx_ray_portal_manager.h',
   'rtx_render/rtx_ray_reconstruction.cpp',

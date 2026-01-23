@@ -4151,6 +4151,9 @@ namespace dxvk {
           common->metaTAA().showImguiSettings();
       }
 
+      if (RemixGui::CollapsingHeader("RCAS Sharpening", collapsingHeaderClosedFlags))
+        common->metaRCAS().showImguiSettings();
+
       if (RemixGui::CollapsingHeader("Bloom", collapsingHeaderClosedFlags))
         common->metaBloom().showImguiSettings();
 
