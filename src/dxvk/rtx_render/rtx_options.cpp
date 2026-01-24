@@ -593,8 +593,14 @@ namespace dxvk {
       preferredGBufferRaytraceMode = DxvkPathtracerGbuffer::RaytraceMode::RayQuery;
       preferredIntegrateDirectRaytraceMode = DxvkPathtracerIntegrateDirect::RaytraceMode::RayQuery;
 
-      if (deviceID == 0x7550) {
-        // RDNA4 specific settings
+      if (deviceID == 0x7550 && driverID == VK_DRIVER_ID_MESA_RADV) {
+        // RDNA4 specific settings when using RADV driver
+        Logger::info("RDNA4 architecture with RADV driver detected (device ID 0x7550), setting all raytrace modes to TraceRay (RGS)");
+        preferredGBufferRaytraceMode = DxvkPathtracerGbuffer::RaytraceMode::TraceRay;
+        preferredIntegrateDirectRaytraceMode = DxvkPathtracerIntegrateDirect::RaytraceMode::RayQueryRayGen;
+        preferredIntegrateIndirectRaytraceMode = DxvkPathtracerIntegrateIndirect::RaytraceMode::TraceRay;
+      } else if (deviceID == 0x7550) {
+        // RDNA4 with other drivers (fallback)
         Logger::info("RDNA4 architecture detected (device ID 0x7550), setting default raytrace modes to Trace Ray (Indirect Integrate) and Ray Query (GBuffer, Direct Integrate)");
         preferredIntegrateIndirectRaytraceMode = DxvkPathtracerIntegrateIndirect::RaytraceMode::TraceRay;
       } else if (vendorID == static_cast<uint32_t>(DxvkGpuVendor::Nvidia)) {
