@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ main, 'release/**' ]
+    branches: [ gmod-ex ]
   pull_request:
-    branches: [ main, 'release/**' ]
+    branches: [ gmod-ex ]
 
 jobs:
   build-windows:
@@ -13,10 +13,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - build-flavour: debug
-            output-subdir: _Comp64Debug
-          - build-flavour: debugoptimized
-            output-subdir: _Comp64DebugOptimized
           - build-flavour: release
             output-subdir: _Comp64Release
 
@@ -44,48 +40,107 @@ jobs:
     - name: Copy readme
       run: copy artifacts_readme.txt _output
     
-    - name: Upload x64 binaries
+    - name: Upload DXVK binaries
       uses: actions/upload-artifact@v4
       with:
-        name: rtx-remix-for-x64-games-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-${{matrix.build-flavour}}
+        name: dxvk-remix-gmod-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-${{matrix.build-flavour}}
         path: |
           _output\*.dll
           _output\*.pdb
           _output\*.txt
           _output\usd\*
 
-    - name: Move DXVK
-      shell: pwsh
-      run: |
-        mkdir _output\.trex
-        Move-Item -Path _output\*.dll -Destination _output\.trex\
-        Move-Item -Path _output\*.pdb -Destination _output\.trex\
-        Move-Item -Path _output\usd -Destination _output\.trex\usd
+  create-nightly-release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/gmod-ex'
+    permissions:
+      contents: write
     
-    - name: Build Bridge
-      shell: pwsh
-      run: |
-        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-        pushd bridge
-        . .\build_bridge_${{matrix.build-flavour}}.bat
-        popd
-
-    - name: Copy Bridge
-      shell: pwsh
-      run: |
-        Copy-Item -Recurse -Path bridge\_output\* -Destination _output\ -Force
-
-    - name: Upload x86 binaries
-      uses: actions/upload-artifact@v4
+    steps:
+    - name: Setup variables
+      uses: actions/github-script@v7
       with:
-        name: rtx-remix-for-x86-games-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-${{matrix.build-flavour}}
-        include-hidden-files: true
-        path: |
-          _output\*.dll
-          _output\*.exe
-          _output\*.pdb
-          _output\*.txt
-          _output\.trex\*.dll
-          _output\.trex\*.exe
-          _output\.trex\*.pdb
-          _output\.trex\usd\*
+        script: core.exportVariable('GITHUB_SHA_SHORT', context.sha.substring(0, 7))
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Package nightly release
+      run: |
+        mkdir -p nightly-release/.trex
+        
+        # Copy release build DLLs and USD folder to .trex folder
+        # The launcher looks for .trex or bin folders and copies their contents to bin/win64
+        if [ -d "artifacts/dxvk-remix-gmod-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-release" ]; then
+          cp artifacts/dxvk-remix-gmod-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-release/*.dll nightly-release/.trex/ || true
+          cp artifacts/dxvk-remix-gmod-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-release/*.txt nightly-release/ || true
+          if [ -d "artifacts/dxvk-remix-gmod-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-release/usd" ]; then
+            cp -r artifacts/dxvk-remix-gmod-${{env.GITHUB_SHA_SHORT}}-${{github.run_number}}-release/usd nightly-release/.trex/
+          fi
+        fi
+        
+        # Create zip
+        cd nightly-release
+        zip -r ../dxvk-remix-gmod-nightly.zip .
+        cd ..
+    
+    - name: Delete existing nightly release and tag
+      uses: actions/github-script@v7
+      continue-on-error: true
+      with:
+        script: |
+          const { owner, repo } = context.repo;
+          
+          // Delete release first
+          try {
+            const release = await github.rest.repos.getReleaseByTag({
+              owner,
+              repo,
+              tag: 'nightly'
+            });
+            await github.rest.repos.deleteRelease({
+              owner,
+              repo,
+              release_id: release.data.id
+            });
+            console.log('Deleted existing nightly release');
+          } catch (error) {
+            console.log('No existing nightly release to delete:', error.message);
+          }
+          
+          // Wait a moment for GitHub to process
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Delete tag
+          try {
+            await github.rest.git.deleteRef({
+              owner,
+              repo,
+              ref: 'tags/nightly'
+            });
+            console.log('Deleted existing nightly tag');
+          } catch (error) {
+            console.log('No existing nightly tag to delete:', error.message);
+          }
+          
+          // Wait again to ensure deletion is complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    - name: Create nightly release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: nightly
+        name: "${{env.GITHUB_SHA_SHORT}} - Nightly"
+        body: |
+          Automated nightly build from commit ${{ github.sha }}
+          
+          **Commit:** ${{ github.event.head_commit.message }}
+          **Branch:** gmod-ex
+          **Build Date:** ${{ github.event.head_commit.timestamp }}
+          
+          ⚠️ This is an automated pre-release build and may be unstable.
+        prerelease: true
+        files: dxvk-remix-gmod-nightly.zip
