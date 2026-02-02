@@ -311,8 +311,8 @@ namespace dxvk {
   }
 
   void GameCapturer::captureLights() {
-    auto captureLight = [&](const RtLight& rtLight) {
-      assert(rtLight.getInitialHash() != 0);
+    auto captureLight = [&](const RtLight& rtLight, bool requireInitialHash) {
+      assert(!requireInitialHash || rtLight.getInitialHash() != 0);
       switch (rtLight.getType()) {
       default:
       case RtLightType::Sphere:
@@ -340,10 +340,15 @@ namespace dxvk {
     };
 
     for (auto&& pair : m_sceneManager.getLightManager().getLightTable()) {
-      captureLight(pair.second);
+      captureLight(pair.second, true);
     }
     for (auto&& pair : m_sceneManager.getLightManager().getExternallyTrackedLightTable()) {
-      captureLight(pair.second);
+      captureLight(pair.second, true);
+    }
+
+    // Capture Remix API external lights
+    for (auto&& pair : m_sceneManager.getLightManager().getExternalLights()) {
+      captureLight(pair.second, false);
     }
   }
 
