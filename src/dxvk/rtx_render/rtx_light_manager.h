@@ -71,6 +71,8 @@ public:
   void showImguiDebugVisualization() const;
 
   const std::unordered_map<XXH64_hash_t, RtLight>& getLightTable() const { return m_lights; }
+  const std::unordered_map<remixapi_LightHandle, RtLight>& getExternalLights() const { return m_externalLights; }
+  const std::unordered_map<remixapi_LightHandle, DomeLight>& getExternalDomeLights() const { return m_externalDomeLights; }
   const Rc<DxvkBuffer> getLightBuffer() const { return m_lightBuffer; }
   const Rc<DxvkBuffer> getPreviousLightBuffer() const { return m_previousLightBuffer.ptr() ? m_previousLightBuffer : m_lightBuffer; }
   const Rc<DxvkBuffer> getLightMappingBuffer() const { return m_lightMappingBuffer; }

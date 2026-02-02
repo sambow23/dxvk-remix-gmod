@@ -301,9 +301,39 @@ namespace dxvk {
   }
 
   void GameCapturer::captureLights() {
+    // Capture game lights
     for (auto&& pair : m_sceneManager.getLightManager().getLightTable()) {
       const RtLight& rtLight = pair.second;
       assert(rtLight.getInitialHash() != 0);
+      switch (rtLight.getType()) {
+      default:
+      case RtLightType::Sphere:
+        captureSphereLight(rtLight.getSphereLight());
+        break;
+      case RtLightType::Rect:
+        // Todo: Handle Rect lights
+        Logger::err("[GameCapturer][" + m_pCap->idStr + "] RectLight not implemented");
+        assert(false);
+        break;
+      case RtLightType::Disk:
+        // Todo: Handle Disk lights
+        Logger::err("[GameCapturer][" + m_pCap->idStr + "] DiskLight not implemented");
+        assert(false);
+        break;
+      case RtLightType::Cylinder:
+        // Todo: Handle Cylinder lights
+        Logger::err("[GameCapturer][" + m_pCap->idStr + "] CylinderLight not implemented");
+        assert(false);
+        break;
+      case RtLightType::Distant:
+        captureDistantLight(rtLight.getDistantLight());
+        break;
+      }
+    }
+
+    // Capture Remix API external lights
+    for (auto&& pair : m_sceneManager.getLightManager().getExternalLights()) {
+      const RtLight& rtLight = pair.second;
       switch (rtLight.getType()) {
       default:
       case RtLightType::Sphere:
