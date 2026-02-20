@@ -1022,12 +1022,21 @@ namespace dxvk {
         if (line[n] == '"') {
           insideString = !insideString;
           n++;
-        } else
+        } else {
+          // Stop at inline comments (# or ;) unless inside a quoted string
+          if (!insideString && (line[n] == '#' || line[n] == ';'))
+            break;
           value << line[n++];
+        }
       }
       
-      if (ctx.active)
-        config.setOption(key.str(), value.str());
+      if (ctx.active) {
+        // Trim trailing whitespace from the value
+        std::string valueStr = value.str();
+        while (!valueStr.empty() && isWhitespace(valueStr.back()))
+          valueStr.pop_back();
+        config.setOption(key.str(), valueStr);
+      }
     }
   }
 

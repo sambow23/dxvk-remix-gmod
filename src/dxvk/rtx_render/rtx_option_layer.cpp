@@ -632,15 +632,17 @@ namespace dxvk {
 
     // ============================================================================
     // Create RtxOption layers from config files
-    // Each layer loads its own config file. Layers are created in priority order.
+    // Each layer loads its own config file.
     // 
     // Priority order (lowest to highest - later layers override earlier):
     //   1. dxvk.conf - User's DXVK settings (lowest config file priority)
-    //   2. config.cpp - Per-application defaults built into the code (overrides dxvk.conf)
-    //   3. rtx.conf - RTX-specific user settings (overrides config.cpp)
-    //   4. baseGameMod rtx.conf - Mod-specific RTX settings (if present)
-    //   5. quality/environment - Programmatic layers (no config files)
-    //   6. user.conf - User settings (highest priority)
+    //   2. config.cpp - Per-application defaults built into the code
+    //   3. environment - Environment variable overrides
+    //   4. derived - Programmatic/code-driven changes
+    //   5. user.conf - User settings
+    //   6. quality - Quality preset overrides
+    //   7. baseGameMod rtx.conf - Mod-specific RTX settings (if present)
+    //   8. rtx.conf - Remix Config (highest priority - always wins)
     // ============================================================================
 
     // 1. dxvk.conf layer(s) - may have multiple via DXVK_CONFIG_FILE env var (lowest priority)
@@ -658,7 +660,7 @@ namespace dxvk {
     Config appConf = Config::getAppConfig(appExePath);
     addLayerAndMerge(RtxOptionManager::acquireLayer("", kRtxOptionLayerConfigCppKey, 1.0f, 0.1f, true, &appConf));
 
-    // 3. rtx.conf layer(s) - may have multiple via DXVK_RTX_CONFIG_FILE env var (overrides config.cpp)
+    // 3. rtx.conf layer(s) - may have multiple via DXVK_RTX_CONFIG_FILE env var (highest priority)
     // The last layer has highest priority and is stored as s_rtxConfLayer
     auto rtxLayers = createLayersFromEnvVar(kRtxOptionRtxConfEnvVar, kRtxOptionRtxConfFileName, kRtxOptionLayerRtxConfKey);
     for (const auto* layer : rtxLayers) {
@@ -668,7 +670,7 @@ namespace dxvk {
       s_rtxConfLayer = rtxLayers.back();
     }
 
-    // 4. baseGameMod rtx.conf layer - only if mod path is detected (overrides rtx.conf)
+    // 4. baseGameMod rtx.conf layer - only if mod path is detected
     // s_mergedConfig now contains dxvk.conf + config.cpp + rtx.conf settings
     const std::string baseGameModPath = ModManager::getBaseGameModPath(
       s_mergedConfig.getOption<std::string>("rtx.baseGameModRegex", "", ""),
@@ -682,12 +684,12 @@ namespace dxvk {
 
     s_mergedConfig.logOptions("Effective Combined Config for DXVK Options");
 
-    // 5. Programmatic layers without config files (not included in merged config)
+    // 5. Programmatic layers without config files
     s_derivedLayer = RtxOptionManager::acquireLayer("", kRtxOptionLayerDerivedKey, 1.0f, 0.1f, true, nullptr);
     s_environmentLayer = RtxOptionManager::acquireLayer("", kRtxOptionLayerEnvironmentKey, 1.0f, 0.1f, true, nullptr);
     s_qualityLayer = RtxOptionManager::acquireLayer("", kRtxOptionLayerQualityKey, 1.0f, 0.1f, true, nullptr);
 
-    // 6. user.conf (user settings layer) - highest priority for end-user changes (not included in merged config)
+    // 6. user.conf (user settings layer)
     // User layer is designated for UserSetting options only; other options are miscategorized here.
     s_userLayer = RtxOptionManager::acquireLayer(kRtxOptionUserConfFileName, kRtxOptionLayerUserKey, 1.0f, 0.1f, true, nullptr);
     if (s_userLayer) {
