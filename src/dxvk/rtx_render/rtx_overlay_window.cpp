@@ -508,7 +508,7 @@ void GameOverlay::windowThreadMain() {
   // Keyboard
   rid[1].usUsagePage = 0x01;
   rid[1].usUsage = 0x06;
-  rid[1].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
+  rid[1].dwFlags = RIDEV_INPUTSINK;
   rid[1].hwndTarget = m_hwnd;
 
   if (!RegisterRawInputDevices(rid, 2, sizeof(RAWINPUTDEVICE))) {
