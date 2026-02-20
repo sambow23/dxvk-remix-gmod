@@ -108,7 +108,7 @@ namespace dxvk {
 
     RemixGui::Checkbox("Tonemapping Enabled", &tonemappingEnabledObject());
     if (tonemappingEnabled()) {
-      RemixGui::Indent();
+      ImGui::Indent();
       
       // Tone mapping operator selection
       const char* operators[] = { "Standard", "ACES", "AgX" };
@@ -121,7 +121,7 @@ namespace dxvk {
       // AgX-specific controls (only show when AgX is selected)
       if (useAgX()) {
         ImGui::Indent();
-        RemixGui::Text("AgX Controls:");
+        ImGui::Text("AgX Controls:");
         RemixGui::Separator();
         
         // Basic controls
@@ -138,7 +138,7 @@ namespace dxvk {
         RemixGui::Separator();
         
         // Advanced controls
-        RemixGui::Text("Advanced:");
+        ImGui::Text("Advanced:");
         RemixGui::DragFloat("AgX Contrast", &agxContrastObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         RemixGui::DragFloat("AgX Slope", &agxSlopeObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         RemixGui::DragFloat("AgX Power", &agxPowerObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);

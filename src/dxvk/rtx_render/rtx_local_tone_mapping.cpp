@@ -144,8 +144,8 @@ namespace dxvk {
     
     // AgX-specific controls (only show when AgX is selected)
     if (useAgX()) {
-      RemixGui::Indent();
-      RemixGui::Text("AgX Controls:");
+      ImGui::Indent();
+      ImGui::Text("AgX Controls:");
       RemixGui::Separator();
       
       // Basic controls
@@ -162,12 +162,12 @@ namespace dxvk {
       RemixGui::Separator();
       
       // Advanced controls
-      RemixGui::Text("Advanced:");
+      ImGui::Text("Advanced:");
       RemixGui::DragFloat("AgX Contrast", &agxContrastObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       RemixGui::DragFloat("AgX Slope", &agxSlopeObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       RemixGui::DragFloat("AgX Power", &agxPowerObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       
-      RemixGui::Unindent();
+      ImGui::Unindent();
     }
     
     RemixGui::DragFloat("Exposure Level", &exposureObject(), 0.01f, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);

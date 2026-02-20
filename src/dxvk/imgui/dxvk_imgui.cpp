@@ -3088,16 +3088,16 @@ namespace dxvk {
         
         // Sky mode selection
         skyModeCombo.getKey(&RtxOptions::skyModeObject());
-        ImGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nPhysical Atmosphere: Hillaire atmospheric scattering");
+        RemixGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nPhysical Atmosphere: Hillaire atmospheric scattering");
         
         if (RtxOptions::skyMode() == SkyMode::SkyboxRasterization) {
           RemixGui::DragFloat("Sky Brightness", &RtxOptions::skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
         } else {
           // Atmosphere Presets
           RemixGui::Separator();
-          RemixGui::Text("Atmosphere Presets:");
+          ImGui::Text("Atmosphere Presets:");
           
-          if (RemixGui::Button("Earth", ImVec2(120, 0))) {
+          if (ImGui::Button("Earth", ImVec2(120, 0))) {
             // Earth-like atmosphere based on Hillaire paper
             RtxOptions::sunIlluminanceObject().setImmediately(Vector3(20.0f, 20.0f, 20.0f));
             RtxOptions::planetRadiusObject().setImmediately(6371.0f);  // Earth's actual radius
@@ -3111,8 +3111,8 @@ namespace dxvk {
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Physically accurate Earth atmosphere parameters from Hillaire paper");
           
-          RemixGui::SameLine();
-          if (RemixGui::Button("Mars", ImVec2(120, 0))) {
+          ImGui::SameLine();
+          if (ImGui::Button("Mars", ImVec2(120, 0))) {
             // Mars atmosphere (thin, dusty, red-shifted)
             RtxOptions::sunIlluminanceObject().setImmediately(Vector3(15.0f, 12.0f, 10.0f));  // Weaker, reddish sun
             RtxOptions::planetRadiusObject().setImmediately(3389.5f);  // Mars radius
@@ -3126,8 +3126,8 @@ namespace dxvk {
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Mars-like atmosphere: thin, dusty, yellowish sky with blue sunsets");
           
-          RemixGui::SameLine();
-          if (RemixGui::Button("Clear Sky", ImVec2(120, 0))) {
+          ImGui::SameLine();
+          if (ImGui::Button("Clear Sky", ImVec2(120, 0))) {
             // Very clear, minimal scattering (high altitude/clean air)
             RtxOptions::sunIlluminanceObject().setImmediately(Vector3(25.0f, 25.0f, 25.0f));
             RtxOptions::planetRadiusObject().setImmediately(6371.0f);
@@ -3141,7 +3141,7 @@ namespace dxvk {
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Crystal clear atmosphere with minimal haze");
           
-          if (RemixGui::Button("Polluted/Hazy", ImVec2(120, 0))) {
+          if (ImGui::Button("Polluted/Hazy", ImVec2(120, 0))) {
             // Heavy pollution/haze (smoggy city)
             RtxOptions::sunIlluminanceObject().setImmediately(Vector3(18.0f, 18.0f, 18.0f));
             RtxOptions::planetRadiusObject().setImmediately(6371.0f);
@@ -3155,8 +3155,8 @@ namespace dxvk {
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Heavy atmospheric haze with strong light scattering");
           
-          RemixGui::SameLine();
-          if (RemixGui::Button("Alien World", ImVec2(120, 0))) {
+          ImGui::SameLine();
+          if (ImGui::Button("Alien World", ImVec2(120, 0))) {
             // Exotic alien atmosphere (greenish tint)
             RtxOptions::sunIlluminanceObject().setImmediately(Vector3(15.0f, 22.0f, 18.0f));  // Green bias
             RtxOptions::planetRadiusObject().setImmediately(5000.0f);
@@ -3170,8 +3170,8 @@ namespace dxvk {
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Fictional alien atmosphere with green-tinted scattering");
           
-          RemixGui::SameLine();
-          if (RemixGui::Button("Desert Planet", ImVec2(120, 0))) {
+          ImGui::SameLine();
+          if (ImGui::Button("Desert Planet", ImVec2(120, 0))) {
             // Arid desert world (Dune-like)
             RtxOptions::sunIlluminanceObject().setImmediately(Vector3(28.0f, 24.0f, 18.0f));  // Warm sun
             RtxOptions::planetRadiusObject().setImmediately(6000.0f);
@@ -3188,7 +3188,7 @@ namespace dxvk {
           RemixGui::Separator();
           
           // Physical Atmosphere controls (Blender Style)
-          if (RemixGui::TreeNode("Atmosphere Parameters")) {
+          if (ImGui::TreeNode("Atmosphere Parameters")) {
             
             RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f°", sliderFlags);
             RemixGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
@@ -3214,7 +3214,7 @@ namespace dxvk {
             RemixGui::DragFloat("Ozone", &RtxOptions::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
             RemixGui::SetTooltipToLastWidgetOnHover("Density of ozone layer");
             
-            if (RemixGui::TreeNode("Advanced")) {
+            if (ImGui::TreeNode("Advanced")) {
               RemixGui::DragFloat("Planet Radius", &RtxOptions::planetRadiusObject(), 10.0f, 1000.0f, 10000.0f, "%.0f km", sliderFlags);
               RemixGui::DragFloat("Atmosphere Thickness", &RtxOptions::atmosphereThicknessObject(), 1.0f, 10.0f, 500.0f, "%.0f km", sliderFlags);
               RemixGui::DragFloat("Mie Anisotropy", &RtxOptions::mieAnisotropyObject(), 0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
@@ -3226,10 +3226,10 @@ namespace dxvk {
               RemixGui::DragFloat("Ozone Layer Altitude", &RtxOptions::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
               RemixGui::DragFloat("Ozone Layer Width", &RtxOptions::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
               
-              RemixGui::TreePop();
+              ImGui::TreePop();
             }
             
-            RemixGui::TreePop();
+            ImGui::TreePop();
           }
         }
         

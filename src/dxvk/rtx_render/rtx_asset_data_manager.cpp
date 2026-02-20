@@ -567,7 +567,7 @@ namespace dxvk {
       m_packageSets[priority].emplace_back(normalized, std::move(packageSet));
     }
 
-    FileWatch::get().installDir(searchPath.c_str());
+    FileWatch::get().installDir(normalized.c_str());
   }
 
   Rc<AssetData> AssetDataManager::findAsset(const std::string& filename, bool allowOnlyPartialDdsLoader) {

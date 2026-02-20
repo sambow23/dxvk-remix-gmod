@@ -56,10 +56,10 @@ namespace dxvk {
   }
 
   void DxvkRCAS::showImguiSettings() {
-    ImGui::Checkbox("RCAS Sharpening Enabled", &enableObject());
+    RemixGui::Checkbox("RCAS Sharpening Enabled", &enableObject());
     if (enable()) {
       ImGui::Indent();
-      ImGui::DragFloat("Sharpness", &sharpnessObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Sharpness", &sharpnessObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::Unindent();
     }
   }

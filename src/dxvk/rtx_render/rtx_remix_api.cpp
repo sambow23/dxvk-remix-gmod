@@ -762,7 +762,7 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE)          { result.set(InstanceCategories::LegacyEmissive); }
       // Note: Occluder category is not exposed through the Remix API as it's primarily for Source engine NODRAW materials
       
-      static_assert((int)InstanceCategories::Count == 26, "Instance categories changed, please update Remix SDK");
+      static_assert((int)InstanceCategories::Count == 27, "Instance categories changed, please update Remix SDK");
       return result;
     }
 
@@ -1455,28 +1455,31 @@ namespace {
     }
 
     std::string strCategory = std::string { textureCategory };
-    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
-    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
-    auto found = globalRtxOptions.find(optionHash);
-    if (found == globalRtxOptions.end()) {
+    auto* option = dxvk::RtxOptionImpl::getOptionByFullName(strCategory);
+    if (!option) {
       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     }
 
-    if (found->second->type != dxvk::OptionType::HashSet) {
+    if (option->getType() != dxvk::OptionType::HashSet) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
 
-    auto& textureSet = *found->second->getGenericValue(dxvk::RtxOptionImpl::ValueType::PendingValue).hashSet;
-
     const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
-    const auto textureIterator = textureSet.find(h);
 
-    if (textureIterator == textureSet.end()) {
-      textureSet.insert(h);
-      found->second->markDirty();
-    } else {
+    // Use SetConfigVariable-style approach: read the current value as string,
+    // append the new hash, and write it back via readOption on the user layer.
+    // First check if already present in resolved value.
+    const auto& resolvedValue = option->getResolvedValue();
+    if (resolvedValue.hashSet && resolvedValue.hashSet->count(h) > 0) {
       return REMIXAPI_ERROR_CODE_SUCCESS; // already exists
     }
+
+    // Format the hash and use readOption to add it to the user layer
+    char hashBuf[32];
+    snprintf(hashBuf, sizeof(hashBuf), "0x%016llX", (unsigned long long)h);
+    dxvk::Config newSetting;
+    newSetting.setOptionMove(std::string(strCategory), std::string(hashBuf));
+    option->readOption(newSetting, dxvk::RtxOptionLayer::getUserLayer());
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
@@ -1491,28 +1494,29 @@ namespace {
     }
 
     std::string strCategory = std::string { textureCategory };
-    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
-    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
-    auto found = globalRtxOptions.find(optionHash);
-    if (found == globalRtxOptions.end()) {
+    auto* option = dxvk::RtxOptionImpl::getOptionByFullName(strCategory);
+    if (!option) {
       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     }
 
-    if (found->second->type != dxvk::OptionType::HashSet) {
+    if (option->getType() != dxvk::OptionType::HashSet) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
 
-    auto& textureSet = *found->second->getGenericValue(dxvk::RtxOptionImpl::ValueType::PendingValue).hashSet;
-
     const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
-    const auto textureIterator = textureSet.find(h);
 
-    if (textureIterator != textureSet.end()) {
-       textureSet.erase(textureIterator);
-       found->second->markDirty();
-    } else {
+    // Check if it exists in the resolved value
+    const auto& resolvedValue = option->getResolvedValue();
+    if (!resolvedValue.hashSet || resolvedValue.hashSet->count(h) == 0) {
       return REMIXAPI_ERROR_CODE_SUCCESS; // does not exist
     }
+
+    // Format as negative entry (removal) and use readOption to add to user layer
+    char hashBuf[32];
+    snprintf(hashBuf, sizeof(hashBuf), "-0x%016llX", (unsigned long long)h);
+    dxvk::Config newSetting;
+    newSetting.setOptionMove(std::string(strCategory), std::string(hashBuf));
+    option->readOption(newSetting, dxvk::RtxOptionLayer::getUserLayer());
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
@@ -2538,13 +2542,12 @@ extern "C"
       interf.RegisterCallbacks = remixapi_RegisterCallbacks;
       interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
       interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
-      interf.CreateMeshBatched = remixapi_CreateMeshBatched;
       interf.GetUIState = remixapi_GetUIState;
       interf.SetUIState = remixapi_SetUIState;
       interf.CreateTexture = remixapi_CreateTexture;
       interf.DestroyTexture = remixapi_DestroyTexture;
     }
-    static_assert(sizeof(interf) == 264, "Add/remove function registration");
+    static_assert(sizeof(interf) == 256, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
