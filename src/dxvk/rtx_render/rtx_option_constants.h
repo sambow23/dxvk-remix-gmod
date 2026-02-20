@@ -149,18 +149,18 @@ namespace dxvk {
   // System Layer Keys
   // ============================================================================
   // Priority determines override order (higher value overrides lower value)
-  // System layers defined here should be outside the ranged defined by kMinDynamicRtxOptionLayerPriority and kMaxDynamicRtxOptionLayerPriority.
-  // Currently that means 0-99, or 0xFFFFFFFF - 100 to 0xFFFFFFFF.
+  // System layers defined here should be outside the range defined by kMinDynamicRtxOptionLayerPriority and kMaxDynamicRtxOptionLayerPriority.
+  // Currently that means 0-99, or above kMaxDynamicRtxOptionLayerPriority (e.g. 0xFFFFFFFE, 0xFFFFFFFF).
   
   static constexpr RtxOptionLayerKey kRtxOptionLayerDefaultKey     = { 0,          "Default Values" };
   static constexpr RtxOptionLayerKey kRtxOptionLayerDxvkConfKey    = { 1,          "DXVK Config" };
   static constexpr RtxOptionLayerKey kRtxOptionLayerConfigCppKey   = { 2,          "Hardcoded EXE Config" };
-  static constexpr RtxOptionLayerKey kRtxOptionLayerRtxConfKey     = { 3,          "Remix Config" };
-  static constexpr RtxOptionLayerKey kRtxOptionLayerBaseGameModKey = { 4,          "baseGameMod Remix Config" };
-  static constexpr RtxOptionLayerKey kRtxOptionLayerEnvironmentKey = { 5,          "Environment Variable Overrides" };  // Env vars set initial value, can be overridden by code
-  static constexpr RtxOptionLayerKey kRtxOptionLayerDerivedKey     = { 6,          "Derived Settings" };  // OnChange callbacks when no menu is open
-  static constexpr RtxOptionLayerKey kRtxOptionLayerUserKey        = { 0xFFFFFFFE, "User Settings" };
-  static constexpr RtxOptionLayerKey kRtxOptionLayerQualityKey     = { 0xFFFFFFFF, "Quality Presets" };  // Highest priority when preset is not Custom
+  static constexpr RtxOptionLayerKey kRtxOptionLayerEnvironmentKey = { 3,          "Environment Variable Overrides" };  // Env vars set initial value, can be overridden by code
+  static constexpr RtxOptionLayerKey kRtxOptionLayerDerivedKey     = { 4,          "Derived Settings" };  // OnChange callbacks when no menu is open
+  static constexpr RtxOptionLayerKey kRtxOptionLayerUserKey        = { 5,          "User Settings" };
+  static constexpr RtxOptionLayerKey kRtxOptionLayerQualityKey     = { 6,          "Quality Presets" };
+  static constexpr RtxOptionLayerKey kRtxOptionLayerBaseGameModKey = { 0xFFFFFFFE, "baseGameMod Remix Config" };
+  static constexpr RtxOptionLayerKey kRtxOptionLayerRtxConfKey     = { 0xFFFFFFFF, "Remix Config" };  // Highest priority - rtx.conf always wins
 
 }  // namespace dxvk
 
