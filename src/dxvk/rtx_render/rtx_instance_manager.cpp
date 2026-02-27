@@ -1104,11 +1104,13 @@ namespace dxvk {
             materialData.getOpaqueMaterialData().setEnableEmission(true);
             materialData.getOpaqueMaterialData().setEmissiveIntensity(2.0f);
             materialData.getOpaqueMaterialData().setEmissiveColorTexture(materialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
-          } else if (currentInstance.m_isLegacyEmissive) {
-            // For legacy emissive, use alpha channel if available, otherwise use albedo. Per-texture controllable intensity.
-            // Use the same texture hash that was used to categorize this as legacy emissive (from original material)
+          } else if (currentInstance.m_isLegacyEmissive && useLegacyAlphaState) {
+            // Block legacy emissive entirely when a material replacement/enhancement is active
+            // (useLegacyAlphaState is false for replaced materials).
+            // Also block by default when the texture has no alpha channel unless the user
+            // explicitly opts in via legacyEmissiveForceAlbedo.
             const XXH64_hash_t textureHash = drawCall.getMaterialData().getColorTexture().getImageHash();
-            
+
             // Get per-texture emissive intensity, default to 2.0f if not specified
             float emissiveIntensity = 2.0f;
             const auto intensityMap = RtxOptions::parseLegacyEmissiveIntensities(RtxOptions::legacyEmissiveIntensitiesString());
@@ -1116,10 +1118,7 @@ namespace dxvk {
             if (intensityIt != intensityMap.end()) {
               emissiveIntensity = intensityIt->second;
             }
-            
-            materialData.getOpaqueMaterialData().setEnableEmission(true);
-            materialData.getOpaqueMaterialData().setEmissiveIntensity(emissiveIntensity);
-            
+
             // Get per-texture emissive color tint, default to white (1.0, 1.0, 1.0) if not specified
             Vector3 emissiveColorTint = Vector3(1.0f, 1.0f, 1.0f);
             const auto colorMap = RtxOptions::parseLegacyEmissiveColors(RtxOptions::legacyEmissiveColorsString());
@@ -1127,20 +1126,22 @@ namespace dxvk {
             if (colorIt != colorMap.end()) {
               emissiveColorTint = colorIt->second;
             }
-            
+
             materialData.getOpaqueMaterialData().setEmissiveColorTint(emissiveColorTint);
-            
+
             // Check for per-texture alpha invert setting
             bool alphaInvert = false;
             const auto invertSet = RtxOptions::parseLegacyEmissiveAlphaInvert(RtxOptions::legacyEmissiveAlphaInvertString());
             alphaInvert = invertSet.find(textureHash) != invertSet.end();
-            
-            // Try to use alpha channel for emissive if available, otherwise use albedo
+
+            // Check if the user has opted in to albedo-based emission for this texture
+            const auto forceAlbedoSet = RtxOptions::parseLegacyEmissiveForceAlbedo(RtxOptions::legacyEmissiveForceAlbedoString());
+            const bool forceAlbedo = forceAlbedoSet.find(textureHash) != forceAlbedoSet.end();
+
             const auto& albedoTexture = materialData.getOpaqueMaterialData().getAlbedoOpacityTexture();
             if (albedoTexture.isValid() && albedoTexture.getImageView() && albedoTexture.getImageView()->info().format != VK_FORMAT_UNDEFINED) {
-              // Check if texture has alpha channel (includes uncompressed RGBA and compressed formats like BC3/DXT5)
               const VkFormat format = albedoTexture.getImageView()->info().format;
-              const bool hasAlpha = (format == VK_FORMAT_R8G8B8A8_UNORM || 
+              const bool hasAlpha = (format == VK_FORMAT_R8G8B8A8_UNORM ||
                                    format == VK_FORMAT_R8G8B8A8_SRGB ||
                                    format == VK_FORMAT_B8G8R8A8_UNORM ||
                                    format == VK_FORMAT_B8G8R8A8_SRGB ||
@@ -1150,24 +1151,32 @@ namespace dxvk {
                                    format == VK_FORMAT_BC3_SRGB_BLOCK ||   // DXT5 sRGB variant
                                    format == VK_FORMAT_BC7_UNORM_BLOCK ||  // BC7 with alpha
                                    format == VK_FORMAT_BC7_SRGB_BLOCK);
-              
+
               if (hasAlpha) {
-                // Use the same texture, but the shader will use alpha channel for emissive masking
+                // Alpha channel available - use it as the emissive mask
+                materialData.getOpaqueMaterialData().setEnableEmission(true);
+                materialData.getOpaqueMaterialData().setEmissiveIntensity(emissiveIntensity);
                 materialData.getOpaqueMaterialData().setEmissiveColorTexture(albedoTexture);
                 materialData.getOpaqueMaterialData().setEmissiveAlphaMask(true);
                 materialData.getOpaqueMaterialData().setEmissiveAlphaInvert(alphaInvert);
-              } else {
-                // No alpha channel, use albedo for emissive
+              } else if (forceAlbedo) {
+                // No alpha channel, but user explicitly forced albedo-based emission
+                materialData.getOpaqueMaterialData().setEnableEmission(true);
+                materialData.getOpaqueMaterialData().setEmissiveIntensity(emissiveIntensity);
                 materialData.getOpaqueMaterialData().setEmissiveColorTexture(albedoTexture);
                 materialData.getOpaqueMaterialData().setEmissiveAlphaMask(false);
-                materialData.getOpaqueMaterialData().setEmissiveAlphaInvert(false); // No invert needed without alpha
+                materialData.getOpaqueMaterialData().setEmissiveAlphaInvert(false);
               }
-            } else {
-              // Fallback to albedo if texture is invalid
+              // else: no alpha and no force override - emission blocked (default off)
+            } else if (forceAlbedo) {
+              // Texture ref invalid but force is enabled - fall back to albedo
+              materialData.getOpaqueMaterialData().setEnableEmission(true);
+              materialData.getOpaqueMaterialData().setEmissiveIntensity(emissiveIntensity);
               materialData.getOpaqueMaterialData().setEmissiveColorTexture(materialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
               materialData.getOpaqueMaterialData().setEmissiveAlphaMask(false);
-              materialData.getOpaqueMaterialData().setEmissiveAlphaInvert(false); // No invert needed without alpha
+              materialData.getOpaqueMaterialData().setEmissiveAlphaInvert(false);
             }
+            // else: invalid texture with no force override - emission blocked (default off)
           } else if (currentInstance.surface.alphaState.emissiveBlend && RtxOptions::enableEmissiveBlendEmissiveOverride() && useLegacyAlphaState) {
             // If the user has decided to override the legacy alpha state, assume they know what they are doing and allow for explicit emission controls.
             materialData.getOpaqueMaterialData().setEnableEmission(true);

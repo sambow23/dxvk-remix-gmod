@@ -2282,7 +2282,24 @@ namespace dxvk {
                 if (ImGui::IsItemHovered()) {
                   ImGui::SetTooltip("When enabled: black alpha = full emission, white alpha = no emission\nWhen disabled: black alpha = no emission, white alpha = full emission");
                 }
-                
+
+                // Force albedo emission toggle - overrides the default alpha-required behavior
+                auto legacyEmissiveForceAlbedo = RtxOptions::parseLegacyEmissiveForceAlbedo(RtxOptions::legacyEmissiveForceAlbedoString());
+                bool currentForceAlbedo = legacyEmissiveForceAlbedo.find(texHash) != legacyEmissiveForceAlbedo.end();
+
+                if (ImGui::Checkbox("Force Albedo Emission (No Alpha)", &currentForceAlbedo)) {
+                  if (currentForceAlbedo) {
+                    legacyEmissiveForceAlbedo.insert(texHash);
+                  } else {
+                    legacyEmissiveForceAlbedo.erase(texHash);
+                  }
+                  std::string forceAlbedoString = RtxOptions::legacyEmissiveForceAlbedoToString(legacyEmissiveForceAlbedo);
+                  RtxOptions::legacyEmissiveForceAlbedoStringObject().setDeferred(forceAlbedoString);
+                }
+                if (ImGui::IsItemHovered()) {
+                  ImGui::SetTooltip("By default, emission is blocked for textures without an alpha channel.\nEnable this to force full albedo-based emission regardless.");
+                }
+
                 ImGui::Unindent();
               }
               
