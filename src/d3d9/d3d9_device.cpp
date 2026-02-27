@@ -993,6 +993,18 @@ namespace dxvk {
     if (dstTexInfo->Desc()->Pool == D3DPOOL_DEFAULT)
       return this->StretchRect(pRenderTarget, nullptr, pDestSurface, nullptr, D3DTEXF_NONE);
 
+    // NV-DXVK start: Flush RTX compositing before reading the back buffer.
+    // Games (e.g. Source Engine) may read the back buffer for screenshots
+    // before Present(). Without this, the back buffer is still empty because
+    // RTX Remix composites during Present().
+    if (m_implicitSwapchain != nullptr && !m_rtx.IsCompositingDone()) {
+      D3D9Surface* backBuffer = m_implicitSwapchain->GetBackBuffer(0);
+      if (backBuffer != nullptr && srcTexInfo->GetImage() == backBuffer->GetCommonTexture()->GetImage()) {
+        m_rtx.FlushCompositing(srcTexInfo->GetImage());
+      }
+    }
+    // NV-DXVK end
+
     Rc<DxvkBuffer> dstBuffer = dstTexInfo->GetBuffer(dst->GetSubresource());
 
     Rc<DxvkImage>  srcImage                 = srcTexInfo->GetImage();
@@ -1069,6 +1081,15 @@ namespace dxvk {
 
     Rc<DxvkImage> dstImage = dstTextureInfo->GetImage();
     Rc<DxvkImage> srcImage = srcTextureInfo->GetImage();
+
+    // NV-DXVK start: Flush RTX compositing before reading the back buffer.
+    if (m_implicitSwapchain != nullptr && !m_rtx.IsCompositingDone()) {
+      D3D9Surface* backBuffer = m_implicitSwapchain->GetBackBuffer(0);
+      if (backBuffer != nullptr && srcImage == backBuffer->GetCommonTexture()->GetImage()) {
+        m_rtx.FlushCompositing(srcImage);
+      }
+    }
+    // NV-DXVK end
 
     const DxvkFormatInfo* dstFormatInfo = imageFormatInfo(dstImage->info().format);
     const DxvkFormatInfo* srcFormatInfo = imageFormatInfo(srcImage->info().format);

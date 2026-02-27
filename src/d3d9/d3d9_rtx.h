@@ -150,6 +150,20 @@ namespace dxvk {
     void EndFrame(const Rc<DxvkImage>& targetImage, bool callInjectRtx = true);
 
     /**
+      * \brief: Flush RTX compositing to the back buffer on demand.
+      * Called when the game reads the back buffer before Present()
+      * (e.g. screenshots). No-op if compositing already happened.
+      */
+    void FlushCompositing(const Rc<DxvkImage>& targetImage);
+
+    /**
+      * \brief: Returns true if RTX compositing has been triggered this frame.
+      */
+    bool IsCompositingDone() const {
+      return m_rtxInjectTriggered;
+    }
+
+    /**
       * \brief: Signal that we're about to present the image.
       */
     void OnPresent(const Rc<DxvkImage>& targetImage);
