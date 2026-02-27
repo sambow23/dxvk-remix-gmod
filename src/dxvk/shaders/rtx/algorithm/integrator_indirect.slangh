@@ -722,7 +722,7 @@ void integratePathVertex(
           lightSampleValid = sampleLightRTXDI(
             pixelCoordinate,
             surfaceInteraction,
-            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx, rayInteraction.customIndex);
+            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx);
         }
       }
 
@@ -748,7 +748,7 @@ void integratePathVertex(
           lightSampleValid = sampleLightRIS(
             randomState,
             surfaceInteraction, opaqueSurfaceMaterialInteraction, rayInteraction.viewDirection,
-            lightSample, invSelectionPdf, lightIdx, rayInteraction.customIndex);
+            lightSample, invSelectionPdf, lightIdx);
         }
       }
 
