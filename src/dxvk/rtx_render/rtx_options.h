@@ -244,6 +244,11 @@ namespace dxvk {
                   "Per-texture alpha invert flags for legacy emissive textures.\n"
                   "Format: hash1,hash2,hash3 (only lists hashes that should have inverted alpha)\n"
                   "When inverted: black alpha = full emission, white alpha = no emission.");
+    RTX_OPTION("rtx", std::string, legacyEmissiveForceAlbedoString, "",
+                  "Per-texture force albedo emission flags for legacy emissive textures.\n"
+                  "Format: hash1,hash2,hash3\n"
+                  "By default, emission is blocked for textures without an alpha channel. Adding a hash here\n"
+                  "forces full albedo-based emission even when the texture has no alpha channel.");
     RTX_OPTION("rtx", fast_unordered_set, hideInstanceTextures, {},
                   "Textures on draw calls that should be hidden from rendering, but not totally ignored.\n"
                   "This is similar to rtx.ignoreTextures but instead of completely ignoring such draw calls they are only hidden from rendering, allowing for the hidden objects to still appear in captures.\n"
@@ -2709,6 +2714,40 @@ namespace dxvk {
     }
 
     static std::string legacyEmissiveAlphaInvertToString(const fast_unordered_set& hashSet) {
+      std::string result;
+      bool first = true;
+      for (const auto& hash : hashSet) {
+        if (!first) {
+          result += ",";
+        }
+        first = false;
+
+        char hashStr[32];
+        snprintf(hashStr, sizeof(hashStr), "%016llX", hash);
+        result += hashStr;
+      }
+      return result;
+    }
+
+    static fast_unordered_set parseLegacyEmissiveForceAlbedo(const std::string& str) {
+      fast_unordered_set result;
+      if (str.empty()) {
+        return result;
+      }
+
+      const auto hashes = dxvk::str::split(str, ',');
+      for (const auto& hashStr : hashes) {
+        try {
+          XXH64_hash_t hash = std::stoull(hashStr, nullptr, 16);
+          result.insert(hash);
+        } catch (...) {
+          // Skip invalid entries
+        }
+      }
+      return result;
+    }
+
+    static std::string legacyEmissiveForceAlbedoToString(const fast_unordered_set& hashSet) {
       std::string result;
       bool first = true;
       for (const auto& hash : hashSet) {
