@@ -625,6 +625,12 @@ namespace dxvk {
     if (unlikely(dstTexInfo->Desc()->Pool != D3DPOOL_SYSTEMMEM))
       return D3DERR_INVALIDCALL;
 
+    // NV-DXVK start: Flush RTX compositing before reading the back buffer.
+    if (!m_parent->RTX().IsCompositingDone()) {
+      m_parent->RTX().FlushCompositing(srcTexInfo->GetImage());
+    }
+    // NV-DXVK end
+
     Rc<DxvkBuffer> dstBuffer = dstTexInfo->GetBuffer(dst->GetSubresource());
     Rc<DxvkImage>  srcImage  = srcTexInfo->GetImage();
 
