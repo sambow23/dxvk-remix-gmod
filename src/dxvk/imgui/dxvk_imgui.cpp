@@ -3092,6 +3092,12 @@ namespace dxvk {
         ImGui::Unindent();
       }
 
+      if (RemixGui::CollapsingHeader("Smooth Normals", collapsingHeaderClosedFlags)) {
+        ImGui::Indent();
+        RemixGui::Checkbox("Force All Smooth Normals", &RtxOptions::forceAllSmoothNormalsObject());
+        ImGui::Unindent();
+      }
+
       if (RemixGui::CollapsingHeader("View Model", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         RemixGui::Checkbox("Enable View Model", &RtxOptions::ViewModel::enableObject());

@@ -329,6 +329,9 @@ namespace dxvk {
                   "Textures on draw calls whose geometry should have smooth normals generated on the GPU.\n"
                   "This is useful for older D3D9 games where the geometry may be missing smooth normals, especially when using the VertexShader Capture mechanism.\n"
                   "When a draw call matches, area-weighted smooth normals will be computed from the triangle mesh and used for ray tracing.");
+    RTX_OPTION("rtx", bool, forceAllSmoothNormals, false,
+                  "When enabled, forces area-weighted smooth normals to be computed on the GPU for every draw call, regardless of texture category.\n"
+                  "This is a global alternative to listing individual textures in smoothNormalsTextures.");
     
   public:
     RTX_OPTION("rtx", bool, showRaytracingOption, true, "Enables or disables the option to toggle ray tracing in the UI. When set to false the ray tracing checkbox will not appear in the Remix UI.");

@@ -1053,7 +1053,8 @@ namespace dxvk {
                               && input.normalBuffer.mapPtr() != nullptr
                               && !input.positionBuffer.isPendingGpuWrite()
                               && !input.indexBuffer.isPendingGpuWrite()
-                              && !input.normalBuffer.isPendingGpuWrite();
+                              && !input.normalBuffer.isPendingGpuWrite()
+                              && geo.normalBuffer.mapPtr() != nullptr;
     const bool useCPU = inputAccessible && numTriangles <= kMaxTrianglesForCPU;
 
     if (useCPU) {

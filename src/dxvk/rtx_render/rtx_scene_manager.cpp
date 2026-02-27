@@ -364,7 +364,7 @@ namespace dxvk {
 
     // When the SmoothNormals category is set and the input has no normals, force the interleaved
     // vertex layout to include space for normals. The smooth normals compute pass will fill them in later.
-    const bool needsSmoothNormals = drawCallState.categories.test(InstanceCategories::SmoothNormals);
+    const bool needsSmoothNormals = drawCallState.categories.test(InstanceCategories::SmoothNormals) || RtxOptions::forceAllSmoothNormals();
     const bool forceNormals = needsSmoothNormals && !input.normalBuffer.defined();
 
     // When smooth normals state changes (added or removed), promote to kUpdateBVH so the vertex
@@ -1015,13 +1015,14 @@ namespace dxvk {
     // Update the input state, so we always have a reference to the original draw call state
     pBlas->frameLastTouched = m_device->getCurrentFrameId();
 
-    // Generate smooth normals for geometry that is flagged via the SmoothNormals texture category.
+    // Generate smooth normals for geometry that is flagged via the SmoothNormals texture category or forceAllSmoothNormals.
     // This is useful for older D3D9 games where geometry may lack smooth normals, especially
     // when using the VertexShader Capture mechanism. The smooth normals are computed on the GPU
     // from the triangle mesh (area-weighted) and written into the normal buffer.
     // Only dispatch on BVH build/update — for static geometry, positions don't change so
     // the normals computed on the first pass remain valid for subsequent frames.
-    if (drawCallState.categories.test(InstanceCategories::SmoothNormals) &&
+    const bool needsSmoothNormals = drawCallState.categories.test(InstanceCategories::SmoothNormals) || RtxOptions::forceAllSmoothNormals();
+    if (needsSmoothNormals &&
         (result == ObjectCacheState::KBuildBVH || result == ObjectCacheState::kUpdateBVH)) {
       m_device->getCommon()->metaGeometryUtils().dispatchSmoothNormals(ctx, drawCallState.getGeometryData(), pBlas->modifiedGeometryData);
       pBlas->modifiedGeometryData.smoothNormalsApplied = true;
