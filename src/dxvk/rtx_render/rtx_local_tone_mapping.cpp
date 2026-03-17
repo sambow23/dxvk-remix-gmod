@@ -133,43 +133,37 @@ namespace dxvk {
     ImGui::DragInt("Display Mip", &displayMipObject(), 0.06f, 0, 16);
     ImGui::Checkbox("Boost Local Contrast", &boostLocalContrastObject());
     ImGui::Checkbox("Use Gaussian Kernel", &useGaussianObject());
-    
-    // Tone mapping operator selection
-    const char* operators[] = { "Standard", "ACES", "AgX" };
-    int currentOp = useAgX() ? 2 : (finalizeWithACES() ? 1 : 0);
-    if (ImGui::Combo("Tone Mapping Operator", &currentOp, operators, IM_ARRAYSIZE(operators))) {
-      finalizeWithACES.setDeferred(currentOp == 1);
-      useAgX.setDeferred(currentOp == 2);
-    }
-    
+    ImGui::Combo("Tonemapping Operator", &tonemapOperatorObject(),
+                    "None\0ACES\0ACES (Legacy)\0Hable Filmic\0AgX\0");
+
     // AgX-specific controls (only show when AgX is selected)
-    if (useAgX()) {
+    if (tonemapOperator() == TonemapOperator::AgX) {
       ImGui::Indent();
       ImGui::Text("AgX Controls:");
       ImGui::Separator();
-      
+
       // Basic controls
       ImGui::DragFloat("AgX Gamma", &agxGammaObject(), 0.01f, 0.0f, 3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::DragFloat("AgX Saturation", &agxSaturationObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::DragFloat("AgX Exposure Offset", &agxExposureOffsetObject(), 0.01f, -2.0f, 2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
-      
+
       ImGui::Separator();
-      
+
       // Look selection
       const char* looks[] = { "None", "Punchy", "Golden", "Greyscale" };
       ImGui::Combo("AgX Look", &agxLookObject(), looks, IM_ARRAYSIZE(looks));
-      
+
       ImGui::Separator();
-      
+
       // Advanced controls
       ImGui::Text("Advanced:");
       ImGui::DragFloat("AgX Contrast", &agxContrastObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::DragFloat("AgX Slope", &agxSlopeObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::DragFloat("AgX Power", &agxPowerObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-      
+
       ImGui::Unindent();
     }
-    
+
     ImGui::DragFloat("Exposure Level", &exposureObject(), 0.01f, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::DragFloat("Shadow Level", &shadowsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::DragFloat("Highlight Level", &highlightsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -220,7 +214,7 @@ namespace dxvk {
       pushArgs.highlights = pow(2.f, -highlights());
       pushArgs.debugView = debugView.debugViewIdx();
       pushArgs.enableAutoExposure = enableAutoExposure;
-      pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
+      pushArgs.tonemapOperator = static_cast<uint32_t>(tonemapOperator());
       ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
       ctx->bindResourceView(LUMINANCE_ORIGINAL, rtOutput.m_finalOutput.view(Resources::AccessType::Read), nullptr);
       ctx->bindResourceView(LUMINANCE_OUTPUT, m_mips.views[0], nullptr);
@@ -312,10 +306,8 @@ namespace dxvk {
       pushArgs.debugView = debugView.debugViewIdx();
       pushArgs.enableAutoExposure = enableAutoExposure;
       pushArgs.performSRGBConversion = performSRGBConversion;
-      pushArgs.finalizeWithACES = finalizeWithACES();
-      pushArgs.useAgX = useAgX();
-      pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
-      
+      pushArgs.tonemapOperator = static_cast<uint32_t>(tonemapOperator());
+
       // AgX parameters
       pushArgs.agxGamma = agxGamma();
       pushArgs.agxSaturation = agxSaturation();
@@ -324,7 +316,6 @@ namespace dxvk {
       pushArgs.agxContrast = agxContrast();
       pushArgs.agxSlope = agxSlope();
       pushArgs.agxPower = agxPower();
-      
       switch (ditherMode()) {
       case DitherMode::None: pushArgs.ditherMode = ditherModeNone; break;
       case DitherMode::Spatial: pushArgs.ditherMode = ditherModeSpatialOnly; break;

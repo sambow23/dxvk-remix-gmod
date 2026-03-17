@@ -173,17 +173,11 @@ namespace dxvk {
     ImGui::Checkbox("Tonemapping Enabled", &tonemappingEnabledObject());
     if (tonemappingEnabled()) {  // Show tonemapping options when enabled
       ImGui::Indent();
-      
-      // Tone mapping operator selection
-      const char* operators[] = { "Standard", "ACES", "AgX" };
-      int currentOp = useAgX() ? 2 : (finalizeWithACES() ? 1 : 0);
-      if (ImGui::Combo("Tone Mapping Operator", &currentOp, operators, IM_ARRAYSIZE(operators))) {
-        finalizeWithACES.setDeferred(currentOp == 1);
-        useAgX.setDeferred(currentOp == 2);
-      }
+      ImGui::Combo("Tonemapping Operator", &tonemapOperatorObject(),
+                      "None\0ACES\0ACES (Legacy)\0Hable Filmic\0AgX\0");
 
       // AgX-specific controls (only show when AgX is selected)
-      if (useAgX()) {
+      if (tonemapOperator() == TonemapOperator::AgX) {
         ImGui::Indent();
         ImGui::Text("AgX Controls:");
         ImGui::Separator();
@@ -352,10 +346,8 @@ namespace dxvk {
     pushArgs.toneMappingEnabled = tonemappingEnabled();
     pushArgs.colorGradingEnabled = colorGradingEnabled();
     pushArgs.enableAutoExposure = autoExposureEnabled;
-    pushArgs.finalizeWithACES = finalizeWithACES();
-    pushArgs.useAgX = useAgX();
-    pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
-    
+    pushArgs.tonemapOperator = static_cast<uint32_t>(tonemapOperator());
+
     // AgX parameters
     pushArgs.agxGamma = agxGamma();
     pushArgs.agxSaturation = agxSaturation();

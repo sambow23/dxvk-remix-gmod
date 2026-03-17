@@ -53,7 +53,15 @@ namespace dxvk {
     float hdrBlueNoiseAmplitude;
   };
 
-  // HDR Processing shader binding constants are defined in the shader header
+  // Tonemapping operator applied after the dynamic tone curve.
+  enum class TonemapOperator : uint32_t {
+    None        = 0, // Dynamic curve only, no additional operator.
+    ACES        = 1,
+    ACESLegacy  = 2,
+    HableFilmic = 3,
+    AgX         = 4,
+  };
+
 
   class DxvkToneMapping: public CommonDeviceObject {
   public:
@@ -151,8 +159,9 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap", float, toneCurveMinStops, -24.0f, "Low endpoint of the tone curve (in log2(linear)).");
     RTX_OPTION("rtx.tonemap", float, toneCurveMaxStops, 8.0f, "High endpoint of the tone curve (in log2(linear))."); 
     RTX_OPTION("rtx.tonemap", bool,  tuningMode, false, "A flag to enable a debug visualization to tune the tonemapping exposure curve with, as well as exposing parameters for tuning the tonemapping in the UI.");
-    RTX_OPTION("rtx.tonemap", bool,  finalizeWithACES, false, "A flag to enable applying a final pass of ACES tonemapping to the tonemapped result.");
-    RTX_OPTION("rtx.tonemap", bool,  useAgX, false, "A flag to enable AgX tonemapping instead of ACES or standard tonemapping.");
+    RTX_OPTION_ENV("rtx.tonemap", TonemapOperator, tonemapOperator, TonemapOperator::None, "DXVK_TONEMAP_OPERATOR",
+                   "Tonemapping operator to apply after the dynamic tone curve.\n"
+                   "Supported values are 0 = None (dynamic curve only), 1 = ACES, 2 = ACES (Legacy), 3 = Hable Filmic, 4 = AgX.");
     RTX_OPTION("rtx.tonemap", float, agxGamma, 2.0f, "AgX gamma adjustment for contrast control. Lower values increase contrast. Range [0.5, 3.0].");
     RTX_OPTION("rtx.tonemap", float, agxSaturation, 1.1f, "AgX saturation multiplier. Higher values increase color saturation. Range [0.5, 2.0].");
     RTX_OPTION("rtx.tonemap", float, agxExposureOffset, 0.0f, "AgX exposure offset in EV stops. Positive values brighten the image. Range [-2.0, 2.0].");
