@@ -4331,13 +4331,15 @@ namespace dxvk {
       {
         ImGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
         ImGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
-        
+
         ImGui::Separator();
-        ImGui::Combo("Tonemapping Mode", &RtxOptions::tonemappingModeObject(), "Global\0Local\0");
-        if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
-          common->metaToneMapping().showImguiSettings();
-        } else {
+        ImGui::Combo("Tonemapping Mode", &RtxOptions::tonemappingModeObject(), "Global\0Local\0Direct\0");
+        if (RtxOptions::tonemappingMode() == TonemappingMode::Local) {
           common->metaLocalToneMapping().showImguiSettings();
+        } else {
+          // Global and Direct both use the global tonemapper settings.
+          // In Direct mode, the dynamic tone curve is bypassed.
+          common->metaToneMapping().showImguiSettings();
         }
       }
 

@@ -123,7 +123,20 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
 {
   color *= getExposure(InExposure, cb.enableAutoExposure, cb.exposureFactor);
 
-  if (cb.toneMappingEnabled != 0) 
+  if (cb.directOperatorMode != 0)
+  {
+    // Direct mode: no dynamic tone curve, apply only the selected operator.
+    if (cb.tonemapOperator == tonemapOperatorACES)
+      color = ACESFilm(color, false);
+    else if (cb.tonemapOperator == tonemapOperatorACESLegacy)
+      color = ACESFilm(color, true);
+    else if (cb.tonemapOperator == tonemapOperatorHableFilmic)
+      color = hableFilmicToneMapper(color, cb.hableA, cb.hableB, cb.hableC, cb.hableD, cb.hableE, cb.hableF, cb.hableW);
+    else if (cb.tonemapOperator == tonemapOperatorAgX)
+      color = AgXToneMapping(color, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset,
+                             cb.agxLook, cb.agxContrast, cb.agxSlope, cb.agxPower);
+  }
+  else if (cb.toneMappingEnabled != 0) 
   {
     if (cb.debugMode == 0) 
     {
@@ -140,7 +153,7 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
       }
       else if (cb.tonemapOperator == tonemapOperatorHableFilmic)
       {
-        color = hableFilmicToneMapper(color);
+        color = hableFilmicToneMapper(color, cb.hableA, cb.hableB, cb.hableC, cb.hableD, cb.hableE, cb.hableF, cb.hableW);
       }
       else if (cb.tonemapOperator == tonemapOperatorAgX)
       {

@@ -162,6 +162,15 @@ namespace dxvk {
     RTX_OPTION_ENV("rtx.tonemap", TonemapOperator, tonemapOperator, TonemapOperator::None, "DXVK_TONEMAP_OPERATOR",
                    "Tonemapping operator to apply after the dynamic tone curve.\n"
                    "Supported values are 0 = None (dynamic curve only), 1 = ACES, 2 = ACES (Legacy), 3 = Hable Filmic, 4 = AgX.");
+    // Hable/Uncharted 2 filmic tonemapper parameters (only used when tonemapOperator = HableFilmic).
+    RTX_OPTION("rtx.tonemap", float, hableShoulderStrength, 0.15f, "Hable filmic: A — shoulder strength.");
+    RTX_OPTION("rtx.tonemap", float, hableLinearStrength,   0.50f, "Hable filmic: B — linear strength.");
+    RTX_OPTION("rtx.tonemap", float, hableLinearAngle,      0.10f, "Hable filmic: C — linear angle.");
+    RTX_OPTION("rtx.tonemap", float, hableToeStrength,      0.20f, "Hable filmic: D — toe strength.");
+    RTX_OPTION("rtx.tonemap", float, hableToeNumerator,     0.02f, "Hable filmic: E — toe numerator.");
+    RTX_OPTION("rtx.tonemap", float, hableToeDenominator,   0.30f, "Hable filmic: F — toe denominator.");
+    RTX_OPTION("rtx.tonemap", float, hableWhitePoint,       4.00f, "Hable filmic: W — white point (linear scene value that maps to 1.0). HLA default: 4.0, Uncharted 2 default: 11.2.");
+    // AgX tonemapper parameters (only used when tonemapOperator = AgX).
     RTX_OPTION("rtx.tonemap", float, agxGamma, 2.0f, "AgX gamma adjustment for contrast control. Lower values increase contrast. Range [0.5, 3.0].");
     RTX_OPTION("rtx.tonemap", float, agxSaturation, 1.1f, "AgX saturation multiplier. Higher values increase color saturation. Range [0.5, 2.0].");
     RTX_OPTION("rtx.tonemap", float, agxExposureOffset, 0.0f, "AgX exposure offset in EV stops. Positive values brighten the image. Range [-2.0, 2.0].");

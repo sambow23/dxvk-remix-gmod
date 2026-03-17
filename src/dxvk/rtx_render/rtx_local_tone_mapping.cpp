@@ -20,6 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx_local_tone_mapping.h"
+#include "rtx_tone_mapping.h"
 #include "dxvk_device.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_render/rtx_shader_manager.h"
@@ -135,6 +136,32 @@ namespace dxvk {
     ImGui::Checkbox("Use Gaussian Kernel", &useGaussianObject());
     ImGui::Combo("Tonemapping Operator", &tonemapOperatorObject(),
                     "None\0ACES\0ACES (Legacy)\0Hable Filmic\0AgX\0");
+
+    if (tonemapOperator() == TonemapOperator::HableFilmic) {
+      ImGui::Indent();
+      ImGui::Text("Hable Filmic Parameters:");
+      if (ImGui::Button("Preset: Uncharted 2")) {
+        DxvkToneMapping::hableShoulderStrength.setDeferred(0.15f);  DxvkToneMapping::hableLinearStrength.setDeferred(0.50f);
+        DxvkToneMapping::hableLinearAngle.setDeferred(0.10f);       DxvkToneMapping::hableToeStrength.setDeferred(0.20f);
+        DxvkToneMapping::hableToeNumerator.setDeferred(0.02f);      DxvkToneMapping::hableToeDenominator.setDeferred(0.30f);
+        DxvkToneMapping::hableWhitePoint.setDeferred(11.2f);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Preset: Half-Life: Alyx")) {
+        DxvkToneMapping::hableShoulderStrength.setDeferred(0.319f);  DxvkToneMapping::hableLinearStrength.setDeferred(0.5047f);
+        DxvkToneMapping::hableLinearAngle.setDeferred(0.1619f);      DxvkToneMapping::hableToeStrength.setDeferred(0.4667f);
+        DxvkToneMapping::hableToeNumerator.setDeferred(0.0f);        DxvkToneMapping::hableToeDenominator.setDeferred(0.7475f);
+        DxvkToneMapping::hableWhitePoint.setDeferred(3.9996f);
+      }
+      ImGui::DragFloat("Shoulder Strength", &DxvkToneMapping::hableShoulderStrengthObject(), 0.005f, 0.0f,  1.0f, "%.4f");
+      ImGui::DragFloat("Linear Strength",   &DxvkToneMapping::hableLinearStrengthObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+      ImGui::DragFloat("Linear Angle",      &DxvkToneMapping::hableLinearAngleObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+      ImGui::DragFloat("Toe Strength",      &DxvkToneMapping::hableToeStrengthObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+      ImGui::DragFloat("Toe Numerator",     &DxvkToneMapping::hableToeNumeratorObject(),     0.001f, 0.0f,  0.5f, "%.4f");
+      ImGui::DragFloat("Toe Denominator",   &DxvkToneMapping::hableToeDenominatorObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+      ImGui::DragFloat("White Point",       &DxvkToneMapping::hableWhitePointObject(),       0.1f,   0.1f, 20.0f, "%.4f");
+      ImGui::Unindent();
+    }
 
     // AgX-specific controls (only show when AgX is selected)
     if (tonemapOperator() == TonemapOperator::AgX) {
@@ -322,6 +349,15 @@ namespace dxvk {
       case DitherMode::SpatialTemporal: pushArgs.ditherMode = ditherModeSpatialTemporal; break;
       }
       pushArgs.frameIndex = ctx->getDevice()->getCurrentFrameId();
+
+      // Hable filmic parameters (shared with global tonemapper RTX_OPTIONs).
+      pushArgs.hableA = DxvkToneMapping::hableShoulderStrength();
+      pushArgs.hableB = DxvkToneMapping::hableLinearStrength();
+      pushArgs.hableC = DxvkToneMapping::hableLinearAngle();
+      pushArgs.hableD = DxvkToneMapping::hableToeStrength();
+      pushArgs.hableE = DxvkToneMapping::hableToeNumerator();
+      pushArgs.hableF = DxvkToneMapping::hableToeDenominator();
+      pushArgs.hableW = DxvkToneMapping::hableWhitePoint();
 
       ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
 

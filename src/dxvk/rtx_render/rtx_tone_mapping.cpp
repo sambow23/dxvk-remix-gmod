@@ -176,31 +176,70 @@ namespace dxvk {
       ImGui::Combo("Tonemapping Operator", &tonemapOperatorObject(),
                       "None\0ACES\0ACES (Legacy)\0Hable Filmic\0AgX\0");
 
+      if (tonemapOperator() == TonemapOperator::HableFilmic) {
+        ImGui::Indent();
+        ImGui::Text("Hable Filmic Parameters:");
+
+        // Presets
+        struct HablePreset {
+          const char* name;
+          float A, B, C, D, E, F, W;
+        };
+        static const HablePreset kPresets[] = {
+          { "Uncharted 2 (Default)", 0.15f, 0.50f, 0.10f, 0.20f, 0.02f, 0.30f, 11.2f  },
+          { "Half-Life: Alyx",       0.319f,0.5047f,0.1619f,0.4667f,0.0f,0.7475f,3.9996f },
+        };
+        if (ImGui::Button("Preset: Uncharted 2")) {
+          const auto& p = kPresets[0];
+          hableShoulderStrength.setDeferred(p.A); hableLinearStrength.setDeferred(p.B);
+          hableLinearAngle.setDeferred(p.C);      hableToeStrength.setDeferred(p.D);
+          hableToeNumerator.setDeferred(p.E);     hableToeDenominator.setDeferred(p.F);
+          hableWhitePoint.setDeferred(p.W);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Preset: Half-Life: Alyx")) {
+          const auto& p = kPresets[1];
+          hableShoulderStrength.setDeferred(p.A); hableLinearStrength.setDeferred(p.B);
+          hableLinearAngle.setDeferred(p.C);      hableToeStrength.setDeferred(p.D);
+          hableToeNumerator.setDeferred(p.E);     hableToeDenominator.setDeferred(p.F);
+          hableWhitePoint.setDeferred(p.W);
+        }
+
+        ImGui::DragFloat("Shoulder Strength", &hableShoulderStrengthObject(), 0.005f, 0.0f,  1.0f, "%.4f");
+        ImGui::DragFloat("Linear Strength",   &hableLinearStrengthObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+        ImGui::DragFloat("Linear Angle",      &hableLinearAngleObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+        ImGui::DragFloat("Toe Strength",      &hableToeStrengthObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+        ImGui::DragFloat("Toe Numerator",     &hableToeNumeratorObject(),     0.001f, 0.0f,  0.5f, "%.4f");
+        ImGui::DragFloat("Toe Denominator",   &hableToeDenominatorObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+        ImGui::DragFloat("White Point",       &hableWhitePointObject(),       0.1f,   0.1f, 20.0f, "%.4f");
+        ImGui::Unindent();
+      }
+
       // AgX-specific controls (only show when AgX is selected)
       if (tonemapOperator() == TonemapOperator::AgX) {
         ImGui::Indent();
         ImGui::Text("AgX Controls:");
         ImGui::Separator();
-        
+
         // Basic controls
         ImGui::DragFloat("AgX Gamma", &agxGammaObject(), 0.01f, 0.5f, 3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::DragFloat("AgX Saturation", &agxSaturationObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::DragFloat("AgX Exposure Offset", &agxExposureOffsetObject(), 0.01f, -2.0f, 2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
-        
+
         ImGui::Separator();
-        
+
         // Look selection
         const char* looks[] = { "None", "Punchy", "Golden", "Greyscale" };
         ImGui::Combo("AgX Look", &agxLookObject(), looks, IM_ARRAYSIZE(looks));
-        
+
         ImGui::Separator();
-        
+
         // Advanced controls
         ImGui::Text("Advanced:");
         ImGui::DragFloat("AgX Contrast", &agxContrastObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::DragFloat("AgX Slope", &agxSlopeObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::DragFloat("AgX Power", &agxPowerObject(), 0.01f, 0.5f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        
+
         ImGui::Unindent();
       }
 
@@ -343,7 +382,10 @@ namespace dxvk {
 
     // Prepare shader arguments
     ToneMappingApplyToneMappingArgs pushArgs = {};
-    pushArgs.toneMappingEnabled = tonemappingEnabled();
+    // In Direct mode, skip the dynamic tone curve — operator runs alone.
+    const bool directMode = RtxOptions::tonemappingMode() == TonemappingMode::Direct;
+    pushArgs.toneMappingEnabled = directMode ? false : tonemappingEnabled();
+    pushArgs.directOperatorMode = directMode ? 1u : 0u;
     pushArgs.colorGradingEnabled = colorGradingEnabled();
     pushArgs.enableAutoExposure = autoExposureEnabled;
     pushArgs.tonemapOperator = static_cast<uint32_t>(tonemapOperator());
@@ -356,6 +398,15 @@ namespace dxvk {
     pushArgs.agxContrast = agxContrast();
     pushArgs.agxSlope = agxSlope();
     pushArgs.agxPower = agxPower();
+
+    // Hable filmic parameters.
+    pushArgs.hableA = hableShoulderStrength();
+    pushArgs.hableB = hableLinearStrength();
+    pushArgs.hableC = hableLinearAngle();
+    pushArgs.hableD = hableToeStrength();
+    pushArgs.hableE = hableToeNumerator();
+    pushArgs.hableF = hableToeDenominator();
+    pushArgs.hableW = hableWhitePoint();
 
     // Tonemap args
     pushArgs.performSRGBConversion = performSRGBConversion;

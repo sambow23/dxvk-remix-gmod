@@ -132,7 +132,7 @@ struct ToneMappingApplyToneMappingArgs {
 
   uint ditherMode;
   uint frameIndex;
-  uint pad0;
+  uint directOperatorMode;  // 1 = Direct mode: skip dynamic curve, apply operator directly.
   uint pad1;
 
   float agxGamma;
@@ -143,7 +143,17 @@ struct ToneMappingApplyToneMappingArgs {
   float agxContrast;
   float agxSlope;
   float agxPower;
-  uint pad2;
+  float agxPad;
+
+  // Hable filmic parameters (only used when tonemapOperator == tonemapOperatorHableFilmic).
+  float hableA;  // Shoulder strength.
+  float hableB;  // Linear strength.
+  float hableC;  // Linear angle.
+  float hableD;  // Toe strength.
+  float hableE;  // Toe numerator.
+  float hableF;  // Toe denominator.
+  float hableW;  // White point.
+  float hablePad; // Padding.
 };
 
 

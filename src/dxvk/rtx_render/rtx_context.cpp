@@ -1737,7 +1737,7 @@ namespace dxvk {
     // but the reset of denoised buffers causes wide tone curve differences
     // until it converges and thus making comparison of raytracing mode outputs more difficult
     setFramePassStage(RtxFramePassStage::ToneMapping);
-    
+
     if (hdrEnabled) {
       // HDR Mode: Use native HDR processing (bypass SDR tone mapping entirely)
       DxvkToneMapping& toneMapper = m_common->metaToneMapping();
@@ -1752,7 +1752,8 @@ namespace dxvk {
         autoExposure.enabled());
     } else {
       // SDR Mode: Apply the selected tonemapping mode
-      if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
+      if (RtxOptions::tonemappingMode() == TonemappingMode::Global ||
+          RtxOptions::tonemappingMode() == TonemappingMode::Direct) {
         DxvkToneMapping& toneMapper = m_common->metaToneMapping();
         
         toneMapper.dispatch(this, 
