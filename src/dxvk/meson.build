@@ -395,6 +395,8 @@ dxvk_src = files([
   'imgui/implot_demo.cpp',
   'imgui/implot_internal.h',
   'imgui/implot_items.cpp',
+  'imgui/imgui_remix_exports.cpp',
+  'imgui/imgui_remix_exports.h',
 ])
 
 thread_dep = dependency('threads')
