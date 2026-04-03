@@ -942,6 +942,11 @@ namespace dxvk {
                                          const RasterGeometry& geomData,
                                          const float currentFrameNum,
                                          std::shared_ptr<Mesh> pMesh) {
+    // Skip if bones were baked away (single-bone optimization sets bonesPerVertex=0)
+    if (pMesh->lssData.bonesPerVertex == 0) {
+      return;
+    }
+    
     AssetExporter::BufferCallback captureMeshBlendWeightsAsync = [ctx, geomData, currentFrameNum, pMesh](Rc<DxvkBuffer> inBuf) {
       // Prep helper vars
       const size_t numVertices = geomData.vertexCount;

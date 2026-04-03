@@ -1567,32 +1567,36 @@ namespace dxvk {
           surfaceMaterialsGPUSize += kSurfaceMaterialGPUSize;
         }
 
-        info.size = align(surfaceMaterialsGPUSize, kBufferAlignment);
-        info.usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-        if (m_surfaceMaterialBuffer == nullptr || info.size > m_surfaceMaterialBuffer->info().size) {
-          m_surfaceMaterialBuffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "Surface Material Buffer");
+        // Guard: surface count can be 0 while materials exist in cache (e.g. first frame
+        // before geometry is submitted). Creating a zero-size Vulkan buffer would crash.
+        if (surfaceMaterialsGPUSize > 0) {
+          info.size = align(surfaceMaterialsGPUSize, kBufferAlignment);
+          info.usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+          if (m_surfaceMaterialBuffer == nullptr || info.size > m_surfaceMaterialBuffer->info().size) {
+            m_surfaceMaterialBuffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "Surface Material Buffer");
+          }
+
+          std::size_t dataOffset = 0;
+          uint16_t surfaceIndex = 0;
+          std::vector<unsigned char> surfaceMaterialsGPUData(surfaceMaterialsGPUSize);
+          for (auto&& pInstance : m_accelManager.getOrderedInstances()) {
+            auto&& surfaceMaterial = m_surfaceMaterialCache.getObjectTable()[pInstance->surface.surfaceMaterialIndex];
+            surfaceMaterial.writeGPUData(surfaceMaterialsGPUData.data(), dataOffset, surfaceIndex);
+            surfaceIndex++;
+          }
+
+          if (m_startInMediumMaterialIndex_inCache != UINT32_MAX) {
+            auto&& surfaceMaterial = m_surfaceMaterialCache.getObjectTable()[m_startInMediumMaterialIndex_inCache];
+            surfaceMaterial.writeGPUData(surfaceMaterialsGPUData.data(), dataOffset, surfaceIndex);
+            m_startInMediumMaterialIndex = surfaceIndex;
+            surfaceIndex++;
+          }
+
+          assert(dataOffset == surfaceMaterialsGPUSize);
+          assert(surfaceMaterialsGPUData.size() == surfaceMaterialsGPUSize);
+
+          ctx->writeToBuffer(m_surfaceMaterialBuffer, 0, surfaceMaterialsGPUData.size(), surfaceMaterialsGPUData.data());
         }
-
-        std::size_t dataOffset = 0;
-        uint16_t surfaceIndex = 0;
-        std::vector<unsigned char> surfaceMaterialsGPUData(surfaceMaterialsGPUSize);
-        for (auto&& pInstance : m_accelManager.getOrderedInstances()) {
-          auto&& surfaceMaterial = m_surfaceMaterialCache.getObjectTable()[pInstance->surface.surfaceMaterialIndex];
-          surfaceMaterial.writeGPUData(surfaceMaterialsGPUData.data(), dataOffset, surfaceIndex);
-          surfaceIndex++;
-        }
-
-        if (m_startInMediumMaterialIndex_inCache != UINT32_MAX) {
-          auto&& surfaceMaterial = m_surfaceMaterialCache.getObjectTable()[m_startInMediumMaterialIndex_inCache];
-          surfaceMaterial.writeGPUData(surfaceMaterialsGPUData.data(), dataOffset, surfaceIndex);
-          m_startInMediumMaterialIndex = surfaceIndex;
-          surfaceIndex++;
-        }
-
-        assert(dataOffset == surfaceMaterialsGPUSize);
-        assert(surfaceMaterialsGPUData.size() == surfaceMaterialsGPUSize);
-
-        ctx->writeToBuffer(m_surfaceMaterialBuffer, 0, surfaceMaterialsGPUData.size(), surfaceMaterialsGPUData.data());
       }
 
       // Surface Material Extension Buffer
