@@ -2093,8 +2093,12 @@ namespace {
     std::unordered_set<remixapi_LightHandle> tombstones;
     tombstones.insert(destroys.begin(), destroys.end());
 
-    auto devLock = remixDevice->LockDevice();
-    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys), tombstones = std::move(tombstones), meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
+    // Scope devLock around EmitCs only. Holding it through D3D9 Present would
+    // create a devLock → s_mutex ordering (via AutoInstancePersistentLights inside
+    // swapchain Present) that deadlocks against Remix API calls using s_mutex → devLock.
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys), tombstones = std::move(tombstones), meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
       auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
       // Apply destroys first
       for (auto h : destroys) {
@@ -2311,6 +2315,7 @@ namespace {
 
       lightMgr.queueAutoInstancePersistent();
     });
+    } // release devLock before D3D9 Present
     // endScene right before present if a frame was started
     if (s_inFrame.load()) {
       auto cb = s_endCallback;
