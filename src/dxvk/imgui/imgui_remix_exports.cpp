@@ -29,6 +29,10 @@
 static std::atomic<PFN_remixapi_imgui_DrawCallback> s_drawCallback{ nullptr };
 static std::atomic<void*> s_drawCallbackUserData{ nullptr };
 
+// Overlay callback — invoked every frame, independent of developer menu state.
+static std::atomic<PFN_remixapi_imgui_DrawCallback> s_overlayCallback{ nullptr };
+static std::atomic<void*> s_overlayCallbackUserData{ nullptr };
+
 // --- Callback Registration ---
 
 RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_RegisterDrawCallback(
@@ -51,6 +55,26 @@ void remixapi_imgui_InvokeDrawCallback() {
 
 int remixapi_imgui_HasDrawCallback() {
   return s_drawCallback.load(std::memory_order_acquire) != nullptr ? 1 : 0;
+}
+
+// --- Overlay Callback ---
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_RegisterOverlayCallback(
+    PFN_remixapi_imgui_DrawCallback callback, void* userData) {
+  s_overlayCallbackUserData.store(userData, std::memory_order_release);
+  s_overlayCallback.store(callback, std::memory_order_release);
+}
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_UnregisterOverlayCallback() {
+  s_overlayCallback.store(nullptr, std::memory_order_release);
+  s_overlayCallbackUserData.store(nullptr, std::memory_order_release);
+}
+
+void remixapi_imgui_InvokeOverlayCallback() {
+  auto cb = s_overlayCallback.load(std::memory_order_acquire);
+  if (cb) {
+    cb(s_overlayCallbackUserData.load(std::memory_order_acquire));
+  }
 }
 
 // --- Windows ---
@@ -405,4 +429,32 @@ RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotLine(const char* label_id,
 
 RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotBars(const char* label_id, const float* values, int count, double bar_size) {
   ImPlot::PlotBars(label_id, values, count, bar_size);
+}
+
+// --- DrawList (ForegroundDrawList screen-space primitives) ---
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddLine(
+    float x1, float y1, float x2, float y2, uint32_t col, float thickness) {
+  ImGui::GetForegroundDrawList()->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), (ImU32)col, thickness);
+}
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddRect(
+    float x1, float y1, float x2, float y2, uint32_t col, float rounding, float thickness) {
+  ImGui::GetForegroundDrawList()->AddRect(ImVec2(x1, y1), ImVec2(x2, y2), (ImU32)col, rounding, 0, thickness);
+}
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddRectFilled(
+    float x1, float y1, float x2, float y2, uint32_t col, float rounding) {
+  ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(x1, y1), ImVec2(x2, y2), (ImU32)col, rounding);
+}
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddText(
+    float x, float y, uint32_t col, const char* text) {
+  ImGui::GetForegroundDrawList()->AddText(ImVec2(x, y), (ImU32)col, text);
+}
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetDisplaySize(float* out_w, float* out_h) {
+  ImVec2 sz = ImGui::GetIO().DisplaySize;
+  if (out_w) *out_w = sz.x;
+  if (out_h) *out_h = sz.y;
 }

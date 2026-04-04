@@ -997,6 +997,10 @@ namespace dxvk {
 
     showHudMessages(ctx);
 
+    // Always invoke the overlay callback — draws on top of everything,
+    // independent of whether the developer menu is open or closed.
+    remixapi_imgui_InvokeOverlayCallback();
+
     ImGui::Render();
   }
 

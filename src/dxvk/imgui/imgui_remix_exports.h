@@ -51,6 +51,18 @@ void remixapi_imgui_InvokeDrawCallback();
 // Internal: returns non-zero if a draw callback is currently registered.
 int remixapi_imgui_HasDrawCallback();
 
+// --- Overlay Callback Registration ---
+// Separate from the tab draw callback: the overlay callback is invoked every
+// frame between NewFrame() and Render(), regardless of whether the developer
+// menu is open. Use this for always-visible HUD overlays.
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_RegisterOverlayCallback(
+    PFN_remixapi_imgui_DrawCallback callback, void* userData);
+
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_UnregisterOverlayCallback(void);
+
+// Internal: called every frame to invoke the registered overlay callback.
+void remixapi_imgui_InvokeOverlayCallback();
+
 // --- Windows ---
 RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_Begin(const char* name, int* p_open, int flags);
 RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_End(void);
@@ -153,6 +165,17 @@ RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_PlotBeginPlot(const char* title_id
 RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotEndPlot(void);
 RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotLine(const char* label_id, const float* values, int count);
 RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotBars(const char* label_id, const float* values, int count, double bar_size);
+
+// --- DrawList (ForegroundDrawList screen-space primitives) ---
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddLine(
+    float x1, float y1, float x2, float y2, uint32_t col, float thickness);
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddRect(
+    float x1, float y1, float x2, float y2, uint32_t col, float rounding, float thickness);
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddRectFilled(
+    float x1, float y1, float x2, float y2, uint32_t col, float rounding);
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_DrawList_AddText(
+    float x, float y, uint32_t col, const char* text);
+RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetDisplaySize(float* out_w, float* out_h);
 
 #ifdef __cplusplus
 }
