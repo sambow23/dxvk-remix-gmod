@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <chrono>
+#include <optional>
 #include "rtx_options.h"
 
 struct VolumeArgs;
@@ -113,6 +114,8 @@ namespace dxvk {
 
     void commitGeometryToRT(const DrawParameters& params, DrawCallState& drawCallState);
     void commitExternalGeometryToRT(ExternalDrawState&& state);
+
+    void setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity);
 
     static void blitImageHelper(Rc<DxvkContext> ctx, const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& dstImage, VkFilter filter);
 
@@ -206,6 +209,7 @@ namespace dxvk {
     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
+    void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
 
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
@@ -264,6 +268,22 @@ namespace dxvk {
     uint32_t m_screenshotFrameNum = -1;
     uint32_t m_terminateAppFrameNum = -1;
     bool m_previousInjectRtxHadScene = false;
+
+    // Screen overlay state
+    struct ScreenOverlayFrame {
+      Rc<DxvkBuffer> stagingBuffer;
+      uint32_t width = 0;
+      uint32_t height = 0;
+      VkFormat format = VK_FORMAT_UNDEFINED;
+      float opacity = 1.0f;
+    };
+    std::optional<ScreenOverlayFrame> m_pendingScreenOverlay;
+    Rc<DxvkImage> m_screenOverlayImage;
+    Rc<DxvkImageView> m_screenOverlayView;
+    uint32_t m_screenOverlayWidth = 0;
+    uint32_t m_screenOverlayHeight = 0;
+    VkFormat m_screenOverlayFormat = VK_FORMAT_UNDEFINED;
+
     IntegrateIndirectMode m_prevIntegrateIndirectMode = IntegrateIndirectMode::Count;
 
     DxvkRaytracingInstanceState m_rtState;

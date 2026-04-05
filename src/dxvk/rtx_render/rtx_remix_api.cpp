@@ -53,6 +53,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <optional>
 #include <unordered_set>
 #include <unordered_map>
@@ -107,6 +108,15 @@ namespace {
     dxvk::Matrix4 transform; 
     std::filesystem::path texturePath;
   };
+  struct PendingScreenOverlay {
+    dxvk::Rc<dxvk::DxvkBuffer> stagingBuffer;
+    uint32_t width;
+    uint32_t height;
+    VkFormat format;
+    float opacity;
+  };
+  std::optional<PendingScreenOverlay> s_pendingScreenOverlay;
+
   struct OwnedSurface {
     std::vector<remixapi_HardcodedVertex> vertices;
     std::vector<uint32_t> indices;
@@ -2311,6 +2321,22 @@ namespace {
 
       lightMgr.queueAutoInstancePersistent();
     });
+    // Process screen overlay
+    {
+      std::optional<PendingScreenOverlay> overlay;
+      {
+        std::lock_guard lock { s_mutex };
+        overlay.swap(s_pendingScreenOverlay);
+      }
+      if (overlay.has_value()) {
+        remixDevice->EmitCs([cOverlay = std::move(*overlay)](dxvk::DxvkContext* ctx) mutable {
+          static_cast<dxvk::RtxContext*>(ctx)->setScreenOverlayData(
+            std::move(cOverlay.stagingBuffer),
+            cOverlay.width, cOverlay.height,
+            cOverlay.format, cOverlay.opacity);
+        });
+      }
+    }
     // endScene right before present if a frame was started
     if (s_inFrame.load()) {
       auto cb = s_endCallback;
@@ -2911,6 +2937,71 @@ extern "C"
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawScreenOverlay(
+    const void*     pPixelData,
+    uint32_t        width,
+    uint32_t        height,
+    remixapi_Format format,
+    float           opacity) {
+
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+
+    // Allow clearing the overlay
+    if (!pPixelData || width == 0 || height == 0) {
+      std::lock_guard lock { s_mutex };
+      s_pendingScreenOverlay.reset();
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    // Convert format
+    VkFormat vkFormat = VK_FORMAT_UNDEFINED;
+    switch (format) {
+      case REMIXAPI_FORMAT_R8G8B8A8_UNORM: vkFormat = VK_FORMAT_R8G8B8A8_UNORM; break;
+      case REMIXAPI_FORMAT_B8G8R8A8_UNORM: vkFormat = VK_FORMAT_B8G8R8A8_UNORM; break;
+      default:
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Calculate data size (4 bytes per pixel for RGBA/BGRA)
+    const uint64_t dataSize = static_cast<uint64_t>(width) * height * 4;
+
+    // Create staging buffer
+    dxvk::DxvkBufferCreateInfo stagingInfo = {};
+    stagingInfo.size = dataSize;
+    stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    stagingInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT;
+    stagingInfo.access = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
+
+    dxvk::Rc<dxvk::DxvkBuffer> stagingBuffer = remixDevice->GetDXVKDevice()->createBuffer(
+      stagingInfo,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      dxvk::DxvkMemoryStats::Category::RTXBuffer,
+      "Remix API screen overlay staging");
+
+    if (stagingBuffer == nullptr) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    // Copy pixel data to staging buffer
+    dxvk::DxvkBufferSlice stagingSlice { stagingBuffer };
+    memcpy(stagingSlice.mapPtr(0), pPixelData, dataSize);
+
+    {
+      std::lock_guard lock { s_mutex };
+      s_pendingScreenOverlay = PendingScreenOverlay {
+        std::move(stagingBuffer),
+        width, height,
+        vkFormat,
+        std::clamp(opacity, 0.0f, 1.0f)
+      };
+    }
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
     const remixapi_InitializeLibraryInfo* info,
     remixapi_Interface* out_result) {
@@ -2961,8 +3052,9 @@ extern "C"
       interf.CreateMeshBatched = remixapi_CreateMeshBatched;
       interf.CreateTexture = remixapi_CreateTexture;
       interf.DestroyTexture = remixapi_DestroyTexture;
+      interf.DrawScreenOverlay = remixapi_DrawScreenOverlay;
     }
-    static_assert(sizeof(interf) == 264, "Add/remove function registration");
+    static_assert(sizeof(interf) == 272, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
