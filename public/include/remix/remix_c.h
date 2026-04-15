@@ -763,6 +763,14 @@ extern "C" {
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyTexture)(
     remixapi_TextureHandle      handle);
 
+  // Screen overlay API
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DrawScreenOverlay)(
+    const void*       pPixelData,
+    uint32_t          width,
+    uint32_t          height,
+    remixapi_Format   format,
+    float             opacity);
+
 
   typedef struct remixapi_InitializeLibraryInfo {
     remixapi_StructType sType;
@@ -810,6 +818,7 @@ extern "C" {
     PFN_remixapi_RegisterCallbacks          RegisterCallbacks;
     PFN_remixapi_AutoInstancePersistentLights AutoInstancePersistentLights;
     PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
+    PFN_remixapi_DrawScreenOverlay          DrawScreenOverlay;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
