@@ -30,6 +30,7 @@
 #include "../spirv/spirv_code_buffer.h"
 #include "../util/util_matrix.h"
 #include "rtx_options.h"
+#include "rtx_tone_mapping.h"
 
 namespace dxvk {
 
@@ -74,8 +75,8 @@ namespace dxvk {
     RTX_OPTION("rtx.localtonemap", int, displayMip, 0, "Bottom mip level of tone map pyramid.");
     RTX_OPTION("rtx.localtonemap", bool, boostLocalContrast, false, "Boosts contrast on local features.");
     RTX_OPTION("rtx.localtonemap", bool, useGaussian, true, "Uses gaussian kernel to generate tone map pyramid.");
-    RTX_OPTION("rtx.localtonemap", bool, finalizeWithACES, true, "Applies ACES tone mapping on final result.");
-    RTX_OPTION("rtx.localtonemap", bool, useAgX, false, "Applies AgX tone mapping instead of ACES on final result.");
+    RTX_OPTION("rtx.localtonemap", TonemapOperator, tonemapOperator, TonemapOperator::ACES,
+                   "Tonemapping operator to apply after local tone mapping. 0=None, 1=ACES, 2=ACES (Legacy), 3=Hable Filmic, 4=AgX.");
     RTX_OPTION("rtx.localtonemap", float, agxGamma, 0.45f, "AgX gamma adjustment for contrast control. Lower values increase contrast. Range [0.5, 3.0].");
     RTX_OPTION("rtx.localtonemap", float, agxSaturation, 1.0f, "AgX saturation multiplier. Higher values increase color saturation. Range [0.5, 2.0].");
     RTX_OPTION("rtx.localtonemap", float, agxExposureOffset, 0.0f, "AgX exposure offset in EV stops. Positive values brighten the image. Range [-2.0, 2.0].");

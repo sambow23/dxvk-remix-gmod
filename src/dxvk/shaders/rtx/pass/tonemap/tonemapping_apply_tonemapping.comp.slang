@@ -96,7 +96,6 @@ float3 filmicToneMapper(float3 inputColor)
   return pow(x, float3(2.2));
 }
 
-
 // Dynamic tone mapper based on Eilertsen, Mantiuk, and Unger's paper
 // *Real-time noise-aware tone mapping*. Applies a luminance-based tone 
 // curve and then applies filmic saturation emulation.
@@ -124,18 +123,44 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
 {
   color *= getExposure(InExposure, cb.enableAutoExposure, cb.exposureFactor);
 
-  if (cb.toneMappingEnabled != 0) 
+  if (cb.directOperatorMode != 0)
+  {
+    // Direct mode: no dynamic tone curve, apply only the selected operator.
+    if (cb.tonemapOperator == tonemapOperatorACES)
+      color = ACESFilm(color, false);
+    else if (cb.tonemapOperator == tonemapOperatorACESLegacy)
+      color = ACESFilm(color, true);
+    else if (cb.tonemapOperator == tonemapOperatorHableFilmic)
+      color = hableFilmicToneMapper(color, cb.hableA, cb.hableB, cb.hableC, cb.hableD, cb.hableE, cb.hableF, cb.hableW);
+    else if (cb.tonemapOperator == tonemapOperatorAgX)
+      color = AgXToneMapping(color, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset,
+                             cb.agxLook, cb.agxContrast, cb.agxSlope, cb.agxPower);
+  }
+  else if (cb.toneMappingEnabled != 0) 
   {
     if (cb.debugMode == 0) 
     {
       // Normal tone mapping
       color = dynamicToneMapper(color);
       
-      if (cb.finalizeWithACES || cb.useAgX)
+      if (cb.tonemapOperator == tonemapOperatorACES)
       {
-        color = applyToneMapping(color, cb.useAgX, cb.useLegacyACES, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset, 
-                                 cb.agxLook, cb.agxContrast, cb.agxSlope, cb.agxPower);
+        color = ACESFilm(color, false);
       }
+      else if (cb.tonemapOperator == tonemapOperatorACESLegacy)
+      {
+        color = ACESFilm(color, true);
+      }
+      else if (cb.tonemapOperator == tonemapOperatorHableFilmic)
+      {
+        color = hableFilmicToneMapper(color, cb.hableA, cb.hableB, cb.hableC, cb.hableD, cb.hableE, cb.hableF, cb.hableW);
+      }
+      else if (cb.tonemapOperator == tonemapOperatorAgX)
+      {
+        color = AgXToneMapping(color, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset,
+                               cb.agxLook, cb.agxContrast, cb.agxSlope, cb.agxPower);
+      }
+      // tonemapOperatorNone: dynamic curve only, no additional operator.
     } 
     else
     {

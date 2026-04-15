@@ -63,7 +63,7 @@ struct LuminanceArgs
   float highlights;
   uint debugView;
 
-  uint useLegacyACES;
+  uint tonemapOperator;  // One of tonemapOperator* constants from tonemapping.h.
   uint pad1;
   uint pad2;
   uint enableAutoExposure;
@@ -98,25 +98,35 @@ struct FinalCombineArgs
   float exposure;
   uint debugView;
 
-  uint finalizeWithACES;
+  uint tonemapOperator;  // One of tonemapOperator* constants from tonemapping.h.
   uint performSRGBConversion;
   uint enableAutoExposure;
   uint pad0;
 
   uint ditherMode;
   uint frameIndex;
-  uint useLegacyACES;
-  uint useAgX;
-  
+  uint pad1;
+  uint pad2;
+
   float agxGamma;
   float agxSaturation;
   float agxExposureOffset;
   uint agxLook;
-  
+
   float agxContrast;
   float agxSlope;
   float agxPower;
-  uint pad2;
+  float agxPad;
+
+  // Hable filmic parameters (only used when tonemapOperator == tonemapOperatorHableFilmic).
+  float hableA;  // Shoulder strength.
+  float hableB;  // Linear strength.
+  float hableC;  // Linear angle.
+  float hableD;  // Toe strength.
+  float hableE;  // Toe numerator.
+  float hableF;  // Toe denominator.
+  float hableW;  // White point.
+  float hablePad;
 };
 
 
