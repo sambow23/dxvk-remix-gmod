@@ -1350,8 +1350,16 @@ namespace dxvk {
     bool billboardsGotGenerated = false;
     currentInstance.m_billboardCount = 0;
     
-    if (drawCall.cameraType == CameraType::ViewModel && !currentInstance.m_isHidden && isFirstUpdateThisFrame)
+    if (drawCall.cameraType == CameraType::ViewModel && !currentInstance.m_isHidden && isFirstUpdateThisFrame) {
+      static uint32_t s_loggedViewModelCandidates = 0;
+      if (s_loggedViewModelCandidates < 16) {
+        Logger::info(str::format(
+          "[RTX-ViewModel] Candidate collected: instanceId=", currentInstance.getId(),
+          " materialHash=0x", std::hex, currentInstance.getMaterialHash(), std::dec));
+        ++s_loggedViewModelCandidates;
+      }
       m_viewModelCandidates.push_back(&currentInstance);
+    }
 
     if (RtxOptions::enableSeparateUnorderedApproximations() &&
         (drawCall.cameraType == CameraType::Main || drawCall.cameraType == CameraType::ViewModel) &&
@@ -1515,14 +1523,37 @@ namespace dxvk {
     for (auto* candidateInstance : m_viewModelCandidates) {
 
       // Valid view model instances must be associated only with the view model camera
-      if (candidateInstance->m_seenCameraTypes.size() != 1)
+      if (candidateInstance->m_seenCameraTypes.size() != 1) {
+        static uint32_t s_loggedRejectedViewModelCandidates = 0;
+        if (s_loggedRejectedViewModelCandidates < 16) {
+          std::string seenCameraTypes;
+          for (auto cameraType : candidateInstance->m_seenCameraTypes) {
+            if (!seenCameraTypes.empty()) {
+              seenCameraTypes += ",";
+            }
+            seenCameraTypes += std::to_string(static_cast<int>(cameraType));
+          }
+          Logger::warn(str::format(
+            "[RTX-ViewModel] Candidate rejected: instanceId=", candidateInstance->getId(),
+            " seenCameraTypes=[", seenCameraTypes, "]"));
+          ++s_loggedRejectedViewModelCandidates;
+        }
         continue;
+      }
 
       // Hide the reference instance since we'll create a separate instance for the view model 
       candidateInstance->m_vkInstance.mask = 0;
 
       // Tag the instance as ViewModel so it can be checked for it being a reference view model instance
       candidateInstance->setCustomIndexBit(CUSTOM_INDEX_IS_VIEW_MODEL, true);
+
+      static uint32_t s_loggedPromotedViewModels = 0;
+      if (s_loggedPromotedViewModels < 16) {
+        Logger::info(str::format(
+          "[RTX-ViewModel] Candidate promoted: instanceId=", candidateInstance->getId(),
+          " materialHash=0x", std::hex, candidateInstance->getMaterialHash(), std::dec));
+        ++s_loggedPromotedViewModels;
+      }
 
       viewModelInstances.push_back(createViewModelInstance(ctx, *candidateInstance, perspectiveCorrection, prevPerspectiveCorrection));
     }

@@ -703,6 +703,9 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_SKY) {
         return CameraType::Sky;
       }
+      if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL) {
+        return CameraType::ViewModel;
+      }
       return CameraType::Main;
     }
 
@@ -805,7 +808,7 @@ dxvk::ExternalDrawState dxvk::RemixAPIPrivateAccessor::toRtDrawState(const remix
 {
   auto prototype = DrawCallState {};
   {
-    prototype.cameraType = CameraType::Main;
+    prototype.cameraType = convert::categoryToCameraType(info.categoryFlags);
     prototype.transformData.objectToWorld = convert::tomat4(info.transform);
     prototype.transformData.textureTransform = Matrix4 {};
     prototype.transformData.texgenMode = TexGenMode::None;

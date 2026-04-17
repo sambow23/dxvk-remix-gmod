@@ -1720,6 +1720,13 @@ namespace dxvk {
 
     // Check for mesh/light replacements for external meshes (same as D3D9 path)
     const XXH64_hash_t meshHash = reinterpret_cast<XXH64_hash_t>(state.mesh);
+    static uint32_t s_loggedViewModelExternalDraws = 0;
+    if (state.cameraType == CameraType::ViewModel && s_loggedViewModelExternalDraws < 16) {
+      Logger::info(str::format(
+        "[RTX-ViewModel] External draw submitted: meshHash=0x", std::hex, meshHash, std::dec,
+        " drawCallID=", state.drawCall.drawCallID));
+      ++s_loggedViewModelExternalDraws;
+    }
     ONCE(Logger::info(str::format("[RTX-Mesh] Checking external mesh hash: 0x", std::hex, meshHash, std::dec)));
     std::vector<AssetReplacement>* pReplacements = m_pReplacer->getReplacementsForMesh(meshHash);
     
