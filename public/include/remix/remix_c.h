@@ -130,7 +130,8 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_DEPRECATED_LEGACY_PARTICLE_SYSTEM    = 24,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT    = 25,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT     = 26,
-    REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO                   = 27
+    REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO                   = 27,
+    REMIXAPI_STRUCT_TYPE_FOG_INFO                             = 28,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -693,6 +694,21 @@ extern "C" {
     const char*               key,
     const char*               value);
 
+  typedef struct remixapi_FogInfo {
+    remixapi_StructType       sType;
+    void*                     pNext;
+    uint32_t                  mode;
+    remixapi_Float3D          color;
+    float                     scale;
+    float                     end;
+    float                     density;
+  } remixapi_FogInfo;
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetFogState)(
+    const remixapi_FogInfo*   info);
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetFogState(
+    const remixapi_FogInfo*   info);
   typedef struct remixapi_PresentInfo {
     remixapi_StructType       sType;
     void*                     pNext;
@@ -791,6 +807,7 @@ extern "C" {
     PFN_remixapi_Present            Present;
 
     PFN_remixapi_SetCameraMediumMaterial SetCameraMediumMaterial;
+    PFN_remixapi_SetFogState                SetFogState;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

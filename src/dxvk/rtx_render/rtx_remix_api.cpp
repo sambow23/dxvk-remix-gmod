@@ -1263,6 +1263,39 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL impl_SetFogState(
+    const remixapi_FogInfo* info) {
+    if (!info || info->sType != REMIXAPI_STRUCT_TYPE_FOG_INFO) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+
+    if (!s_inFrame.exchange(true)) {
+      auto cb = s_beginCallback;
+      if (cb) {
+        cb();
+      }
+    }
+
+    dxvk::FogState fog;
+    fog.mode = info->mode;
+    fog.color = convert::tovec3(info->color);
+    fog.scale = info->scale;
+    fog.end = info->end;
+    fog.density = info->density;
+
+    std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([fog](dxvk::DxvkContext* ctx) {
+      ctx->getCommonObjects()->getSceneManager().setExternalFogState(fog);
+    });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
   remixapi_ErrorCode REMIXAPI_CALL remixapi_pick_RequestObjectPicking(
     const remixapi_Rect2D* pixelRegion,
     PFN_remixapi_pick_RequestObjectPickingUserCallback callback,
@@ -1713,6 +1746,10 @@ namespace {
 
 extern "C"
 {
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetFogState(
+    const remixapi_FogInfo* info) {
+    return impl_SetFogState(info);
+  }
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,
                                                                        remixapi_Interface* out_result) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO) {
@@ -1750,8 +1787,9 @@ extern "C"
       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
+      interf.SetFogState = remixapi_SetFogState;
     }
-    static_assert(sizeof(interf) == 176, "Add/remove function registration");
+    static_assert(sizeof(interf) == 184, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

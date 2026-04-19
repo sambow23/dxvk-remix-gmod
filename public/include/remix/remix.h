@@ -156,6 +156,7 @@ namespace remix {
   using Float2D = remixapi_Float2D;
   using Float3D = remixapi_Float3D;
   using Float4D = remixapi_Float4D;
+  using FogInfo = remixapi_FogInfo;
   using Transform = remixapi_Transform;
 
 
@@ -189,6 +190,7 @@ namespace remix {
     Result< void >                    DestroyLight(remixapi_LightHandle handle);
     Result< void >                    DrawLightInstance(remixapi_LightHandle handle);
     Result< void >                    SetConfigVariable(const char* key, const char* value);
+    Result< void >                    SetFogState(const remixapi_FogInfo& info);
 
     // DXVK interoperability
     Result< IDirect3D9Ex* >                  dxvk_CreateD3D9(bool editorModeEnabled = false);
@@ -225,7 +227,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 176,
+  static_assert(sizeof(remixapi_Interface) == 184,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -269,6 +271,12 @@ namespace remix {
     return m_CInterface.SetConfigVariable(key, value);
   }
 
+  inline Result< void > Interface::SetFogState(const remixapi_FogInfo& info) {
+    if (!m_CInterface.SetFogState) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.SetFogState(&info);
+  }
   inline Result< void > Interface::Present(const remixapi_PresentInfo* info) {
     if (!m_CInterface.Present) {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;

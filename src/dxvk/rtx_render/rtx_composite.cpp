@@ -178,8 +178,12 @@ namespace dxvk {
 
     ImGui::BeginDisabled(!enableFog());
     ImGui::Indent();
-    RemixGui::DragFloat("Fog Color Scale", &fogColorScaleObject(), 0.01f, 0.0f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    RemixGui::DragFloat("Max Fog Distance", &maxFogDistanceObject(), 1.f, 0.0f, 0.f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::DragFloat("Fog Color Scale", &fogColorScaleObject(), 0.01f, 0.0f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::DragFloat("Fog Strength", &fogStrengthObject(), 0.01f, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::DragFloat("Max Fog Distance", &maxFogDistanceObject(), 1.f, 0.0f, 0.f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::DragFloat("External Fog Start Factor", &externalFogLinearStartFactorObject(), 0.01f, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::DragFloat("External Fog End Factor", &externalFogLinearEndFactorObject(), 0.01f, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::DragFloat("Linear Fog Start Feather", &linearFogStartFeatherObject(), 0.01f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::Unindent();
     ImGui::EndDisabled();
   }
@@ -401,7 +405,8 @@ namespace dxvk {
     compositeArgs.frameIdx = frameIdx;
 
     if (enableFog()) {
-      const float colorScale = fogColorScale();
+      const float fogStrengthScale = std::max(fogStrength(), 0.0f);
+      const float colorScale = settings.useExternalFogColor ? 1.0f : fogColorScale();
       auto& fog = settings.fog;
       compositeArgs.fogMode = fog.mode;
       compositeArgs.fogColor = { fog.color.x * colorScale, fog.color.y * colorScale, fog.color.z * colorScale };
@@ -411,9 +416,31 @@ namespace dxvk {
       // Note: Density can simply be divided by the scene scale factor to account for the fact that the distance in the exponent
       // will be in render units (scaled by the scene scale), not the original game's units it was targetted for.
       // compositeArgs.fogDensity = fabsf(fog.density) / RtxOptions::sceneScale();
-      compositeArgs.fogEnd = fog.end;
-      compositeArgs.fogScale = fog.scale;
-      compositeArgs.fogDensity = fabsf(fog.density);
+      if (settings.useExternalFogColor && fog.mode == D3DFOG_LINEAR) {
+        const float sourceFogEnd = fog.end;
+        const float fogStart = sourceFogEnd * externalFogLinearStartFactor();
+        const float fogEnd = std::max(sourceFogEnd * externalFogLinearEndFactor(), fogStart + 1.0e-4f);
+        const float fogRange = fogEnd - fogStart;
+
+        const float adjustedFogRange = fogStrengthScale > 1.0e-4f ? fogRange / fogStrengthScale : 0.0f;
+        compositeArgs.fogEnd = fogStrengthScale > 1.0e-4f ? fogStart + adjustedFogRange : fogStart;
+        compositeArgs.fogScale = adjustedFogRange > 1.0e-4f ? 1.0f / adjustedFogRange : 0.0f;
+        compositeArgs.fogDensity = linearFogStartFeather();
+      } else {
+        if (fog.mode == D3DFOG_LINEAR) {
+          const float fogRange = fog.scale > 1.0e-6f ? 1.0f / fog.scale : 0.0f;
+          const float fogStart = fog.end - fogRange;
+          const float adjustedFogRange = fogStrengthScale > 1.0e-4f ? fogRange / fogStrengthScale : 0.0f;
+
+          compositeArgs.fogEnd = fogStrengthScale > 1.0e-4f ? fogStart + adjustedFogRange : fogStart;
+          compositeArgs.fogScale = adjustedFogRange > 1.0e-4f ? 1.0f / adjustedFogRange : 0.0f;
+          compositeArgs.fogDensity = linearFogStartFeather();
+        } else {
+          compositeArgs.fogEnd = fog.end;
+          compositeArgs.fogScale = fog.scale;
+          compositeArgs.fogDensity = fabsf(fog.density) * fogStrengthScale;
+        }
+      }
       compositeArgs.maxFogDistance = maxFogDistance();
     }
 
@@ -434,6 +461,7 @@ namespace dxvk {
     compositeArgs.enableReSTIRGI = RtxOptions::useReSTIRGI();
     compositeArgs.sparseRenderingArgs = rtOutput.m_raytraceArgs.sparseRenderingArgs;
     compositeArgs.volumeArgs = rtOutput.m_raytraceArgs.volumeArgs;
+    compositeArgs.atmosphereArgs = rtOutput.m_raytraceArgs.atmosphereArgs;
     compositeArgs.outputParticleLayer = ctx->useRayReconstruction() && rayReconstruction.useParticleBuffer();
     compositeArgs.outputSecondarySignalToParticleLayer = ctx->useRayReconstruction() && rayReconstruction.preprocessSecondarySignal();
     compositeArgs.enableDemodulateAttenuation = ctx->useRayReconstruction() && rayReconstruction.demodulateAttenuation();
@@ -500,6 +528,8 @@ namespace dxvk {
 
     compositeArgs.domeLightArgs = domeLightArgs;
     compositeArgs.skyBrightness = RtxOptions::skyBrightness();
+    compositeArgs.skyMode = rtOutput.m_raytraceArgs.skyMode;
+    compositeArgs.isZUp = rtOutput.m_raytraceArgs.isZUp;
 
     const bool sparseRenderingEnabled = rtOutput.m_raytraceArgs.sparseRenderingArgs.mode != SparseRenderingMode::Off;
 
