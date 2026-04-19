@@ -1052,6 +1052,26 @@ namespace dxvk {
     }
   }
 
+  const FogState& SceneManager::getEffectiveFogState() const {
+    return m_externalFog.has_value() ? *m_externalFog : m_fog;
+  }
+
+  void SceneManager::setExternalFogState(const FogState& fog) {
+    m_externalFog = fog;
+  }
+
+  void SceneManager::clearFogState() {
+    const FogState& effectiveFog = getEffectiveFogState();
+    if (m_externalFog.has_value() && effectiveFog.mode != D3DFOG_NONE) {
+      m_fogStates[effectiveFog.getHash()] = effectiveFog;
+    }
+
+    ImGUI::SetFogStates(m_fogStates, effectiveFog.getHash());
+    m_fog = FogState();
+    m_externalFog.reset();
+    m_fogStates.clear();
+  }
+
   void SceneManager::updateBufferCache(RaytraceGeometry& newGeoData) {
     ScopedCpuProfileZone();
     if (newGeoData.indexBuffer.defined()) {

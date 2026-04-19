@@ -219,7 +219,11 @@ public:
 
   const FogState& getFogState() const { return m_fog; }
   FogState& getFogState() { return m_fog; }
+  const FogState& getEffectiveFogState() const;
+  bool hasExternalFogState() const { return m_externalFog.has_value(); }
   const fast_unordered_cache<FogState>& getFogStates() const { return m_fogStates; }
+  void setExternalFogState(const FogState& fog);
+  void clearFogState();
 
   uint32_t getStartInMediumMaterialIndex() { return m_startInMediumMaterialIndex; }
   
@@ -403,6 +407,7 @@ private:
   std::unique_ptr<TerrainBaker> m_terrainBaker;
 
   FogState m_fog;
+  std::optional<FogState> m_externalFog;
   fast_unordered_cache<FogState> m_fogStates;
   std::mutex m_startInMediumMaterialMutex;
   std::optional<MaterialData> m_pendingStartInMediumMaterial;

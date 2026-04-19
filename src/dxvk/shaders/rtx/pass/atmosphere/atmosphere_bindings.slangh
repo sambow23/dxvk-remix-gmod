@@ -71,3 +71,21 @@ Texture2D<uint> AtmosphereCloudHistoryFrameIdPrev;
 
 layout(r16ui, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_CURR)
 RWTexture2D<uint> AtmosphereCloudHistoryFrameIdCurr;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT)
+Texture2D<float> AtmosphereCloudSkyTransmittanceLut;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_RENDER_RT)
+Texture2D<float4> AtmosphereCloudRender;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_D_SUN)
+Texture3D<float> AtmosphereCloudDSun;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)
+Texture3D<float> AtmosphereCloudDAmbient;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
+Texture2D<float4> AtmosphereCloudSecondaryLut;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
+Texture2D<float4> AtmosphereCloudPlacementMap;

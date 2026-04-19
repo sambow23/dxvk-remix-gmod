@@ -107,6 +107,9 @@ struct CompositeArgs {
   uint enhanceAlbedo;
   float skyBrightness;
 
+  uint skyMode;
+  uint isZUp;
+
   vec3 clearColorFinalColor;
   uint timeSinceStartMS;
 

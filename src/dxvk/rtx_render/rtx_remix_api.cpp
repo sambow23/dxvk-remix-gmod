@@ -1783,6 +1783,35 @@ namespace {
   // TextureHashMutation enum). Both call sites hold s_mutex across the call
   // per the lock-ordering rule documented alongside s_mutex.
 
+  remixapi_ErrorCode REMIXAPI_CALL impl_SetFogState(
+    const remixapi_FogInfo* info) {
+    if (!info || info->sType != REMIXAPI_STRUCT_TYPE_FOG_INFO) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+
+    dxvk::fork_hooks::notifyBeginScene();
+
+    dxvk::FogState fog;
+    fog.mode = info->mode;
+    fog.color = convert::tovec3(info->color);
+    fog.scale = info->scale;
+    fog.end = info->end;
+    fog.density = info->density;
+
+    std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([fog](dxvk::DxvkContext* ctx) {
+      ctx->getCommonObjects()->getSceneManager().setExternalFogState(fog);
+    });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
     const char* textureCategory,
     const char* textureHash) {
@@ -2730,11 +2759,16 @@ extern "C"
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
+  REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
     return dxvk::fork_hooks::getUiState(tryAsDxvk());
   }
 
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetFogState(
+    const remixapi_FogInfo* info) {
+    return impl_SetFogState(info);
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
     return dxvk::fork_hooks::setUiState(tryAsDxvk(), state);
   }
 
@@ -2855,10 +2889,11 @@ extern "C"
       interf.GetVramStats = remixapi_GetVramStats;
       interf.RequestTextureVramFree = remixapi_RequestTextureVramFree;
       interf.GetGameValue = remixapi_GetGameValue;
+      interf.SetFogState = remixapi_SetFogState;
       // Fork-added vtable slots (extern-C exported; delegated to fork hook)
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 328, "Add/remove function registration");
+    static_assert(sizeof(interf) == 336, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
