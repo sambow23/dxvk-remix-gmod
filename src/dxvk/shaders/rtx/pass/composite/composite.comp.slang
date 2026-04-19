@@ -35,6 +35,8 @@
 #include "rtx/concept/camera/camera.slangh"
 #include "rtx/concept/surface/alpha_blend_surface.slangh"
 #include "rtx/utility/geometry_flags.slangh"
+#include "rtx/pass/atmosphere/atmosphere_bindings.slangh"
+#include "rtx/pass/atmosphere/atmosphere_sky.slangh"
 
 #include "rtx/algorithm/volume_composite_helpers.slangh"
 #include "rtx/algorithm/accumulate.slangh"
@@ -46,6 +48,21 @@ float3 sampleDomeLightTexture(Sampler2D<float3> DomeLight, float3 worldDirection
   float3 domeSampleDirection = mul(worldToDomeLightTransform, float4(worldDirection, 0.0f)).xyz;
   float2 sampleUV = cartesianDirectionToLatLongSphere(domeSampleDirection);
   return DomeLight.SampleLevel(sampleUV, 0).xyz;
+}
+
+vec3 sampleSkyRadiance(float3 worldDirection, float2 screenUV, uint2 pixelCoordinate)
+{
+  if (cb.domeLightArgs.active)
+  {
+    return cb.domeLightArgs.radiance * sampleDomeLightTexture(SkyLight, worldDirection, cb.domeLightArgs.worldToLightTransform);
+  }
+
+  if (cb.skyMode == 1)
+  {
+    return evalSkyRadiance(worldDirection, cb.atmosphereArgs, pixelCoordinate, cb.frameIdx, cb.isZUp != 0);
+  }
+
+  return cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0);
 }
 
 void preCompositeDebugView(uint2 pixelCoordinate)
@@ -579,16 +596,8 @@ void applySkyContribution(
     return;
   }
 
-  vec3 skyContribution;
-  if (cb.domeLightArgs.active)
-  {
-    skyContribution = cb.domeLightArgs.radiance * sampleDomeLightTexture(SkyLight, primaryRayDirections.worldDirection, cb.domeLightArgs.worldToLightTransform) * volumeAttenuation;
-  }
-  else
-  {
-    vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, pixelCoordinate);
-    skyContribution = cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0) * volumeAttenuation;
-  }
+  const vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, pixelCoordinate);
+  vec3 skyContribution = sampleSkyRadiance(primaryRayDirections.worldDirection, screenUV, pixelCoordinate) * volumeAttenuation;
 
   if (cb.sparseRenderingArgs.mode != SparseRenderingMode::Off &&
       cb.sparseRenderingArgs.enableSparsePrimaryRayMissComposition)

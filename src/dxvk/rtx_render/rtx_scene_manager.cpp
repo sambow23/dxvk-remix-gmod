@@ -573,9 +573,7 @@ namespace dxvk {
     clearFrameMeshHashes();
     
     // Reset the fog state to get it re-discovered on the next frame
-    ImGUI::SetFogStates(m_fogStates, m_fog.getHash());
-    m_fog = FogState();
-    m_fogStates.clear();
+    clearFogState();
   }
 
   std::unordered_set<XXH64_hash_t> uniqueHashes;
@@ -1016,6 +1014,26 @@ namespace dxvk {
         }
       }
     }
+  }
+
+  const FogState& SceneManager::getEffectiveFogState() const {
+    return m_externalFog.has_value() ? *m_externalFog : m_fog;
+  }
+
+  void SceneManager::setExternalFogState(const FogState& fog) {
+    m_externalFog = fog;
+  }
+
+  void SceneManager::clearFogState() {
+    const FogState& effectiveFog = getEffectiveFogState();
+    if (m_externalFog.has_value() && effectiveFog.mode != D3DFOG_NONE) {
+      m_fogStates[effectiveFog.getHash()] = effectiveFog;
+    }
+
+    ImGUI::SetFogStates(m_fogStates, effectiveFog.getHash());
+    m_fog = FogState();
+    m_externalFog.reset();
+    m_fogStates.clear();
   }
 
   void SceneManager::updateBufferCache(RaytraceGeometry& newGeoData) {
