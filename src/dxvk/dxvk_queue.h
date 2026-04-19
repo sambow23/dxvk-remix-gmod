@@ -23,6 +23,13 @@ namespace dxvk {
    */
   struct DxvkSubmitStatus {
     std::atomic<VkResult> result = { VK_SUCCESS };
+    std::atomic<uint64_t> queueEnterNanoseconds = { 0ull };
+    std::atomic<uint64_t> queueStartNanoseconds = { 0ull };
+    std::atomic<uint64_t> queueEndNanoseconds = { 0ull };
+    std::atomic<uint32_t> queueDepthAtEnqueue = { 0u };
+    std::atomic<uint32_t> pendingSubmissionsAtEnqueue = { 0u };
+    std::atomic<uint64_t> submittedCommandListsAtEnqueue = { 0ull };
+    std::atomic<uint64_t> completedCommandListsAtEnqueue = { 0ull };
   };
 
 
@@ -251,6 +258,16 @@ namespace dxvk {
   
   private:
 
+    struct PresentPerfStats {
+      uint64_t frames = 0;
+      uint64_t totalNanoseconds = 0;
+      uint64_t totalMaxNanoseconds = 0;
+      uint64_t presentCallNanoseconds = 0;
+      uint64_t presentCallMaxNanoseconds = 0;
+      uint64_t throttleSleepNanoseconds = 0;
+      uint64_t throttleSleepMaxNanoseconds = 0;
+    };
+
     DxvkDevice*             m_device;
 
     std::atomic<VkResult>   m_lastError = { VK_SUCCESS };
@@ -258,6 +275,9 @@ namespace dxvk {
     std::atomic<bool>       m_stopped = { false };
     std::atomic<uint32_t>   m_pending = { 0u };
     std::atomic<uint64_t>   m_gpuIdle = { 0ull };
+    std::atomic<uint64_t>   m_submittedCommandLists = { 0ull };
+    std::atomic<uint64_t>   m_completedCommandLists = { 0ull };
+    PresentPerfStats        m_presentPerfStats {};
 
     dxvk::mutex                 m_mutex;
     dxvk::mutex                 m_mutexQueue;

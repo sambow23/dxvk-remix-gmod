@@ -190,6 +190,57 @@ namespace dxvk {
 
     double                    m_displayRefreshRate = 0.0;
 
+    struct PresentPerfStats {
+      uint64_t frames = 0;
+      uint64_t loopIterations = 0;
+      uint64_t deviceFrameLatencyTotal = 0;
+      uint64_t frameLatencyCapTotal = 0;
+      uint64_t backBufferLatencyLimitTotal = 0;
+      uint64_t actualFrameLatencyTotal = 0;
+      uint64_t totalNanoseconds = 0;
+      uint64_t totalMaxNanoseconds = 0;
+      uint64_t flushNanoseconds = 0;
+      uint64_t flushMaxNanoseconds = 0;
+      uint64_t syncFrameLatencyNanoseconds = 0;
+      uint64_t syncFrameLatencyMaxNanoseconds = 0;
+      uint64_t syncNanoseconds = 0;
+      uint64_t syncMaxNanoseconds = 0;
+      uint64_t syncMaxPresentFrameId = 0;
+      uint64_t syncMaxReflexFrameId = 0;
+      uint64_t presentQueueWaitNanoseconds = 0;
+      uint64_t presentQueueWaitMaxNanoseconds = 0;
+      uint64_t presentQueueProcessNanoseconds = 0;
+      uint64_t presentQueueProcessMaxNanoseconds = 0;
+      uint64_t presentCompletionNanoseconds = 0;
+      uint64_t presentCompletionMaxNanoseconds = 0;
+      uint64_t presentQueueDepthTotal = 0;
+      uint64_t presentQueueDepthMax = 0;
+      uint64_t pendingSubmissionsAtEnqueueTotal = 0;
+      uint32_t pendingSubmissionsAtEnqueueMax = 0;
+      uint64_t inFlightCommandListsAtEnqueueTotal = 0;
+      uint32_t inFlightCommandListsAtEnqueueMax = 0;
+      uint64_t acquireNanoseconds = 0;
+      uint64_t acquireMaxNanoseconds = 0;
+      uint64_t blitNanoseconds = 0;
+      uint64_t blitMaxNanoseconds = 0;
+      uint64_t hudNanoseconds = 0;
+      uint64_t hudMaxNanoseconds = 0;
+      uint64_t imguiNanoseconds = 0;
+      uint64_t imguiMaxNanoseconds = 0;
+      uint64_t onPresentNanoseconds = 0;
+      uint64_t onPresentMaxNanoseconds = 0;
+      uint64_t submitNanoseconds = 0;
+      uint64_t submitMaxNanoseconds = 0;
+      uint64_t reflexSleepNanoseconds = 0;
+      uint64_t reflexSleepMaxNanoseconds = 0;
+      uint64_t residualNanoseconds = 0;
+      uint64_t residualMaxNanoseconds = 0;
+    };
+
+    PresentPerfStats          m_presentPerfStats {};
+    uint64_t                  m_lastSubmittedPresentFrameId = 0;
+    uint64_t                  m_lastSubmittedReflexFrameId = 0;
+
     void PresentImage(UINT PresentInterval);
     
     void SubmitPresent(const vk::PresenterSync& Sync, uint32_t FrameId, uint32_t imageIndex);

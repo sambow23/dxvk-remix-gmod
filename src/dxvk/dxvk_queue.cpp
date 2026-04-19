@@ -23,10 +23,50 @@
 #include "dxvk_queue.h"
 #include "dxvk_scoped_annotation.h"
 
+#include "../util/util_string.h"
+
 #include "NvLowLatencyVk.h"
 #include "GFSDK_Aftermath_GpuCrashDump.h"
 
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
 namespace dxvk {
+  namespace {
+    constexpr uint64_t kPresentPerfLogIntervalFrames = 60;
+
+    uint64_t currentTimestampNanoseconds() {
+      return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    uint64_t toNanoseconds(std::chrono::steady_clock::duration duration) {
+      return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+    }
+
+    void accumulatePresentPerf(uint64_t duration, uint64_t& total, uint64_t& max) {
+      total += duration;
+      max = std::max(max, duration);
+    }
+
+    std::string formatMilliseconds(uint64_t nanoseconds, uint64_t divisor) {
+      std::ostringstream stream;
+      const double milliseconds = divisor == 0
+        ? 0.0
+        : static_cast<double>(nanoseconds) / static_cast<double>(divisor) / 1000000.0;
+      stream << std::fixed << std::setprecision(3) << milliseconds;
+      return stream.str();
+    }
+
+    std::string formatMillisecondsMax(uint64_t nanoseconds) {
+      std::ostringstream stream;
+      stream << std::fixed << std::setprecision(3)
+             << static_cast<double>(nanoseconds) / 1000000.0;
+      return stream.str();
+    }
+  }
+
   
   DxvkSubmissionQueue::DxvkSubmissionQueue(DxvkDevice* device)
   : m_device(device),
@@ -68,6 +108,16 @@ namespace dxvk {
   void DxvkSubmissionQueue::present(DxvkPresentInfo presentInfo, DxvkSubmitStatus* status) {
     ScopedCpuProfileZone();
     std::unique_lock<dxvk::mutex> lock(m_mutex);
+
+    if (status != nullptr) {
+      status->queueEnterNanoseconds.store(currentTimestampNanoseconds());
+      status->queueStartNanoseconds.store(0ull);
+      status->queueEndNanoseconds.store(0ull);
+      status->queueDepthAtEnqueue.store(static_cast<uint32_t>(m_submitQueue.size()));
+      status->pendingSubmissionsAtEnqueue.store(m_pending.load());
+      status->submittedCommandListsAtEnqueue.store(m_submittedCommandLists.load());
+      status->completedCommandListsAtEnqueue.store(m_completedCommandLists.load());
+    }
 
     DxvkSubmitEntry entry = { };
     entry.status  = status;
@@ -173,6 +223,9 @@ namespace dxvk {
             entry.submit.waitSync,
             entry.submit.wakeSync);
 
+          if (status == VK_SUCCESS)
+            m_submittedCommandLists += 1;
+
           if (entry.submit.insertReflexRenderMarkers) {
             reflex.endRendering(entry.submit.cachedReflexFrameId);
           }
@@ -184,6 +237,12 @@ namespace dxvk {
           m_currentFrameInterpolationData = entry.frameInterpolation;
         }
         else if (entry.present.presenter != nullptr) {
+          const auto presentStart = std::chrono::steady_clock::now();
+          const uint64_t presentStartTimestamp = currentTimestampNanoseconds();
+
+          if (entry.status != nullptr)
+            entry.status->queueStartNanoseconds.store(presentStartTimestamp);
+
           m_lastPresenter = entry.present.presenter;
 
           // NV-DXVK start: Reflex present start
@@ -201,7 +260,9 @@ namespace dxvk {
           // NV-DXVK end
 
           // m_device->vkd()->vkQueueWaitIdle(m_device->queues().graphics.queueHandle);
+          const auto presentCallStart = std::chrono::steady_clock::now();
           status = entry.present.presenter->presentImage(&entry.status->result, entry.present, m_currentFrameInterpolationData, cachedAcquiredImageIndex);
+          const auto presentCallNanoseconds = toNanoseconds(std::chrono::steady_clock::now() - presentCallStart);
           // if both submit and DLFG+present run on the same queue, then we need to wait for present to avoid racing on the queue
 #if __DLFG_USE_GRAPHICS_QUEUE
           entry.present.presenter->synchronize();
@@ -217,11 +278,36 @@ namespace dxvk {
           m_currentFrameInterpolationData.reset();
 
           const auto presentThrottleDelay = m_device->config().presentThrottleDelay;
+          uint64_t throttleSleepNanoseconds = 0;
 
           if (presentThrottleDelay > 0) {
             ScopedCpuProfileZoneN("Present Throttle Delay Sleep");
 
+            const auto throttleSleepStart = std::chrono::steady_clock::now();
             Sleep(presentThrottleDelay);
+            throttleSleepNanoseconds = toNanoseconds(std::chrono::steady_clock::now() - throttleSleepStart);
+          }
+
+          if (entry.status != nullptr)
+            entry.status->queueEndNanoseconds.store(currentTimestampNanoseconds());
+
+          const uint64_t totalNanoseconds = toNanoseconds(std::chrono::steady_clock::now() - presentStart);
+          auto& perf = m_presentPerfStats;
+          perf.frames += 1;
+          accumulatePresentPerf(totalNanoseconds, perf.totalNanoseconds, perf.totalMaxNanoseconds);
+          accumulatePresentPerf(presentCallNanoseconds, perf.presentCallNanoseconds, perf.presentCallMaxNanoseconds);
+          accumulatePresentPerf(throttleSleepNanoseconds, perf.throttleSleepNanoseconds, perf.throttleSleepMaxNanoseconds);
+
+          if (perf.frames >= kPresentPerfLogIntervalFrames) {
+            Logger::info(str::format(
+              "DXVK queue present frames=", perf.frames,
+              " totalAvgMs=", formatMilliseconds(perf.totalNanoseconds, perf.frames),
+              " totalMaxMs=", formatMillisecondsMax(perf.totalMaxNanoseconds),
+              " presentCallAvgMs=", formatMilliseconds(perf.presentCallNanoseconds, perf.frames),
+              " presentCallMaxMs=", formatMillisecondsMax(perf.presentCallMaxNanoseconds),
+              " throttleSleepAvgMs=", formatMilliseconds(perf.throttleSleepNanoseconds, perf.frames),
+              " throttleSleepMaxMs=", formatMillisecondsMax(perf.throttleSleepMaxNanoseconds)));
+            perf = {};
           }
         }
       } else {
@@ -234,6 +320,8 @@ namespace dxvk {
         // NV-DXVK start: DLFG integration
         // if we queued for interpolation, then don't touch the output status here; DLFG presenter thread will update it (and may have already done so)
         if (status != VK_EVENT_SET) {
+          if (entry.status->queueEndNanoseconds.load() == 0ull)
+            entry.status->queueEndNanoseconds.store(currentTimestampNanoseconds());
           entry.status->result = status;
         }
         // NV-DXVK end
@@ -315,6 +403,7 @@ namespace dxvk {
       // up any thread that's currently waiting on a resource in
       // order to reduce delays as much as possible.
       entry.submit.cmdList->notifyObjects();
+      m_completedCommandLists += 1;
 
       lock.lock();
       m_pending -= 1;

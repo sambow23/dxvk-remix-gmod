@@ -34,12 +34,54 @@
 #include "../dxvk/rtx_render/rtx_context.h"
 #include <remix/remix_c.h>
 
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
 // NV-DXVK start: DLFG integration
 #include "../dxvk/rtx_render/rtx_dlfg.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 // NV-DXVK end
 
 namespace dxvk {
+  namespace {
+    constexpr uint64_t kPresentPerfLogIntervalFrames = 60;
+
+    uint64_t toNanoseconds(std::chrono::steady_clock::duration duration) {
+      return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+    }
+
+    void accumulatePresentPerf(uint64_t duration, uint64_t& total, uint64_t& max) {
+      total += duration;
+      max = std::max(max, duration);
+    }
+
+    std::string formatMilliseconds(uint64_t nanoseconds, uint64_t divisor) {
+      std::ostringstream stream;
+      const double milliseconds = divisor == 0
+        ? 0.0
+        : static_cast<double>(nanoseconds) / static_cast<double>(divisor) / 1000000.0;
+      stream << std::fixed << std::setprecision(3) << milliseconds;
+      return stream.str();
+    }
+
+    std::string formatMillisecondsMax(uint64_t nanoseconds) {
+      std::ostringstream stream;
+      stream << std::fixed << std::setprecision(3)
+             << static_cast<double>(nanoseconds) / 1000000.0;
+      return stream.str();
+    }
+
+    std::string formatAverageValue(uint64_t total, uint64_t divisor) {
+      std::ostringstream stream;
+      const double value = divisor == 0
+        ? 0.0
+        : static_cast<double>(total) / static_cast<double>(divisor);
+      stream << std::fixed << std::setprecision(3) << value;
+      return stream.str();
+    }
+  }
+
   // NV-DXVK start: App Controlled FSE
   enum FSEState {
     Acquire = 0,
@@ -1184,7 +1226,11 @@ namespace dxvk {
 
   void D3D9SwapChainEx::PresentImage(UINT SyncInterval) {
     ScopedCpuProfileZone();
+    const auto totalStart = std::chrono::steady_clock::now();
+
+    auto stageStart = std::chrono::steady_clock::now();
     m_parent->Flush();
+    const uint64_t flushNanoseconds = toNanoseconds(std::chrono::steady_clock::now() - stageStart);
 
     // NV-DXVK start: Reflex integration
     auto& reflex = m_device->getCommon()->metaReflex();
@@ -1211,10 +1257,55 @@ namespace dxvk {
 
     // Bump our frame id.
     ++m_frameId;
+    const uint64_t currentPresentFrameId = m_frameId;
+    const uint32_t deviceFrameLatency = m_parent->GetFrameLatency();
+    const uint32_t frameLatencyCap = m_frameLatencyCap;
+    const uint32_t backBufferLatencyLimit = m_presentParams.BackBufferCount + 1;
+    const uint32_t actualFrameLatency = GetActualFrameLatency();
+
+    const uint64_t statusQueuedNanoseconds = m_presentStatus.queueEnterNanoseconds.load();
+    const uint64_t statusStartedNanoseconds = m_presentStatus.queueStartNanoseconds.load();
+    const uint64_t statusCompletedNanoseconds = m_presentStatus.queueEndNanoseconds.load();
+    const uint64_t presentQueueWaitNanoseconds =
+      statusStartedNanoseconds >= statusQueuedNanoseconds
+        ? statusStartedNanoseconds - statusQueuedNanoseconds
+        : 0ull;
+    const uint64_t presentQueueProcessNanoseconds =
+      statusCompletedNanoseconds >= statusStartedNanoseconds
+        ? statusCompletedNanoseconds - statusStartedNanoseconds
+        : 0ull;
+    const uint64_t presentCompletionNanoseconds =
+      statusCompletedNanoseconds >= statusQueuedNanoseconds
+        ? statusCompletedNanoseconds - statusQueuedNanoseconds
+        : 0ull;
+    const uint64_t presentQueueDepthAtEnqueue = m_presentStatus.queueDepthAtEnqueue.load();
+    const uint32_t pendingSubmissionsAtEnqueue = m_presentStatus.pendingSubmissionsAtEnqueue.load();
+    const uint64_t submittedCommandListsAtEnqueue = m_presentStatus.submittedCommandListsAtEnqueue.load();
+    const uint64_t completedCommandListsAtEnqueue = m_presentStatus.completedCommandListsAtEnqueue.load();
+    const uint64_t inFlightCommandListsAtEnqueue =
+      submittedCommandListsAtEnqueue >= completedCommandListsAtEnqueue
+        ? submittedCommandListsAtEnqueue - completedCommandListsAtEnqueue
+        : 0ull;
+
+    stageStart = std::chrono::steady_clock::now();
     SyncFrameLatency();
+    const uint64_t syncFrameLatencyNanoseconds = toNanoseconds(std::chrono::steady_clock::now() - stageStart);
+
+    uint64_t syncNanoseconds = 0;
+    uint64_t acquireNanoseconds = 0;
+    uint64_t blitNanoseconds = 0;
+    uint64_t hudNanoseconds = 0;
+    uint64_t imguiNanoseconds = 0;
+    uint64_t onPresentNanoseconds = 0;
+    uint64_t submitNanoseconds = 0;
+    uint64_t loopIterations = 0;
 
     for (uint32_t i = 0; i < SyncInterval || i < 1; i++) {
+      loopIterations += 1;
+
+      stageStart = std::chrono::steady_clock::now();
       SynchronizePresent();
+      syncNanoseconds += toNanoseconds(std::chrono::steady_clock::now() - stageStart);
 
       // NV-DXVK start: DLFG integration
       vk::Presenter* presenter = GetPresenter();
@@ -1229,6 +1320,7 @@ namespace dxvk {
       uint32_t imageIndex = 0;
 
       // NV-DXVK start: DLFG integration
+      stageStart = std::chrono::steady_clock::now();
       VkResult status = presenter->acquireNextImage(sync, imageIndex);
       // NV-DXVK end
 
@@ -1243,6 +1335,7 @@ namespace dxvk {
         if (status == VK_SUBOPTIMAL_KHR)
           break;
       }
+      acquireNanoseconds += toNanoseconds(std::chrono::steady_clock::now() - stageStart);
 
       m_context->beginRecording(
         m_device->createCommandList());
@@ -1256,24 +1349,35 @@ namespace dxvk {
         { uint32_t(m_dstRect.right - m_dstRect.left), uint32_t(m_dstRect.bottom - m_dstRect.top) } };
       
 
+      stageStart = std::chrono::steady_clock::now();
       m_blitter->presentImage(m_context.ptr(),
         m_imageViews.at(imageIndex), dstRect,
         swapImageView, srcRect);
+      blitNanoseconds += toNanoseconds(std::chrono::steady_clock::now() - stageStart);
 
-      if (m_hud != nullptr)
+      if (m_hud != nullptr) {
+        stageStart = std::chrono::steady_clock::now();
         m_hud->render(m_context, info.format, info.imageExtent);
+        hudNanoseconds += toNanoseconds(std::chrono::steady_clock::now() - stageStart);
+      }
 
       auto& gui = m_device->getCommon()->getImgui();
+      stageStart = std::chrono::steady_clock::now();
       gui.render(m_window, m_context, info.format, info.imageExtent, m_vsync);
+      imguiNanoseconds += toNanoseconds(std::chrono::steady_clock::now() - stageStart);
 
       // NV-DXVK start
+      stageStart = std::chrono::steady_clock::now();
       m_parent->m_rtx.OnPresent(m_imageViews.at(imageIndex)->image());
+      onPresentNanoseconds += toNanoseconds(std::chrono::steady_clock::now() - stageStart);
       // NV-DXVK end
 
       if (i + 1 >= SyncInterval)
         m_context->signal(m_frameLatencySignal, m_frameId);
 
+      stageStart = std::chrono::steady_clock::now();
       SubmitPresent(sync, i, imageIndex);
+      submitNanoseconds += toNanoseconds(std::chrono::steady_clock::now() - stageStart);
     }
 
     // Rotate swap chain buffers so that the back
@@ -1286,7 +1390,9 @@ namespace dxvk {
     // NV-DXVK start: Reflex integration
     // Note: Sleeping here in the present function essentially makes it so when the application calls into a D3D Present function it will block for the desired amount of time Reflex indicates.
     // This helps accomplish what Reflex desires by delaying the point at which the application does input sampling likely near the start of its simulation on the next frame, thus reducing latency.
+    auto reflexSleepStart = std::chrono::steady_clock::now();
     reflex.sleep();
+    const uint64_t reflexSleepNanoseconds = toNanoseconds(std::chrono::steady_clock::now() - reflexSleepStart);
 
     // Note: Increment the Reflex Frame ID to prepare for the next frame, now that this Reflex frame has ended.
     // Take care to ensure this happens after all other application thread operations call GetReflexFrameId for this frame
@@ -1301,6 +1407,104 @@ namespace dxvk {
     // Tell tracy its the end of the frame
     FrameMark;
     // NV-DXVK end
+
+    const uint64_t totalNanoseconds = toNanoseconds(std::chrono::steady_clock::now() - totalStart);
+    const uint64_t classifiedNanoseconds = flushNanoseconds
+      + syncFrameLatencyNanoseconds
+      + syncNanoseconds
+      + acquireNanoseconds
+      + blitNanoseconds
+      + hudNanoseconds
+      + imguiNanoseconds
+      + onPresentNanoseconds
+      + submitNanoseconds
+      + reflexSleepNanoseconds;
+    const uint64_t residualNanoseconds = totalNanoseconds > classifiedNanoseconds
+      ? totalNanoseconds - classifiedNanoseconds
+      : 0;
+
+    auto& perf = m_presentPerfStats;
+    perf.frames += 1;
+    perf.loopIterations += loopIterations;
+    perf.deviceFrameLatencyTotal += deviceFrameLatency;
+    perf.frameLatencyCapTotal += frameLatencyCap;
+    perf.backBufferLatencyLimitTotal += backBufferLatencyLimit;
+    perf.actualFrameLatencyTotal += actualFrameLatency;
+    accumulatePresentPerf(totalNanoseconds, perf.totalNanoseconds, perf.totalMaxNanoseconds);
+    accumulatePresentPerf(flushNanoseconds, perf.flushNanoseconds, perf.flushMaxNanoseconds);
+    accumulatePresentPerf(syncFrameLatencyNanoseconds, perf.syncFrameLatencyNanoseconds, perf.syncFrameLatencyMaxNanoseconds);
+    perf.syncNanoseconds += syncNanoseconds;
+    accumulatePresentPerf(presentQueueWaitNanoseconds, perf.presentQueueWaitNanoseconds, perf.presentQueueWaitMaxNanoseconds);
+    accumulatePresentPerf(presentQueueProcessNanoseconds, perf.presentQueueProcessNanoseconds, perf.presentQueueProcessMaxNanoseconds);
+    accumulatePresentPerf(presentCompletionNanoseconds, perf.presentCompletionNanoseconds, perf.presentCompletionMaxNanoseconds);
+    perf.presentQueueDepthTotal += presentQueueDepthAtEnqueue;
+    perf.presentQueueDepthMax = std::max(perf.presentQueueDepthMax, presentQueueDepthAtEnqueue);
+    perf.pendingSubmissionsAtEnqueueTotal += pendingSubmissionsAtEnqueue;
+    perf.pendingSubmissionsAtEnqueueMax = std::max(perf.pendingSubmissionsAtEnqueueMax, pendingSubmissionsAtEnqueue);
+    perf.inFlightCommandListsAtEnqueueTotal += inFlightCommandListsAtEnqueue;
+    perf.inFlightCommandListsAtEnqueueMax = std::max(perf.inFlightCommandListsAtEnqueueMax, static_cast<uint32_t>(std::min<uint64_t>(inFlightCommandListsAtEnqueue, std::numeric_limits<uint32_t>::max())));
+    if (syncNanoseconds > perf.syncMaxNanoseconds) {
+      perf.syncMaxNanoseconds = syncNanoseconds;
+      perf.syncMaxPresentFrameId = m_lastSubmittedPresentFrameId;
+      perf.syncMaxReflexFrameId = m_lastSubmittedReflexFrameId;
+    }
+    accumulatePresentPerf(acquireNanoseconds, perf.acquireNanoseconds, perf.acquireMaxNanoseconds);
+    accumulatePresentPerf(blitNanoseconds, perf.blitNanoseconds, perf.blitMaxNanoseconds);
+    accumulatePresentPerf(hudNanoseconds, perf.hudNanoseconds, perf.hudMaxNanoseconds);
+    accumulatePresentPerf(imguiNanoseconds, perf.imguiNanoseconds, perf.imguiMaxNanoseconds);
+    accumulatePresentPerf(onPresentNanoseconds, perf.onPresentNanoseconds, perf.onPresentMaxNanoseconds);
+    accumulatePresentPerf(submitNanoseconds, perf.submitNanoseconds, perf.submitMaxNanoseconds);
+    accumulatePresentPerf(reflexSleepNanoseconds, perf.reflexSleepNanoseconds, perf.reflexSleepMaxNanoseconds);
+    accumulatePresentPerf(residualNanoseconds, perf.residualNanoseconds, perf.residualMaxNanoseconds);
+
+    if (perf.frames >= kPresentPerfLogIntervalFrames) {
+      Logger::info(str::format(
+        "D3D9 present cpu frames=", perf.frames,
+        " loopsAvg=", formatMilliseconds(perf.loopIterations * 1000000ull, perf.frames),
+        " deviceFrameLatencyAvg=", formatAverageValue(perf.deviceFrameLatencyTotal, perf.frames),
+        " frameLatencyCapAvg=", formatAverageValue(perf.frameLatencyCapTotal, perf.frames),
+        " backBufferLatencyLimitAvg=", formatAverageValue(perf.backBufferLatencyLimitTotal, perf.frames),
+        " actualFrameLatencyAvg=", formatAverageValue(perf.actualFrameLatencyTotal, perf.frames),
+        " totalAvgMs=", formatMilliseconds(perf.totalNanoseconds, perf.frames),
+        " totalMaxMs=", formatMillisecondsMax(perf.totalMaxNanoseconds),
+        " flushAvgMs=", formatMilliseconds(perf.flushNanoseconds, perf.frames),
+        " flushMaxMs=", formatMillisecondsMax(perf.flushMaxNanoseconds),
+        " syncFrameLatencyAvgMs=", formatMilliseconds(perf.syncFrameLatencyNanoseconds, perf.frames),
+        " syncFrameLatencyMaxMs=", formatMillisecondsMax(perf.syncFrameLatencyMaxNanoseconds),
+        " syncAvgMs=", formatMilliseconds(perf.syncNanoseconds, perf.frames),
+        " syncMaxMs=", formatMillisecondsMax(perf.syncMaxNanoseconds),
+        " syncMaxFrameId=", perf.syncMaxPresentFrameId,
+        " syncMaxReflexFrameId=", perf.syncMaxReflexFrameId,
+        " presentQueueDepthAvg=", formatAverageValue(perf.presentQueueDepthTotal, perf.frames),
+        " presentQueueDepthMax=", perf.presentQueueDepthMax,
+        " pendingSubmissionsAvg=", formatAverageValue(perf.pendingSubmissionsAtEnqueueTotal, perf.frames),
+        " pendingSubmissionsMax=", perf.pendingSubmissionsAtEnqueueMax,
+        " inFlightCommandListsAvg=", formatAverageValue(perf.inFlightCommandListsAtEnqueueTotal, perf.frames),
+        " inFlightCommandListsMax=", perf.inFlightCommandListsAtEnqueueMax,
+        " presentQueueWaitAvgMs=", formatMilliseconds(perf.presentQueueWaitNanoseconds, perf.frames),
+        " presentQueueWaitMaxMs=", formatMillisecondsMax(perf.presentQueueWaitMaxNanoseconds),
+        " presentQueueProcessAvgMs=", formatMilliseconds(perf.presentQueueProcessNanoseconds, perf.frames),
+        " presentQueueProcessMaxMs=", formatMillisecondsMax(perf.presentQueueProcessMaxNanoseconds),
+        " presentCompletionAvgMs=", formatMilliseconds(perf.presentCompletionNanoseconds, perf.frames),
+        " presentCompletionMaxMs=", formatMillisecondsMax(perf.presentCompletionMaxNanoseconds),
+        " acquireAvgMs=", formatMilliseconds(perf.acquireNanoseconds, perf.frames),
+        " acquireMaxMs=", formatMillisecondsMax(perf.acquireMaxNanoseconds),
+        " blitAvgMs=", formatMilliseconds(perf.blitNanoseconds, perf.frames),
+        " blitMaxMs=", formatMillisecondsMax(perf.blitMaxNanoseconds),
+        " hudAvgMs=", formatMilliseconds(perf.hudNanoseconds, perf.frames),
+        " hudMaxMs=", formatMillisecondsMax(perf.hudMaxNanoseconds),
+        " imguiAvgMs=", formatMilliseconds(perf.imguiNanoseconds, perf.frames),
+        " imguiMaxMs=", formatMillisecondsMax(perf.imguiMaxNanoseconds),
+        " onPresentAvgMs=", formatMilliseconds(perf.onPresentNanoseconds, perf.frames),
+        " onPresentMaxMs=", formatMillisecondsMax(perf.onPresentMaxNanoseconds),
+        " submitAvgMs=", formatMilliseconds(perf.submitNanoseconds, perf.frames),
+        " submitMaxMs=", formatMillisecondsMax(perf.submitMaxNanoseconds),
+        " reflexSleepAvgMs=", formatMilliseconds(perf.reflexSleepNanoseconds, perf.frames),
+        " reflexSleepMaxMs=", formatMillisecondsMax(perf.reflexSleepMaxNanoseconds),
+        " residualAvgMs=", formatMilliseconds(perf.residualNanoseconds, perf.frames),
+        " residualMaxMs=", formatMillisecondsMax(perf.residualMaxNanoseconds)));
+      perf = {};
+    }
   }
 
 
@@ -1311,14 +1515,18 @@ namespace dxvk {
     auto& d3d9Rtx = m_parent->m_rtx;
 
     const auto currentReflexFrameId = d3d9Rtx.GetReflexFrameId();
+    const auto currentPresentFrameId = m_frameId;
     // NV-DXVK end
 
     // Present from CS thread so that we don't
     // have to synchronize with it first.
     m_presentStatus.result = VK_NOT_READY;
+    m_lastSubmittedPresentFrameId = currentPresentFrameId;
+    m_lastSubmittedReflexFrameId = currentReflexFrameId;
 
     m_parent->EmitCs([this,
       cReflexFrameId = currentReflexFrameId,
+      cPresentFrameId = currentPresentFrameId,
       cAcquiredImageIndex = imageIndex,
       cFrameId     = FrameId,
       cSync        = Sync,
@@ -1344,6 +1552,7 @@ namespace dxvk {
       // Note: Do not insert Reflex present markers when DLFG is enabled, the DLFG Presenter will insert its own Reflex markers
       // (unless the workaround is enabled as this requires that the Present markers stay where they usually are).
       const bool insertReflexPresentMarkers = !m_context->isDLFGEnabled() || (__DLFG_REFLEX_WORKAROUND != 0);
+      (void)cPresentFrameId;
 
       m_device->presentImage(cReflexFrameId, insertReflexPresentMarkers, cAcquiredImageIndex, GetPresenter(), &m_presentStatus);
       // NV-DXVK end
