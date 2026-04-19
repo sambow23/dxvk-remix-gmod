@@ -53,7 +53,13 @@ vec4 calculateFog(float viewDistance)
     // Todo: Add in the min fog distance too potentially as this is currently missing.
     viewDistance = clamp(viewDistance, 0.0f, cb.maxFogDistance);
 
-    f = (cb.fogEnd - viewDistance) * cb.fogScale;
+    const float fogRange = cb.fogScale > 1.0e-6f ? 1.0f / cb.fogScale : 0.0f;
+    const float fogStart = cb.fogEnd - fogRange;
+    const float featherDistance = fogRange * cb.fogDensity;
+    const float featheredStart = max(0.0f, fogStart - featherDistance);
+    const float featheredRange = max(cb.fogEnd - featheredStart, 1.0e-4f);
+
+    f = (cb.fogEnd - viewDistance) / featheredRange;
   }
   else if (cb.fogMode == D3DFOG_EXP)
   {
@@ -67,6 +73,13 @@ vec4 calculateFog(float viewDistance)
   }
 
   f = clamp(f, 0.0, 1.0);
+
+  if (cb.fogMode == D3DFOG_LINEAR)
+  {
+    float fogAlpha = 1.0 - f;
+    fogAlpha = fogAlpha * fogAlpha * fogAlpha * (fogAlpha * (fogAlpha * 6.0 - 15.0) + 10.0);
+    f = 1.0 - fogAlpha;
+  }
 
   return vec4(cb.fogColor, 1.0 - f);
 }

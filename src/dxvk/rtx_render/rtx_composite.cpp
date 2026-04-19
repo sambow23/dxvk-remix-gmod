@@ -21,6 +21,7 @@
 */
 #include "rtx_composite.h"
 #include "dxvk_device.h"
+#include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/composite/composite_binding_indices.h"
 #include "rtx/pass/composite/composite_args.h"
 #include "rtx/pass/raytrace_args.h"
@@ -39,6 +40,7 @@
 #include <rtx_shaders/composite.h>
 #include <rtx_shaders/composite_alpha_blend.h>
 #include "rtx_texture_manager.h"
+#include "rtx_fork_hooks.h"
 
 namespace dxvk {
 
@@ -126,6 +128,23 @@ namespace dxvk {
         TEXTURE2DARRAY(COMPOSITE_BLUE_NOISE_TEXTURE)
         SAMPLER3D(COMPOSITE_VALUE_NOISE_SAMPLER)
         SAMPLER2D(COMPOSITE_SKY_LIGHT_TEXTURE)
+        TEXTURE2D(BINDING_ATMOSPHERE_TRANSMITTANCE_LUT)
+        TEXTURE2D(BINDING_ATMOSPHERE_MULTISCATTERING_LUT)
+        TEXTURE2D(BINDING_ATMOSPHERE_SKY_VIEW_LUT)
+        TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_NOISE_3D)
+        SAMPLER(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)
+        TEXTURE2DARRAY(BINDING_ATMOSPHERE_FAST_NOISE)
+        TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)
+        RW_TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
+        TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV)
+        RW_TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_CURR)
+        TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT)
+        TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_RENDER_RT)
+        TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_SUN)
+        TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)
+        SAMPLER(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)
+        TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
+        TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
 
         RW_TEXTURE2D(COMPOSITE_PRIMARY_ALBEDO_INPUT_OUTPUT)
         RW_TEXTURE2D(COMPOSITE_ACCUMULATED_FINAL_OUTPUT_INPUT_OUTPUT)
@@ -179,7 +198,11 @@ namespace dxvk {
     ImGui::BeginDisabled(!enableFog());
     ImGui::Indent();
     RemixGui::DragFloat("Fog Color Scale", &fogColorScaleObject(), 0.01f, 0.0f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Fog Strength", &fogStrengthObject(), 0.01f, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Max Fog Distance", &maxFogDistanceObject(), 1.f, 0.0f, 0.f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("External Fog Start Factor", &externalFogLinearStartFactorObject(), 0.01f, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("External Fog End Factor", &externalFogLinearEndFactorObject(), 0.01f, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Linear Fog Start Feather", &linearFogStartFeatherObject(), 0.01f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::Unindent();
     ImGui::EndDisabled();
   }
@@ -396,12 +419,14 @@ namespace dxvk {
     } else {
       ctx->bindResourceView(COMPOSITE_SKY_LIGHT_TEXTURE, ctx->getResourceManager().getSkyMatte(ctx).view, nullptr);
     }
+    fork_hooks::bindAtmosphereLuts(*ctx.ptr());
 
     compositeArgs.camera = sceneManager.getCamera().getShaderConstants();
     compositeArgs.frameIdx = frameIdx;
 
     if (enableFog()) {
-      const float colorScale = fogColorScale();
+      const float fogStrengthScale = std::max(fogStrength(), 0.0f);
+      const float colorScale = settings.useExternalFogColor ? 1.0f : fogColorScale();
       auto& fog = settings.fog;
       compositeArgs.fogMode = fog.mode;
       compositeArgs.fogColor = { fog.color.x * colorScale, fog.color.y * colorScale, fog.color.z * colorScale };
@@ -411,9 +436,31 @@ namespace dxvk {
       // Note: Density can simply be divided by the scene scale factor to account for the fact that the distance in the exponent
       // will be in render units (scaled by the scene scale), not the original game's units it was targetted for.
       // compositeArgs.fogDensity = fabsf(fog.density) / RtxOptions::sceneScale();
-      compositeArgs.fogEnd = fog.end;
-      compositeArgs.fogScale = fog.scale;
-      compositeArgs.fogDensity = fabsf(fog.density);
+      if (settings.useExternalFogColor && fog.mode == D3DFOG_LINEAR) {
+        const float sourceFogEnd = fog.end;
+        const float fogStart = sourceFogEnd * externalFogLinearStartFactor();
+        const float fogEnd = std::max(sourceFogEnd * externalFogLinearEndFactor(), fogStart + 1.0e-4f);
+        const float fogRange = fogEnd - fogStart;
+
+        const float adjustedFogRange = fogStrengthScale > 1.0e-4f ? fogRange / fogStrengthScale : 0.0f;
+        compositeArgs.fogEnd = fogStrengthScale > 1.0e-4f ? fogStart + adjustedFogRange : fogStart;
+        compositeArgs.fogScale = adjustedFogRange > 1.0e-4f ? 1.0f / adjustedFogRange : 0.0f;
+        compositeArgs.fogDensity = linearFogStartFeather();
+      } else {
+        if (fog.mode == D3DFOG_LINEAR) {
+          const float fogRange = fog.scale > 1.0e-6f ? 1.0f / fog.scale : 0.0f;
+          const float fogStart = fog.end - fogRange;
+          const float adjustedFogRange = fogStrengthScale > 1.0e-4f ? fogRange / fogStrengthScale : 0.0f;
+
+          compositeArgs.fogEnd = fogStrengthScale > 1.0e-4f ? fogStart + adjustedFogRange : fogStart;
+          compositeArgs.fogScale = adjustedFogRange > 1.0e-4f ? 1.0f / adjustedFogRange : 0.0f;
+          compositeArgs.fogDensity = linearFogStartFeather();
+        } else {
+          compositeArgs.fogEnd = fog.end;
+          compositeArgs.fogScale = fog.scale;
+          compositeArgs.fogDensity = fabsf(fog.density) * fogStrengthScale;
+        }
+      }
       compositeArgs.maxFogDistance = maxFogDistance();
     }
 
@@ -434,6 +481,7 @@ namespace dxvk {
     compositeArgs.enableReSTIRGI = RtxOptions::useReSTIRGI();
     compositeArgs.sparseRenderingArgs = rtOutput.m_raytraceArgs.sparseRenderingArgs;
     compositeArgs.volumeArgs = rtOutput.m_raytraceArgs.volumeArgs;
+    compositeArgs.atmosphereArgs = rtOutput.m_raytraceArgs.atmosphereArgs;
     compositeArgs.outputParticleLayer = ctx->useRayReconstruction() && rayReconstruction.useParticleBuffer();
     compositeArgs.outputSecondarySignalToParticleLayer = ctx->useRayReconstruction() && rayReconstruction.preprocessSecondarySignal();
     compositeArgs.enableDemodulateAttenuation = ctx->useRayReconstruction() && rayReconstruction.demodulateAttenuation();
@@ -509,6 +557,8 @@ namespace dxvk {
     // retired cloudShadowFactorStrength / cloudShadowIndirectStrength CB slots.
 
     const bool sparseRenderingEnabled = rtOutput.m_raytraceArgs.sparseRenderingArgs.mode != SparseRenderingMode::Off;
+    compositeArgs.skyMode = rtOutput.m_raytraceArgs.skyMode;
+    compositeArgs.isZUp = rtOutput.m_raytraceArgs.isZUp;
 
     Rc<DxvkBuffer> cb = getCompositeConstantsBuffer();
     ctx->writeToBuffer(cb, 0, sizeof(CompositeArgs), &compositeArgs);

@@ -41,6 +41,7 @@ namespace dxvk {
   public:
     struct Settings {
       FogState fog;
+      bool useExternalFogColor;
       bool isNRDPreCompositionDenoiserEnabled;
       bool useUpscaler;
       bool useDLSS;
@@ -89,7 +90,11 @@ namespace dxvk {
 
     RTX_OPTION("rtx", bool, enableFog, true, "");
     RTX_OPTION("rtx", float, fogColorScale, 0.25f, "");
+    RTX_OPTION("rtx", float, fogStrength, 1.0f, "Scales the overall strength of depth-based fog. Values above 1 make fog thicker; values below 1 make it thinner.");
     RTX_OPTION("rtx", float, maxFogDistance, 65504.f, "");
+    RTX_OPTION("rtx", float, externalFogLinearStartFactor, 0.4f, "Scales the start distance used when translating external linear fog into depth-based fog.");
+    RTX_OPTION("rtx", float, externalFogLinearEndFactor, 1.5f, "Scales the end distance used when translating external linear fog into depth-based fog.");
+    RTX_OPTION("rtx", float, linearFogStartFeather, 0.35f, "Feathers the onset of linear depth-based fog to reduce visible start-radius artifacts.");
 
     RTX_OPTION("rtx", bool, compositePrimaryDirectDiffuse, true, "Enables direct lightning's diffuse signal for primary surfaces in the final composite.");
     RTX_OPTION("rtx", bool, compositePrimaryDirectSpecular, true, "Enables direct lightning's specular signal for primary surfaces in the final composite.");

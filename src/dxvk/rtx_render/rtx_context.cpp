@@ -1829,7 +1829,8 @@ namespace dxvk {
     bool isNRDPreCompositionDenoiserEnabled = RtxOptions::useDenoiser() && !RtxOptions::useDenoiserReferenceMode();
 
     CompositePass::Settings settings;
-    settings.fog = getSceneManager().getFogState();
+    settings.fog = getSceneManager().getEffectiveFogState();
+    settings.useExternalFogColor = getSceneManager().hasExternalFogState();
     settings.isNRDPreCompositionDenoiserEnabled = isNRDPreCompositionDenoiserEnabled;
     settings.useUpscaler = shouldUseUpscaler();
     settings.useDLSS = shouldUseDLSS();

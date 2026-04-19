@@ -37,6 +37,7 @@ struct CompositeArgs {
   VolumeArgs volumeArgs;
   AccumulationArgs accumulationArgs;
   SparseRenderingArgs sparseRenderingArgs;
+  AtmosphereArgs atmosphereArgs;
 
   // -- Struct objects should go above this line to preserve alignment --
 
@@ -103,6 +104,9 @@ struct CompositeArgs {
   uint stochasticAlphaBlendDiscardBlackPixel;
   uint enhanceAlbedo;
   float skyBrightness;
+
+  uint skyMode;
+  uint isZUp;
 
   vec3 clearColorFinalColor;
   uint timeSinceStartMS;
