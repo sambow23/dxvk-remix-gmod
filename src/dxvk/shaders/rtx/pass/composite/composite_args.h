@@ -60,6 +60,7 @@ struct CompositeArgs {
 
   VolumeArgs volumeArgs;
   AccumulationArgs accumulationArgs;
+  AtmosphereArgs atmosphereArgs;
 
   // One of DENOISER_MODE constants, affects signal conversion
   uint primaryDirectDenoiser;
@@ -109,6 +110,9 @@ struct CompositeArgs {
   uint stochasticAlphaBlendDiscardBlackPixel;
   uint enhanceAlbedo;
   float skyBrightness;
+
+  uint skyMode;
+  uint isZUp;
 
   vec3 clearColorFinalColor;
   uint timeSinceStartMS;

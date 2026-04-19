@@ -35,6 +35,7 @@
 #include "rtx/concept/surface/alpha_blend_surface.slangh"
 #include "rtx/external/NRD.slangh"
 #include "rtx/utility/geometry_flags.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 #include "rtx/algorithm/volume_composite_helpers.slangh"
 #include "rtx/algorithm/accumulate.slangh"
@@ -51,7 +52,18 @@ float3 sampleDomeLightTexture(Sampler2D<float3> DomeLight, float3 worldDirection
   return DomeLight.SampleLevel(sampleUV, 0).xyz;
 }
 
-vec4 calculateFog(float viewDistance)
+vec3 sampleSkyRadiance(float3 worldDirection, float2 screenUV)
+{
+  if (cb.domeLightArgs.active)
+    return cb.domeLightArgs.radiance * sampleDomeLightTexture(SkyLight, worldDirection, cb.domeLightArgs.worldToLightTransform);
+
+  if (cb.skyMode == 1)
+    return evalSkyRadiance(worldDirection, cb.atmosphereArgs, cb.isZUp != 0);
+
+  return cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0);
+}
+
+vec4 calculateFog(float viewDistance, vec3 fogColor)
 {
   if (cb.fogMode == D3DFOG_NONE)
     return vec4(0.0);
@@ -72,7 +84,13 @@ vec4 calculateFog(float viewDistance)
     // Todo: Add in the min fog distance too potentially as this is currently missing.
     viewDistance = clamp(viewDistance, 0.0f, cb.maxFogDistance);
 
-    f = (cb.fogEnd - viewDistance) * cb.fogScale;
+    const float fogRange = cb.fogScale > 1.0e-6f ? 1.0f / cb.fogScale : 0.0f;
+    const float fogStart = cb.fogEnd - fogRange;
+    const float featherDistance = fogRange * cb.fogDensity;
+    const float featheredStart = max(0.0f, fogStart - featherDistance);
+    const float featheredRange = max(cb.fogEnd - featheredStart, 1.0e-4f);
+
+    f = (cb.fogEnd - viewDistance) / featheredRange;
   }
   else if (cb.fogMode == D3DFOG_EXP)
   {
@@ -87,7 +105,14 @@ vec4 calculateFog(float viewDistance)
 
   f = clamp(f, 0.0, 1.0);
 
-  return vec4(cb.fogColor, 1.0 - f);
+  if (cb.fogMode == D3DFOG_LINEAR)
+  {
+    float fogAlpha = 1.0 - f;
+    fogAlpha = fogAlpha * fogAlpha * fogAlpha * (fogAlpha * (fogAlpha * 6.0 - 15.0) + 10.0);
+    f = 1.0 - fogAlpha;
+  }
+
+  return vec4(fogColor, 1.0 - f);
 }
 
 void unpackDenoiserRadiance(inout float3 radiance, uint denoiserMode)
@@ -241,11 +266,13 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
 
   // Reconstruct the primary ray direction and view hit distance for the current pixel
 
+  const vec2 screenUV = cameraPixelCoordinateToScreenUV(fakeCamera, thread_id);
   const CameraDirections primaryRayDirections = cameraPixelCoordinateToDirection(fakeCamera, thread_id.xy);
   const vec3 viewPosition = cameraReconstructViewPosition(fakeCamera, primaryRayDirections.viewDirection, primaryLinearViewZ);
   // Note: Should be equal to the virtual hit distance just without needing to read it (since we need the linear view Z in world space for
   // other calculations here anyways and can just use it to reconstruct this).
   const float viewDistance = length(viewPosition);
+  const vec3 skyRadiance = sampleSkyRadiance(primaryRayDirections.worldDirection, screenUV);
 
   // Load Input Radiance
 
@@ -441,7 +468,7 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
       }
       else
       {
-        const vec4 fogColor = calculateFog(surface.hitT);
+        const vec4 fogColor = calculateFog(surface.hitT, cb.fogColor);
         alphaBlendOutput.xyz = alphaBlendOutput.xyz * (1.0f - fogColor.a) + fogColor.rgb * fogColor.a;
         alphaBlendOutput.xyz *= (1 - backgroundAlpha);
       }
@@ -514,15 +541,7 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
   // Add sky radiance
   if (primaryMiss)
   {
-    if (cb.domeLightArgs.active)
-    {
-      radianceOutput += cb.domeLightArgs.radiance * sampleDomeLightTexture(SkyLight, primaryRayDirections.worldDirection, cb.domeLightArgs.worldToLightTransform) * volumeAttenuation;
-    }
-    else
-    {
-      vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, thread_id);
-      radianceOutput += cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0) * volumeAttenuation;
-    }
+    radianceOutput += skyRadiance * volumeAttenuation;
   }
   
   vec3 attenuatedOutput = radianceOutput;
@@ -530,13 +549,16 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
   {
     // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
     // as emissive hits will be over-attenuated.
-    const vec4 fogColor = calculateFog(viewDistance);
+    const float fogDistance = primaryMiss ? cb.maxFogDistance : viewDistance;
+    const vec4 fogColor = calculateFog(fogDistance, cb.fogColor);
 
     // Blend fog over output
     attenuatedOutput = radianceOutput * (1.0f - fogColor.a) + fogColor.rgb * fogColor.a;
 
-    // TODO: Disable fog for particle layer to avoid flickering, need to find a proper way to apply fog to particles
-    // particleLayerOutput.rgb = lerp(particleLayerOutput.rgb, fogColor.rgb, fogColor.a);
+    if (cb.outputParticleLayer)
+    {
+      particleLayerOutput.rgb = lerp(particleLayerOutput.rgb, fogColor.rgb, fogColor.a);
+    }
   }
 
   vec4 finalOutput = vec4(0,0,0,1);
