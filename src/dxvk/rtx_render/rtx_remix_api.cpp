@@ -1629,74 +1629,39 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetGameValue(
-    const char* key,
-    const char* value) {
-    if (!key || key[0] == '\0' || !value) {
+  remixapi_ErrorCode REMIXAPI_CALL impl_SetFogState(
+    const remixapi_FogInfo* info) {
+    if (!info || info->sType != REMIXAPI_STRUCT_TYPE_FOG_INFO) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
 
-    // The game-state store owns its own mutex. s_mutex is deliberately NOT
-    // taken here: funnelling high-frequency plugin writes through the same
-    // lock as the rest of the API has no benefit and would add contention.
-    dxvk::fork_game_state::GameStateStore::get().set(
-      std::string{ key }, std::string{ value });
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+
+    if (!s_inFrame.exchange(true)) {
+      auto cb = s_beginCallback;
+      if (cb) {
+        cb();
+      }
+    }
+
+    dxvk::FogState fog;
+    fog.mode = info->mode;
+    fog.color = convert::tovec3(info->color);
+    fog.scale = info->scale;
+    fog.end = info->end;
+    fog.density = info->density;
+
+    std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([fog](dxvk::DxvkContext* ctx) {
+      ctx->getCommonObjects()->getSceneManager().setExternalFogState(fog);
+    });
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetGameValue(
-    const char* key,
-    char*       out_buffer,
-    uint32_t    in_buffer_size,
-    uint32_t*   out_actual_size) {
-    if (key == nullptr || key[0] == '\0') {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-    if (out_actual_size == nullptr) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-    if (in_buffer_size > 0 && out_buffer == nullptr) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    // Like SetGameValue, rely on GameStateStore's internal mutex.
-    // s_mutex is deliberately NOT taken here to avoid contention on
-    // high-frequency reads from plugin threads.
-    std::string value;
-    if (!dxvk::fork_game_state::GameStateStore::get().tryGet(std::string{ key }, value)) {
-      *out_actual_size = 0;
-      return REMIXAPI_ERROR_CODE_SUCCESS;
-    }
-
-    const uint32_t needed = static_cast<uint32_t>(value.size()) + 1u;
-    *out_actual_size = needed;
-
-    if (in_buffer_size >= needed) {
-      memcpy(out_buffer, value.data(), value.size());
-      out_buffer[value.size()] = '\0';
-    }
-
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestVramCompaction() {
-    return dxvk::fork_hooks::requestVramCompaction(tryAsDxvk());
-  }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestTextureVramFree() {
-    return dxvk::fork_hooks::requestTextureVramFree(tryAsDxvk());
-  }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetVramStats(
-      remixapi_VramStats* out_stats) {
-    return dxvk::fork_hooks::getVramStats(tryAsDxvk(), out_stats);
-  }
-
-  // Fork-owned helper body lives in rtx_fork_api_entry.cpp as
-  // fork_hooks::mutateTextureHashOption (add flag replaces the local
-  // TextureHashMutation enum). Both call sites hold s_mutex across the call
-  // per the lock-ordering rule documented alongside s_mutex.
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
     const char* textureCategory,
@@ -2478,8 +2443,17 @@ extern "C"
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
-    return dxvk::fork_hooks::getUiState(tryAsDxvk());
+  REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
+    return impl_GetUIState();
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetFogState(
+    const remixapi_FogInfo* info) {
+    return impl_SetFogState(info);
+  }
+  
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
+    return impl_SetUIState(state);
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
@@ -2549,16 +2523,9 @@ extern "C"
       interf.GetUIState = remixapi_GetUIState;
       interf.SetUIState = remixapi_SetUIState;
       interf.DrawScreenOverlay = remixapi_DrawScreenOverlay;
-      interf.CreateLightBatched = remixapi_CreateLightBatched;
-      interf.SetGameValue = remixapi_SetGameValue;
-      interf.RequestVramCompaction = remixapi_RequestVramCompaction;
-      interf.GetVramStats = remixapi_GetVramStats;
-      interf.RequestTextureVramFree = remixapi_RequestTextureVramFree;
-      interf.GetGameValue = remixapi_GetGameValue;
-      // Fork-added vtable slots (extern-C exported; delegated to fork hook)
-      dxvk::fork_hooks::remixApiVtableInit(interf);
+      interf.SetFogState = remixapi_SetFogState;
     }
-    static_assert(sizeof(interf) == 328, "Add/remove function registration");
+    static_assert(sizeof(interf) == 280, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

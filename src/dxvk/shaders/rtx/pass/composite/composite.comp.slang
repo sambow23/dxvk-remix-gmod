@@ -36,6 +36,7 @@
 #include "rtx/concept/surface/alpha_blend_surface.slangh"
 #include "rtx/external/NRD.slangh"
 #include "rtx/utility/geometry_flags.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 #include "rtx/algorithm/volume_composite_helpers.slangh"
 #include "rtx/algorithm/accumulate.slangh"
@@ -45,6 +46,110 @@ float3 sampleDomeLightTexture(Sampler2D<float3> DomeLight, float3 worldDirection
   float3 domeSampleDirection = mul(worldToDomeLightTransform, float4(worldDirection, 0.0f)).xyz;
   float2 sampleUV = cartesianDirectionToLatLongSphere(domeSampleDirection);
   return DomeLight.SampleLevel(sampleUV, 0).xyz;
+}
+
+vec3 sampleSkyRadiance(float3 worldDirection, float2 screenUV)
+{
+  if (cb.domeLightArgs.active)
+    return cb.domeLightArgs.radiance * sampleDomeLightTexture(SkyLight, worldDirection, cb.domeLightArgs.worldToLightTransform);
+
+  if (cb.skyMode == 1)
+    return evalSkyRadiance(worldDirection, cb.atmosphereArgs, cb.isZUp != 0);
+
+  return cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0);
+}
+
+vec4 calculateFog(float viewDistance, vec3 fogColor)
+{
+  if (cb.fogMode == D3DFOG_NONE)
+    return vec4(0.0);
+
+  // Hack: Lets the current fog system look fine on maps with a skybox, to be removed once we read fog parameters
+  // properly from the game as they will specify how exactly the fog should look (if its even enabled rather than having
+  // it enabled by default).
+  if (viewDistance > cb.maxFogDistance)
+    return vec4(0.0);
+
+  // https://docs.microsoft.com/en-us/windows/win32/direct3d9/fog-formulas
+
+  float f = 0;
+
+  if (cb.fogMode == D3DFOG_LINEAR)
+  {
+    // Note: Clamp the view distance to the range of the fog effect.
+    // Todo: Add in the min fog distance too potentially as this is currently missing.
+    viewDistance = clamp(viewDistance, 0.0f, cb.maxFogDistance);
+
+    const float fogRange = cb.fogScale > 1.0e-6f ? 1.0f / cb.fogScale : 0.0f;
+    const float fogStart = cb.fogEnd - fogRange;
+    const float featherDistance = fogRange * cb.fogDensity;
+    const float featheredStart = max(0.0f, fogStart - featherDistance);
+    const float featheredRange = max(cb.fogEnd - featheredStart, 1.0e-4f);
+
+    f = (cb.fogEnd - viewDistance) / featheredRange;
+  }
+  else if (cb.fogMode == D3DFOG_EXP)
+  {
+    float d = viewDistance * cb.fogDensity;
+    f = exp(-d);
+  }
+  else if (cb.fogMode == D3DFOG_EXP2)
+  {
+    float d = viewDistance * cb.fogDensity;
+    f = exp(-d * d);
+  }
+
+  f = clamp(f, 0.0, 1.0);
+
+  if (cb.fogMode == D3DFOG_LINEAR)
+  {
+    float fogAlpha = 1.0 - f;
+    fogAlpha = fogAlpha * fogAlpha * fogAlpha * (fogAlpha * (fogAlpha * 6.0 - 15.0) + 10.0);
+    f = 1.0 - fogAlpha;
+  }
+
+  return vec4(fogColor, 1.0 - f);
+}
+
+void unpackDenoiserRadiance(inout float3 radiance, uint denoiserMode)
+{
+  switch (denoiserMode)
+  {
+    case DENOISER_MODE_RELAX:
+      radiance = RELAX_BackEnd_UnpackRadiance(float4(radiance, 0)).xyz;
+      break;
+    case DENOISER_MODE_REBLUR:
+      radiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(float4(radiance, 0)).xyz;
+      break;
+  }
+}
+
+vec3 applyPostFilter(Texture2D<float4> texture, uint2 pixel, uint denoiserMode)
+{
+  vec3 centerColor = texture[pixel].xyz;
+  unpackDenoiserRadiance(centerColor, denoiserMode);
+  vec3 totalColor = vec3(0);
+  uint count = 0;
+  for (int i = -1; i <= 1; ++i)
+  {
+    for (int j = -1; j <= 1; ++j)
+    {
+      if (i != 0 && j != 0)
+      {
+        vec3 color = texture[pixel + int2(i, j)].xyz;
+        unpackDenoiserRadiance(color, denoiserMode);
+        count += any(color > vec3(0)) ? 1 : 0;
+        totalColor += color;
+      }
+    }
+  }
+
+  vec3 avgColor = totalColor / max(1, count);
+  if (calcBt709Luminance(centerColor) > calcBt709Luminance(avgColor) * cb.postFilterThreshold)
+  {
+    centerColor = avgColor;
+  }
+  return centerColor;
 }
 
 void updateDebugViewAtStart(uint2 thread_id) 
@@ -121,8 +226,66 @@ void loadInputRadiance(
     texelFetch(SharedRadianceRG, pixelCoordinate, 0).xy,
     texelFetch(SharedRadianceB, pixelCoordinate, 0).x);
 
-  vec3 primaryDirectDiffuseRadiance = texelFetch(PrimaryDirectDiffuseRadianceHitDistance, pixelCoordinate, 0).xyz;
-  vec3 primaryDirectSpecularRadiance = texelFetch(PrimaryDirectSpecularRadianceHitDistance, pixelCoordinate, 0).xyz;
+  const VolumeArgs volumeArgs = cb.volumeArgs;
+  // Note: Fake camera constructed due to Composite pass's lack of access to typical constant buffer members. A bit hacky
+  // and may result in issues in the future if the Camera API is updated to use new members internally (not super likely)
+  // but avoids code duplication.
+  Camera fakeCamera = { 0 };
+
+  fakeCamera.resolution = cb.resolution;
+  fakeCamera.projectionToViewJittered = cb.projectionToViewJittered;
+  fakeCamera.viewToWorld = cb.viewToWorld;
+  fakeCamera.nearPlane = cb.nearPlane;
+
+  // Early out for pixels outside the camera
+
+  if (any(thread_id >= fakeCamera.resolution))
+  {
+    return;
+  }
+
+  updateDebugViewAtStart(thread_id);
+
+  RNG randomState = createRNG(thread_id, cb.frameIdx, 0);
+
+  // Load GBuffer Information
+
+  const GeometryFlags geometryFlags = geometryFlagsReadFromGBuffer(thread_id, SharedFlags);
+  const vec3 sharedRadiance = vec3(
+    texelFetch(SharedRadianceRG, thread_id.xy, 0).xy,
+    texelFetch(SharedRadianceB, thread_id.xy, 0).x);
+
+  const vec3 primaryAttenuation = r11g11b10ToColor(imageLoad(PrimaryAttenuation, thread_id.xy));
+  const vec3 primaryAlbedo = PrimaryAlbedo[thread_id.xy].xyz;
+  const vec3 primarySpecularAlbedo = texelFetch(PrimarySpecularAlbedo, thread_id.xy, 0).xyz;
+  const float primaryLinearViewZ = texelFetch(PrimaryLinearViewZ, thread_id.xy, 0).x;
+  const vec4 primaryVirtualWorldNormalPerceptualRoughness = PrimaryVirtualWorldNormalPerceptualRoughness[thread_id.xy];
+  const vec3 primaryVirtualNormal = primaryVirtualWorldNormalPerceptualRoughness.xyz * 2.0 - 1.0;
+  const float perceptualRoughness = primaryVirtualWorldNormalPerceptualRoughness.w;
+  // Note: Relying on the same sentinel value outputted to the linear view Z which NRD relies on, so this is safe (and lets us not have to read
+  // in the cone radius texture which typically contains the flag we use to determine this).
+  const bool primaryMiss = primaryLinearViewZ == cb.primaryDirectMissLinearViewZ
+                           && !geometryFlags.performPSTR
+                           && !geometryFlags.performPSRR;  // must not be PSR
+
+  const vec3 secondaryAttenuation = r11g11b10ToColor(imageLoad(SecondaryAttenuation, thread_id.xy));
+  const vec3 secondaryAlbedo = texelFetch(SecondaryAlbedo, thread_id.xy, 0).xyz;
+  const vec3 secondarySpecularAlbedo = texelFetch(SecondarySpecularAlbedo, thread_id.xy, 0).xyz;
+
+  // Reconstruct the primary ray direction and view hit distance for the current pixel
+
+  const vec2 screenUV = cameraPixelCoordinateToScreenUV(fakeCamera, thread_id);
+  const CameraDirections primaryRayDirections = cameraPixelCoordinateToDirection(fakeCamera, thread_id.xy);
+  const vec3 viewPosition = cameraReconstructViewPosition(fakeCamera, primaryRayDirections.viewDirection, primaryLinearViewZ);
+  // Note: Should be equal to the virtual hit distance just without needing to read it (since we need the linear view Z in world space for
+  // other calculations here anyways and can just use it to reconstruct this).
+  const float viewDistance = length(viewPosition);
+  const vec3 skyRadiance = sampleSkyRadiance(primaryRayDirections.worldDirection, screenUV);
+
+  // Load Input Radiance
+
+  vec3 primaryDirectDiffuseRadiance = texelFetch(PrimaryDirectDiffuseRadianceHitDistance, thread_id.xy, 0).xyz;
+  vec3 primaryDirectSpecularRadiance = texelFetch(PrimaryDirectSpecularRadianceHitDistance, thread_id.xy, 0).xyz;
 
   unpackDenoiserRadiance(primaryDirectDiffuseRadiance, cb.primaryDirectDenoiser);
   unpackDenoiserRadiance(primaryDirectSpecularRadiance, cb.primaryDirectDenoiser);
@@ -338,9 +501,9 @@ void applyVolumetricLighting(
       }
       else
       {
-        const vec4 fogColor = calculateFog(surface.hitT);
-        alphaBlendOutput = alphaBlendOutput * (1.0f - fogColor.a) + fogColor.rgb * fogColor.a;
-        alphaBlendOutput *= (1 - backgroundAlpha);
+        const vec4 fogColor = calculateFog(surface.hitT, cb.fogColor);
+        alphaBlendOutput.xyz = alphaBlendOutput.xyz * (1.0f - fogColor.a) + fogColor.rgb * fogColor.a;
+        alphaBlendOutput.xyz *= (1 - backgroundAlpha);
       }
       
       if (surface.hasEmissive)
@@ -393,7 +556,24 @@ void applySkyContribution(
 {
   if (!primaryMiss)
   {
-    return;
+    radianceOutput += skyRadiance * volumeAttenuation;
+  }
+  
+  vec3 attenuatedOutput = radianceOutput;
+  if (!volumeArgs.enable)
+  {
+    // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
+    // as emissive hits will be over-attenuated.
+    const float fogDistance = primaryMiss ? cb.maxFogDistance : viewDistance;
+    const vec4 fogColor = calculateFog(fogDistance, cb.fogColor);
+
+    // Blend fog over output
+    attenuatedOutput = radianceOutput * (1.0f - fogColor.a) + fogColor.rgb * fogColor.a;
+
+    if (cb.outputParticleLayer)
+    {
+      particleLayerOutput.rgb = lerp(particleLayerOutput.rgb, fogColor.rgb, fogColor.a);
+    }
   }
 
   if (cb.domeLightArgs.active)

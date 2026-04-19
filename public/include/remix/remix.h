@@ -162,6 +162,7 @@ namespace remix {
   using Float2D = remixapi_Float2D;
   using Float3D = remixapi_Float3D;
   using Float4D = remixapi_Float4D;
+  using FogInfo = remixapi_FogInfo;
   using Transform = remixapi_Transform;
 
 
@@ -202,8 +203,7 @@ namespace remix {
     // Deferred update of an analytical light definition. Applied on render thread.
     Result< void >                    UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info);
     Result< void >                    SetConfigVariable(const char* key, const char* value);
-    Result< void >                    SetGameValue(const char* key, const char* value);
-    remixapi_ErrorCode                GetGameValue(const char* key, char* out_buffer, uint32_t in_buffer_size, uint32_t* out_actual_size);
+    Result< void >                    SetFogState(const remixapi_FogInfo& info);
     Result< void >                    AddTextureHash(const char* textureCategory, const char* textureHash);
     Result< void >                    RemoveTextureHash(const char* textureCategory, const char* textureHash);
 
@@ -249,7 +249,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 328,
+      static_assert(sizeof(remixapi_Interface) == 280,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -293,20 +293,11 @@ namespace remix {
     return m_CInterface.SetConfigVariable(key, value);
   }
 
-  inline Result< void > Interface::SetGameValue(const char* key, const char* value) {
-    if (!m_CInterface.SetGameValue) {
+  inline Result< void > Interface::SetFogState(const remixapi_FogInfo& info) {
+    if (!m_CInterface.SetFogState) {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
-    return m_CInterface.SetGameValue(key, value);
-  }
-
-  inline remixapi_ErrorCode Interface::GetGameValue(const char* key, char* out_buffer,
-                                                    uint32_t in_buffer_size,
-                                                    uint32_t* out_actual_size) {
-    if (!m_CInterface.GetGameValue) {
-      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
-    }
-    return m_CInterface.GetGameValue(key, out_buffer, in_buffer_size, out_actual_size);
+    return m_CInterface.SetFogState(&info);
   }
 
   inline Result< void > Interface::AddTextureHash(const char* textureCategory, const char* textureHash) {
