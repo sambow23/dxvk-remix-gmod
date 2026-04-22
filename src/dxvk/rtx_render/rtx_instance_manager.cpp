@@ -1083,7 +1083,9 @@ namespace dxvk {
         // Surface::isDecalCategory (fork — 2026-06-18) removed 2026-06-19 with the
         // cloud-shadow zenith gate that consumed it; the cloud shadow now folds
         // onto the sun term in the NEE and needs no per-surface geometry test.
-        currentInstance.surface.associatedGeometryHash = drawCall.getHash(RtxOptions::geometryAssetHashRule());
+        currentInstance.surface.associatedGeometryHash = drawCall.getGeometryData().externalMesh != nullptr
+          ? reinterpret_cast<XXH64_hash_t>(drawCall.getGeometryData().externalMesh)
+          : drawCall.getHash(RtxOptions::geometryAssetHashRule());
         currentInstance.surface.isTextureFactorBlend = drawCall.getMaterialData().isTextureFactorBlend;
         currentInstance.surface.isVertexColorBakedLighting = drawCall.getMaterialData().isVertexColorBakedLighting;
         currentInstance.surface.isMotionBlurMaskOut = currentInstance.testCategoryFlags(InstanceCategories::IgnoreMotionBlur);
