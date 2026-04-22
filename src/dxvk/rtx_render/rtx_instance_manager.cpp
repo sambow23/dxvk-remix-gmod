@@ -1059,7 +1059,9 @@ namespace dxvk {
         currentInstance.surface.tFactor = drawCall.getMaterialData().tFactor;
         currentInstance.surface.alphaState = alphaState;
         currentInstance.surface.isAnimatedWater = currentInstance.testCategoryFlags(InstanceCategories::AnimatedWater);
-        currentInstance.surface.associatedGeometryHash = drawCall.getHash(RtxOptions::geometryAssetHashRule());
+        currentInstance.surface.associatedGeometryHash = drawCall.getGeometryData().externalMesh != nullptr
+          ? reinterpret_cast<XXH64_hash_t>(drawCall.getGeometryData().externalMesh)
+          : drawCall.getHash(RtxOptions::geometryAssetHashRule());
         currentInstance.surface.isTextureFactorBlend = drawCall.getMaterialData().isTextureFactorBlend;
         currentInstance.surface.isVertexColorBakedLighting = drawCall.getMaterialData().isVertexColorBakedLighting;
         currentInstance.surface.isMotionBlurMaskOut = currentInstance.testCategoryFlags(InstanceCategories::IgnoreMotionBlur);
