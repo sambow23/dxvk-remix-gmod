@@ -298,17 +298,17 @@ namespace dxvk {
           accumulatePresentPerf(presentCallNanoseconds, perf.presentCallNanoseconds, perf.presentCallMaxNanoseconds);
           accumulatePresentPerf(throttleSleepNanoseconds, perf.throttleSleepNanoseconds, perf.throttleSleepMaxNanoseconds);
 
-          if (perf.frames >= kPresentPerfLogIntervalFrames) {
-            Logger::info(str::format(
-              "DXVK queue present frames=", perf.frames,
-              " totalAvgMs=", formatMilliseconds(perf.totalNanoseconds, perf.frames),
-              " totalMaxMs=", formatMillisecondsMax(perf.totalMaxNanoseconds),
-              " presentCallAvgMs=", formatMilliseconds(perf.presentCallNanoseconds, perf.frames),
-              " presentCallMaxMs=", formatMillisecondsMax(perf.presentCallMaxNanoseconds),
-              " throttleSleepAvgMs=", formatMilliseconds(perf.throttleSleepNanoseconds, perf.frames),
-              " throttleSleepMaxMs=", formatMillisecondsMax(perf.throttleSleepMaxNanoseconds)));
-            perf = {};
-          }
+          // if (perf.frames >= kPresentPerfLogIntervalFrames) {
+          //   Logger::info(str::format(
+          //     "DXVK queue present frames=", perf.frames,
+          //     " totalAvgMs=", formatMilliseconds(perf.totalNanoseconds, perf.frames),
+          //     " totalMaxMs=", formatMillisecondsMax(perf.totalMaxNanoseconds),
+          //     " presentCallAvgMs=", formatMilliseconds(perf.presentCallNanoseconds, perf.frames),
+          //     " presentCallMaxMs=", formatMillisecondsMax(perf.presentCallMaxNanoseconds),
+          //     " throttleSleepAvgMs=", formatMilliseconds(perf.throttleSleepNanoseconds, perf.frames),
+          //     " throttleSleepMaxMs=", formatMillisecondsMax(perf.throttleSleepMaxNanoseconds)));
+          //   perf = {};
+          // }
         }
       } else {
         // Don't submit anything after device loss
