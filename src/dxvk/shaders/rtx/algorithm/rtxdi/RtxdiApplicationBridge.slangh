@@ -779,7 +779,10 @@ bool RAB_TraceLightSampleVisibility(RAB_Surface surface, RAB_LightSample lightSa
       cb.enablePreviousTLAS && usePreviousTLAS,
       BINDING_INDEX_INVALID, vec2(0.0f),
       isThinOpaqueSubsurface,
-      surface.opaqueSurfaceMaterialInteraction.shadingNormal);
+      surface.opaqueSurfaceMaterialInteraction.shadingNormal,
+      true,
+      lightSample.ignoreViewModel,
+      lightSample.ignoreFirstPersonPlayerShadow);
   }
   else
   {
@@ -791,7 +794,10 @@ bool RAB_TraceLightSampleVisibility(RAB_Surface surface, RAB_LightSample lightSa
       cb.enablePreviousTLAS && usePreviousTLAS,
       BINDING_INDEX_INVALID, vec2(0.0f),
       isThinOpaqueSubsurface,
-      surface.opaqueSurfaceMaterialInteraction.shadingNormal);
+      surface.opaqueSurfaceMaterialInteraction.shadingNormal,
+      true,
+      lightSample.ignoreViewModel,
+      lightSample.ignoreFirstPersonPlayerShadow);
   }
 
   attenuation = visibility.attenuation;

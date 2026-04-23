@@ -30,9 +30,9 @@ VisibilityResult evalVolumeNEEVisibility(
   if (enableTranslucentShadows)
   {
     return traceVisibilityRay<visibilityModeDisableCulling | visibilityModeEnableTranslucentMaterials>(
-      visibilityRay, rayMask, sampledTransportPortalIndex, portalSpace);
+      visibilityRay, rayMask, sampledTransportPortalIndex, portalSpace, false, false, true, lightSample.ignoreViewModel, lightSample.ignoreFirstPersonPlayerShadow);
   }
 
   return traceVisibilityRay<visibilityModeDisableCulling>(
-    visibilityRay, rayMask, sampledTransportPortalIndex, portalSpace);
+    visibilityRay, rayMask, sampledTransportPortalIndex, portalSpace, false, false, true, lightSample.ignoreViewModel, lightSample.ignoreFirstPersonPlayerShadow);
 }

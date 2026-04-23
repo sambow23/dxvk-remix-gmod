@@ -46,6 +46,7 @@ namespace dxvk {
     { InstanceCategories::SmoothNormals,           "remix_category:smooth_normals",           "Smooth Normals",            "rtx.smoothNormalsTextures" },
     { InstanceCategories::HairCards,               "remix_category:hair_cards",               "Hair Cards",                "rtx.hairCardTextures" },
     { InstanceCategories::LegacyEmissive,          "remix_category:legacy_emissive",          "Legacy Emissive",           "rtx.legacyEmissiveTextures" },
+    { InstanceCategories::FirstPersonPlayerShadow, "remix_category:first_person_player_shadow", "First Person Player Shadow", nullptr },
     { InstanceCategories::Occluder,                "remix_category:occluder",                 "Occluder",                  "rtx.occluderTextures" },
   };
 
