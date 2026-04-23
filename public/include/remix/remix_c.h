@@ -493,6 +493,7 @@ extern "C" {
     REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE_EMITTER          = 1 << 23,
     REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE           = 1 << 24,
     REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL                = 1 << 25,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_FIRST_PERSON_PLAYER_SHADOW = 1 << 26,
   } remixapi_InstanceCategoryBit;
 
   typedef uint32_t remixapi_InstanceCategoryFlags;
@@ -697,6 +698,7 @@ extern "C" {
     remixapi_Float3D                radiance;
     remixapi_Bool                   isDynamic;
     remixapi_Bool                   ignoreViewModel;
+    remixapi_Bool                   ignoreFirstPersonPlayerShadow;
   } remixapi_LightInfo;
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLight)(

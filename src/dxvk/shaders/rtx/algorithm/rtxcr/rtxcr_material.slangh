@@ -172,11 +172,11 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
     bool risLightSampleValid = false;
     uint8_t sampledTransportPortalIndex = invalidRayPortalIndex;
     uint16_t lightIdx = kInvalidLightIdx;
-    // Fork: synthetic customIndex for view-model filtering.
-    uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+    // Create synthetic customIndex for light filtering.
+    uint customIndex = (geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0)
+      | (geometryFlags.isFirstPersonPlayerShadow ? CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW : 0);
 
-    if (cb.enableRtxdi && geometryFlags.primarySelectedIntegrationSurface && sampleInsideScreen)
-    {
+    if (cb.enableRtxdi && geometryFlags.primarySelectedIntegrationSurface) {
       // Select and sample a light for NEE via RTXDI
       rtxdiLightSampleValid = sampleLightRTXDI(
         samplePixelCoordinate,
@@ -221,7 +221,10 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
       minimalRayInteraction.coneRadius, viewRay.spreadAngle, 1.0, geometryFlags.isViewModel, false,
       primarySurfaceIndex, SharedTextureCoord[pixelCoordinate],
       false,
-      opaqueSurfaceMaterialInteraction.shadingNormal);
+      opaqueSurfaceMaterialInteraction.shadingNormal,
+      true,
+      sssLightSample.ignoreViewModel,
+      sssLightSample.ignoreFirstPersonPlayerShadow);
 
     // Current sample is not visible by the sample light, continue on the next sample
     if (visibility.hasOpaqueHit)
@@ -328,8 +331,9 @@ float3 evalSingleScatteringTransmission(
       LightSample transmissionLightSample;
       float inverseSelectionPdf = 0.0f;
       uint16_t lightIdx = kInvalidLightIdx;
-      // Create synthetic customIndex for view model filtering.
-      uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+      // Create synthetic customIndex for light filtering.
+      uint customIndex = (geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0)
+        | (geometryFlags.isFirstPersonPlayerShadow ? CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW : 0);
       // Select and sample a light for NEE via RIS
       // SST TODO: NEE
       const bool risLightSampleValid = sampleLightRIS(
@@ -353,7 +357,10 @@ float3 evalSingleScatteringTransmission(
         minimalRayInteraction.coneRadius, viewRay.spreadAngle, 1.0, geometryFlags.isViewModel, false,
         primarySurfaceIndex, SharedTextureCoord[pixelCoordinate],
         false,
-        opaqueSurfaceMaterialInteraction.shadingNormal);
+        opaqueSurfaceMaterialInteraction.shadingNormal,
+        true,
+        transmissionLightSample.ignoreViewModel,
+        transmissionLightSample.ignoreFirstPersonPlayerShadow);
 
       // Current sample is not visible by the sample light, continue on the next sample
       if (visibility.hasOpaqueHit)
@@ -428,8 +435,9 @@ float3 evalSingleScatteringTransmission(
       LightSample singleScatteringLightSample;
       float singleScatteringInverseSelectionPdf = 0.0f;
       uint16_t singleScatteringLightIdx = kInvalidLightIdx;
-      // Create synthetic customIndex for view model filtering.
-      uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+      // Create synthetic customIndex for light filtering.
+      uint customIndex = (geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0)
+        | (geometryFlags.isFirstPersonPlayerShadow ? CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW : 0);
       // SST TODO: NEE
       const bool risLightSampleValid = sampleLightRIS(
         randomState,
@@ -452,7 +460,10 @@ float3 evalSingleScatteringTransmission(
         minimalRayInteraction.coneRadius, viewRay.spreadAngle, 1.0, geometryFlags.isViewModel, false,
         primarySurfaceIndex, SharedTextureCoord[pixelCoordinate],
         false,
-        opaqueSurfaceMaterialInteraction.shadingNormal);
+        opaqueSurfaceMaterialInteraction.shadingNormal,
+        true,
+        singleScatteringLightSample.ignoreViewModel,
+        singleScatteringLightSample.ignoreFirstPersonPlayerShadow);
 
       // Current sample is not visible by the sample light, continue on the next sample
       if (singleScatteringVisibility.hasOpaqueHit)

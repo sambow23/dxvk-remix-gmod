@@ -35,12 +35,32 @@ static const uint visibilityModeDisableCulling = (1 << 2);             // Disabl
 static const uint visibilityModeEnableSubsurfaceMaterials = (1 << 3);  // Enable subsurface materials or skip them
 static const uint visibilityModeEnablePom = (1 << 4);                  // Enable parallax occlusion mapping visibility
 static const uint visibilityModeOpaqueOnly = (1 << 5);                 // Only query visibility for opaque only, no alphatest/blend
+static const float ignoredVisibilityHitStep = 1e-4f;
+
+bool shouldIgnoreVisibilityHit(uint customIndex, bool ignoreViewModel, bool ignoreFirstPersonPlayerShadow)
+{
+  return (ignoreViewModel && (customIndex & CUSTOM_INDEX_IS_VIEW_MODEL))
+    || (ignoreFirstPersonPlayerShadow && (customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW));
+}
 
 // Visibility Helper Functions
 
 // Returns the attenuation factor for the surface, i.e. (1.0 - opacity)
-vec3 handleVisibilityVertex<let VisibilityMode : uint>(Ray ray, RayHitInfo rayHitInfo, const bool usePreviousTLAS)
+// passedThroughOccluder tracks if we've crossed an occluder - any geometry after an occluder is also transparent
+f16vec3 handleVisibilityVertex<let VisibilityMode : uint>(Ray ray, RayHitInfo rayHitInfo, const bool usePreviousTLAS, inout bool passedThroughOccluder, bool ignoreViewModel = false, bool ignoreFirstPersonPlayerShadow = false)
 {
+  // If we've already passed through an occluder, all subsequent geometry is transparent
+  // This prevents geometry inside an occluder volume from casting shadows outside
+  if (passedThroughOccluder)
+  {
+    return 1.0;
+  }
+
+  if (shouldIgnoreVisibilityHit(rayHitInfo.customIndex, ignoreViewModel, ignoreFirstPersonPlayerShadow))
+  {
+    return 1.0;
+  }
+
   RayInteraction rayInteraction = rayInteractionCreate(ray, rayHitInfo);
   
   if (usePreviousTLAS)
@@ -274,10 +294,24 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
   // ViewModel instances are not to occlude anything but rays originating from a ViewModel surface
   bool hasRayOriginatedFromViewModel = false,
   bool usePreviousTLAS = false,
-  bool clearOpaqueHitAttenuation = true)
+  bool clearOpaqueHitAttenuation = true,
+  bool ignoreViewModel = false,
+  bool ignoreFirstPersonPlayerShadow = false)
 {
   // Exclude the portals from the ray mask because we have special handling for them.
   rayMask &= ~OBJECT_MASK_PORTAL;
+
+  // Ignore flagged dynamic classes before tracing so those instances never enter the query.
+  if (ignoreViewModel)
+  {
+    rayMask &= ~OBJECT_MASK_ALL_VIEWMODEL;
+  }
+
+  // First-person shadow proxies travel through the player-model object-mask path.
+  if (ignoreFirstPersonPlayerShadow)
+  {
+    rayMask &= ~OBJECT_MASK_ALL_PLAYER_MODEL;
+  }
 
   PortalSpace2BitsType portalSpace = rayOriginPortalSpace;  // Assign to local variable since it's being modified
 
@@ -311,6 +345,10 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
   result.hitDistance = visibilityRay.tMax;
   result.hasOpaqueHit = false;
   result.hasPOMHit = false;
+
+  // Track if we've passed through an occluder - geometry after an occluder doesn't cast shadows
+  bool passedThroughOccluder = false;
+  float skippedVisibilityDistance = 0.0f;
 
   uint rayFlags = (VisibilityMode & visibilityModeAccurateHitDistance)
     ? RAY_FLAG_NONE
@@ -353,7 +391,7 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
         RayHitInfo rayHitInfo;
         RAY_HIT_INFO_CREATE_RAY_QUERY_CANDIDATE(rayHitInfo, rayQuery)
 
-        vec3 surfaceAttenuation = handleVisibilityVertex<VisibilityMode>(visibilityRay, rayHitInfo, usePreviousTLAS);
+        f16vec3 surfaceAttenuation = handleVisibilityVertex<VisibilityMode>(visibilityRay, rayHitInfo, usePreviousTLAS, passedThroughOccluder, ignoreViewModel, ignoreFirstPersonPlayerShadow);
 
         vec3 prevAttenuation = result.attenuation;
         result.attenuation *= surfaceAttenuation;
@@ -374,11 +412,29 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
 
     if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
+      uint committedCustomIndex = rayQuery.CommittedInstanceID();
+
+      if (shouldIgnoreVisibilityHit(committedCustomIndex, ignoreViewModel, ignoreFirstPersonPlayerShadow))
+      {
+        const float advanceDistance = min(visibilityRay.tMax, rayQuery.CommittedRayT() + ignoredVisibilityHitStep);
+
+        if (advanceDistance >= visibilityRay.tMax)
+        {
+          break;
+        }
+
+        skippedVisibilityDistance += advanceDistance;
+        visibilityRay.origin += visibilityRay.direction * advanceDistance;
+        visibilityRay.tMax = max(0.0f, visibilityRay.tMax - advanceDistance);
+        visibilityRay.coneRadius += float16_t(visibilityRay.spreadAngle * advanceDistance);
+        continue;
+      }
+
       if (clearOpaqueHitAttenuation)
       {
         result.attenuation = vec3(0.0f);
       }
-      result.hitDistance = rayQuery.CommittedRayT();
+      result.hitDistance = skippedVisibilityDistance + rayQuery.CommittedRayT();
       result.hasOpaqueHit = true;
 
       // If we already went through a portal, add the path segment before the portal
@@ -427,7 +483,9 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
   bool usePreviousTLAS = false,
   uint primarySurfaceIndex = SURFACE_INDEX_INVALID, float2 texCoords = vec2(0.0f),
   bool isThinOpaqueSubsurface = false,
-  vec3 shadingNormal = vec3(0.0f), bool clearOpaqueHitAttenuation = true)
+  f16vec3 shadingNormal = f16vec3(0.0h), bool clearOpaqueHitAttenuation = true,
+  bool ignoreViewModel = false,
+  bool ignoreFirstPersonPlayerShadow = false)
 {
   MinimalRayInteraction minimalRayInteraction = (MinimalRayInteraction) 0;
   minimalRayInteraction.coneRadius = coneRadius;
@@ -509,7 +567,7 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
   }
 #endif
 
-  VisibilityResult result = traceVisibilityRay<VisibilityMode>(visibilityRay, rayMask, expectedRayPortalIndex, rayOriginPortalSpace, hasRayOriginatedFromViewModel, usePreviousTLAS, clearOpaqueHitAttenuation);
+  VisibilityResult result = traceVisibilityRay<VisibilityMode>(visibilityRay, rayMask, expectedRayPortalIndex, rayOriginPortalSpace, hasRayOriginatedFromViewModel, usePreviousTLAS, clearOpaqueHitAttenuation, ignoreViewModel, ignoreFirstPersonPlayerShadow);
 
   // We want to calculate the attenuation from the light to the surface - which is why we use targetPosition (light) and neg-direction (light to surface)
   result.attenuation *= calcVolumetricAttenuation(cb.volumeArgs, none, false, result.hitDistance, targetPosition, -visibilityRay.direction);
