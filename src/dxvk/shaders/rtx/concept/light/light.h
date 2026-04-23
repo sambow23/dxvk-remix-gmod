@@ -56,6 +56,8 @@ struct DecodedPolymorphicLight
   uint8_t polymorphicType;
   vec3 radiance;
   LightShaping shaping;
+  bool ignoreViewModel;
+  bool ignoreFirstPersonPlayerShadow;
   uvec4 data0;
   uvec4 data2;
   uvec4 data3;

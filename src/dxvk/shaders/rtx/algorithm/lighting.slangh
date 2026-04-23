@@ -38,6 +38,12 @@
 static const int kSurfaceRISType = 1;
 static const uint16_t kInvalidLightIdx = 0xffff;
 
+bool shouldSkipLightForCustomIndex(DecodedPolymorphicLight decodedLight, uint customIndex)
+{
+  return (decodedLight.ignoreViewModel && (customIndex & CUSTOM_INDEX_IS_VIEW_MODEL))
+    || (decodedLight.ignoreFirstPersonPlayerShadow && (customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW));
+}
+
 // Selects and samples from a light using RTXDI. Returns if the sample and the is valid or not
 // Note: Camera used only for resolution purposes in RTXDI offset calculations.
 bool sampleLightRTXDI(
@@ -55,6 +61,17 @@ bool sampleLightRTXDI(
     return false;
   }
 
+  // Check if this light should be skipped for the current surface.
+  if ((customIndex & (CUSTOM_INDEX_IS_VIEW_MODEL | CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW)) != 0)
+  {
+    MemoryPolymorphicLight memoryPolymorphicLight = lights[reservoir.lightIdx];
+    DecodedPolymorphicLight decodedLight = decodePolymorphicLight(memoryPolymorphicLight);
+
+    if (shouldSkipLightForCustomIndex(decodedLight, customIndex))
+    {
+      return false;
+    }
+  }
   // Get a light sample in portal space
 
   lightSample = RAB_GetPortalSpaceLightSample(reservoir.lightIdx, vec2(reservoir.uv),
@@ -222,6 +239,11 @@ bool sampleLightAdvancedRIS(
       // can effectively unroll the loop and remove the switch from decodedPolymorphicLightCalcWeight
       DecodedPolymorphicLight decodedPolymorphicLight = decodePolymorphicLight(memoryPolymorphicLight);
       decodedPolymorphicLight.polymorphicType = lightType;
+      
+      if (shouldSkipLightForCustomIndex(decodedPolymorphicLight, customIndex))
+      {
+        continue;
+      }
       LightSample candidateSample = decodedPolymorphicLightSampleArea(decodedPolymorphicLight, sampleCoordinates, surfaceInteraction);
 
       // Calculate the weight (targetPdf)

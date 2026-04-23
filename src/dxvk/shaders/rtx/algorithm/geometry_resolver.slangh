@@ -2045,6 +2045,10 @@ void geometryResolverVertex(
   {
     geometryResolverState.isViewModelSurface = true;
   }
+  if (rayInteraction.customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW)
+  {
+    geometryResolverState.isFirstPersonPlayerShadowSurface = true;
+  }
 
   const bool writeFirstHitForPSRPrepare =
 #if GBUFFER_FEATURE_INLINE_PSR_SAMPLING
@@ -2073,6 +2077,7 @@ void geometryResolverVertex(
   {
     GeometryFlags geometryFlags = (GeometryFlags)0;
     geometryFlags.isViewModel = geometryResolverState.isViewModelSurface;
+    geometryFlags.isFirstPersonPlayerShadow = geometryResolverState.isFirstPersonPlayerShadowSurface;
     geometryFlags.portalSpace = geometryResolverState.portalSpace;
     geometryFlags.secondarySurfaceMask = true;
     geometryFlags.objectMask = primaryRayMaskToObjectMask(geometryResolverState.rayMask, geometryResolverState.isViewModelSurface);
@@ -2126,6 +2131,7 @@ void geometryResolverVertex(
 
     GeometryFlags geometryFlags = (GeometryFlags)0;
     geometryFlags.isViewModel = geometryResolverState.isViewModelSurface;
+    geometryFlags.isFirstPersonPlayerShadow = geometryResolverState.isFirstPersonPlayerShadowSurface;
     geometryFlags.portalSpace = geometryResolverState.portalSpace;
     geometryFlags.pomOpaqueSurfaceEncountered = geometryResolverState.pomOpaqueSurfaceEncountered;
     geometryFlags.objectMask = primaryRayMaskToObjectMask(geometryResolverState.rayMask, geometryResolverState.isViewModelSurface);
@@ -2753,6 +2759,10 @@ void geometryPSRResolverVertex(
   {
     geometryPSRResolverState.isViewModelSurface = true;
   }
+  if (rayInteraction.customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW)
+  {
+    geometryPSRResolverState.isFirstPersonPlayerShadowSurface = true;
+  }
 
   // Replace DLSS-RR motion vectors for transparent objects if screen-space refraction error is not too large.
   // This means that we replace the motion vectors (and depth + normals) until error is too large, giving us the
@@ -3001,6 +3011,7 @@ void geometryResolver(ivec2 pixelCoordinate) {
   geometryFlags.primarySelectedIntegrationSurface = primarySelectedIntegrationSurface;
   geometryFlags.secondarySurfaceMask = secondarySurfaceMask;
   geometryFlags.isViewModel = geometryResolverState.isViewModelSurface;
+  geometryFlags.isFirstPersonPlayerShadow = geometryResolverState.isFirstPersonPlayerShadowSurface;
   geometryFlags.portalSpace = geometryResolverState.portalSpace;
   geometryFlags.objectMask = primaryRayMaskToObjectMask(geometryResolverState.rayMask, geometryResolverState.isViewModelSurface);
   // Note: Set by direct lighting integrator later, hardcoded to false here.
@@ -3642,6 +3653,7 @@ void geometryPSRResolverPass(ivec2 pixelCoordinate) {
 
     // Update the flags and store
     geometryFlags.isViewModel = geometryPSRResolverState.isViewModelSurface;
+    geometryFlags.isFirstPersonPlayerShadow = geometryPSRResolverState.isFirstPersonPlayerShadowSurface;
     geometryFlags.portalSpace = geometryPSRResolverState.portalSpace;
     geometryFlags.pomOpaqueSurfaceEncountered = geometryPSRResolverState.pomOpaqueSurfaceEncountered;
     geometryFlags.objectMask = primaryRayMaskToObjectMask(geometryPSRResolverState.rayMask, geometryPSRResolverState.isViewModelSurface);

@@ -35,6 +35,8 @@ struct LightSample
   vec3 radiance;
   // Note: 32 bit floating point used to avoid precision issues with some kinds of sampling on lights.
   float solidAnglePdf;
+  bool ignoreViewModel;
+  bool ignoreFirstPersonPlayerShadow;
 };
 
 float3 sampleDomeLightTexture(SamplerState sampler, float3 worldDirection, uint32_t domeLightTextureIndex, float4x4 worldToDomeLightTransform)
