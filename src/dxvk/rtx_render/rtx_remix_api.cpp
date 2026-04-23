@@ -736,9 +736,10 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_TRANSPARENCY_LAYER){ result.set(InstanceCategories::IgnoreTransparencyLayer); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE_EMITTER)         { result.set(InstanceCategories::ParticleEmitter); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE)          { result.set(InstanceCategories::LegacyEmissive); }
+      if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_FIRST_PERSON_PLAYER_SHADOW){ result.set(InstanceCategories::FirstPersonPlayerShadow); }
       // Note: Occluder category is not exposed through the Remix API as it's primarily for Source engine NODRAW materials
       
-      static_assert((int)InstanceCategories::Count == 26, "Instance categories changed, please update Remix SDK");
+      static_assert((int)InstanceCategories::Count == 27, "Instance categories changed, please update Remix SDK");
       return result;
     }
 
@@ -1391,6 +1392,9 @@ namespace {
       
       // Set the ignoreViewModel flag from the LightInfo
       rtLight->ignoreViewModel = info->ignoreViewModel;
+
+      // Set the first-person player shadow ignore flag from the LightInfo
+      rtLight->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
 
       auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
@@ -2715,6 +2719,7 @@ extern "C"
     if (!handle || !info) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
+
     // Handle dome light update if present in pNext chain
     if (auto extDome = pnext::find<remixapi_LightInfoDomeEXT>(info)) {
       auto cTransform = convert::tomat4(extDome->transform);
@@ -2741,6 +2746,9 @@ extern "C"
     
     // Set the ignoreViewModel flag from the LightInfo
     rt->ignoreViewModel = info->ignoreViewModel;
+
+    // Set the first-person player shadow ignore flag from the LightInfo
+    rt->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
     
     {
       std::lock_guard lock { s_mutex };

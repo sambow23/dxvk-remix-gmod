@@ -43,6 +43,13 @@
 
 // Memory Polymorphic Light Functions
 
+LightSample applyDecodedLightSampleFlags(LightSample lightSample, DecodedPolymorphicLight decodedPolymorphicLight)
+{
+  lightSample.ignoreViewModel = decodedPolymorphicLight.ignoreViewModel;
+  lightSample.ignoreFirstPersonPlayerShadow = decodedPolymorphicLight.ignoreFirstPersonPlayerShadow;
+  return lightSample;
+}
+
 DecodedPolymorphicLight decodePolymorphicLight(MemoryPolymorphicLight memoryPolymorphicLight)
 {
   const uint32_t data10 = memoryPolymorphicLight.data1.x;
@@ -61,6 +68,7 @@ DecodedPolymorphicLight decodePolymorphicLight(MemoryPolymorphicLight memoryPoly
     data11, data12, data13);
   
   decodedPolymorphicLight.ignoreViewModel = (flagData & (1u << 1)) != 0u;
+  decodedPolymorphicLight.ignoreFirstPersonPlayerShadow = (flagData & (1u << 2)) != 0u;
 
   decodedPolymorphicLight.radiance = logLuv32ToRadiance(data10);
 
@@ -93,35 +101,35 @@ LightSample decodedPolymorphicLightSampleArea(
     case uint(lightTypeSphere):
       const SphereLight sphereLight = sphereLightCreate(decodedPolymorphicLight);
 
-      return sphereLightSampleArea(sphereLight, sampleCoordinates, viewSurfaceInteraction);
+      return applyDecodedLightSampleFlags(sphereLightSampleArea(sphereLight, sampleCoordinates, viewSurfaceInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_RECT_LIGHTS
     case uint(lightTypeRect):
       const RectLight rectLight = rectLightCreate(decodedPolymorphicLight);
 
-      return rectLightSampleArea(rectLight, sampleCoordinates, viewSurfaceInteraction);
+      return applyDecodedLightSampleFlags(rectLightSampleArea(rectLight, sampleCoordinates, viewSurfaceInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_DISK_LIGHTS
     case uint(lightTypeDisk):
       const DiskLight diskLight = diskLightCreate(decodedPolymorphicLight);
 
-      return diskLightSampleArea(diskLight, sampleCoordinates, viewSurfaceInteraction);
+      return applyDecodedLightSampleFlags(diskLightSampleArea(diskLight, sampleCoordinates, viewSurfaceInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_CYLINDER_LIGHTS
     case uint(lightTypeCylinder):
       const CylinderLight cylinderLight = cylinderLightCreate(decodedPolymorphicLight);
 
-      return cylinderLightSampleArea(cylinderLight, sampleCoordinates, viewSurfaceInteraction);
+      return applyDecodedLightSampleFlags(cylinderLightSampleArea(cylinderLight, sampleCoordinates, viewSurfaceInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_DISTANT_LIGHTS
     case uint(lightTypeDistant):
       const DistantLight distantLight = distantLightCreate(decodedPolymorphicLight);
 
-      return distantLightSampleArea(distantLight, sampleCoordinates, viewSurfaceInteraction);
+      return applyDecodedLightSampleFlags(distantLightSampleArea(distantLight, sampleCoordinates, viewSurfaceInteraction), decodedPolymorphicLight);
 #endif
 
     default:
@@ -148,35 +156,35 @@ LightSample decodedPolymorphicLightSampleArea(
     case uint(lightTypeSphere):
       const SphereLight sphereLight = sphereLightCreate(decodedPolymorphicLight);
 
-      return sphereLightSampleArea(sphereLight, sampleCoordinates, volumeInteraction);
+      return applyDecodedLightSampleFlags(sphereLightSampleArea(sphereLight, sampleCoordinates, volumeInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_RECT_LIGHTS
     case uint(lightTypeRect):
       const RectLight rectLight = rectLightCreate(decodedPolymorphicLight);
 
-      return rectLightSampleArea(rectLight, sampleCoordinates, volumeInteraction);
+      return applyDecodedLightSampleFlags(rectLightSampleArea(rectLight, sampleCoordinates, volumeInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_DISK_LIGHTS
     case uint(lightTypeDisk):
       const DiskLight diskLight = diskLightCreate(decodedPolymorphicLight);
 
-      return diskLightSampleArea(diskLight, sampleCoordinates, volumeInteraction);
+      return applyDecodedLightSampleFlags(diskLightSampleArea(diskLight, sampleCoordinates, volumeInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_CYLINDER_LIGHTS
     case uint(lightTypeCylinder):
       const CylinderLight cylinderLight = cylinderLightCreate(decodedPolymorphicLight);
 
-      return cylinderLightSampleArea(cylinderLight, sampleCoordinates, volumeInteraction);
+      return applyDecodedLightSampleFlags(cylinderLightSampleArea(cylinderLight, sampleCoordinates, volumeInteraction), decodedPolymorphicLight);
 #endif
 
 #if ENABLE_DISTANT_LIGHTS
     case uint(lightTypeDistant):
       const DistantLight distantLight = distantLightCreate(decodedPolymorphicLight);
 
-      return distantLightSampleArea(distantLight, sampleCoordinates, volumeInteraction);
+      return applyDecodedLightSampleFlags(distantLightSampleArea(distantLight, sampleCoordinates, volumeInteraction), decodedPolymorphicLight);
 #endif
 
     default:

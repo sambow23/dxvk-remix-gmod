@@ -184,7 +184,10 @@ void evalNEEPrimary(
       minimalRayInteraction.coneRadius, viewRay.spreadAngle, 1.0, geometryFlags.isViewModel, false,
       primarySurfaceIndex, SharedTextureCoord[pixelCoordinate],
       isThinOpaqueSubsurface,
-      opaqueSurfaceMaterialInteraction.shadingNormal) :
+      opaqueSurfaceMaterialInteraction.shadingNormal,
+      true,
+      lightSample.ignoreViewModel,
+      lightSample.ignoreFirstPersonPlayerShadow) :
     occludedVisibility;
 
   const bool hasNonSssOpaqueHit = visibility.hasOpaqueHit;
@@ -482,8 +485,9 @@ void integrateDirectPath(
     // running RTXDI on secondary surfaces will attempt to use lights from the primary surface which results
     // in poor quality lighting if the surface is in a significantly different spatial location.
     uint16_t lightIdx = kInvalidLightIdx;
-    // Note: Create a synthetic customIndex based on geometry flags to pass view model status
-    uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+    // Note: Create a synthetic customIndex based on geometry flags for light filtering.
+    uint customIndex = (geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0)
+      | (geometryFlags.isFirstPersonPlayerShadow ? CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW : 0);
     
     if (
       cb.enableRtxdi &&

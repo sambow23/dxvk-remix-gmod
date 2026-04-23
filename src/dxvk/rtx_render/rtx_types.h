@@ -564,6 +564,7 @@ enum class InstanceCategories : uint32_t {
   IgnoreTransparencyLayer,
   ParticleEmitter,
   LegacyEmissive,
+  FirstPersonPlayerShadow,
   Occluder,
 
   Count,

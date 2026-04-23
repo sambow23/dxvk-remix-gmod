@@ -731,7 +731,10 @@ bool RAB_TraceLightSampleVisibility(RAB_Surface surface, RAB_LightSample lightSa
     cb.enablePreviousTLAS && usePreviousTLAS,
     BINDING_INDEX_INVALID, f16vec2(0.0h),
     isThinOpaqueSubsurface,
-    surface.opaqueSurfaceMaterialInteraction.shadingNormal);
+    surface.opaqueSurfaceMaterialInteraction.shadingNormal,
+    true,
+    lightSample.ignoreViewModel,
+    lightSample.ignoreFirstPersonPlayerShadow);
 
   attenuation = visibility.attenuation;
 

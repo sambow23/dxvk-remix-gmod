@@ -238,7 +238,7 @@ void RtSphereLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel, bool ignoreFirstPersonPlayerShadow) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -256,10 +256,11 @@ void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool 
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Sphere light type (0) + shaping enabled flag + ignoreViewModel flag
+  // Note: Sphere light type (0) + shaping enabled flag + light-ignore flags
   uint32_t flags = lightTypeSphere << 29; // Light Type at bits 29,30,31.
   if (m_shaping.getEnabled()) flags |= 1 << 0; // Shaping enabled flag at bit 0
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (ignoreFirstPersonPlayerShadow) flags |= 1 << 2; // ignoreFirstPersonPlayerShadow flag at bit 2
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -372,7 +373,7 @@ void RtRectLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel, bool ignoreFirstPersonPlayerShadow) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -410,10 +411,11 @@ void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ig
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Rect light type (1) + shaping enabled flag + ignoreViewModel flag
+  // Note: Rect light type (1) + shaping enabled flag + light-ignore flags
   uint32_t flags = lightTypeRect << 29; // Light Type at bits 29,30,31.
   if (m_shaping.getEnabled()) flags |= 1 << 0; // Shaping enabled flag at bit 0
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (ignoreFirstPersonPlayerShadow) flags |= 1 << 2; // ignoreFirstPersonPlayerShadow flag at bit 2
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -555,7 +557,7 @@ void RtDiskLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel, bool ignoreFirstPersonPlayerShadow) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -593,10 +595,11 @@ void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ig
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Disk light type (2) + shaping enabled flag + ignoreViewModel flag
+  // Note: Disk light type (2) + shaping enabled flag + light-ignore flags
   uint32_t flags = lightTypeDisk << 29; // Light Type at bits 29,30,31.
   if (m_shaping.getEnabled()) flags |= 1 << 0; // Shaping enabled flag at bit 0
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (ignoreFirstPersonPlayerShadow) flags |= 1 << 2; // ignoreFirstPersonPlayerShadow flag at bit 2
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -719,7 +722,7 @@ void RtCylinderLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel, bool ignoreFirstPersonPlayerShadow) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -745,9 +748,10 @@ void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset, boo
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Cylinder light type (3) + ignoreViewModel flag
+  // Note: Cylinder light type (3) + light-ignore flags
   uint32_t flags = lightTypeCylinder << 29; // Light Type at bits 29,30,31.
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (ignoreFirstPersonPlayerShadow) flags |= 1 << 2; // ignoreFirstPersonPlayerShadow flag at bit 2
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -852,7 +856,7 @@ void RtDistantLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel, bool ignoreFirstPersonPlayerShadow) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   assert(m_direction < Vector3(FLOAT16_MAX));
@@ -883,10 +887,11 @@ void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Distant light type (4) + ignoreViewModel flag
+  // Note: Distant light type (4) + light-ignore flags
   // Todo: Ideally match this with GPU light type constants
   uint32_t flags = lightTypeDistant << 29; // Light Type at bits 29,30,31.
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (ignoreFirstPersonPlayerShadow) flags |= 1 << 2; // ignoreFirstPersonPlayerShadow flag at bit 2
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -985,6 +990,7 @@ void RtLight::copyFrom(const RtLight& light) {
   isStaticCount = light.isStaticCount;
   isDynamic = light.isDynamic;
   ignoreViewModel = light.ignoreViewModel;
+  ignoreFirstPersonPlayerShadow = light.ignoreFirstPersonPlayerShadow;
   m_type = light.m_type;
   
   // Copy only the active union member based on the light type
@@ -1112,19 +1118,19 @@ void RtLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
 
     [[fallthrough]];
   case RtLightType::Sphere:
-    m_sphereLight.writeGPUData(data, offset, this->ignoreViewModel);
+    m_sphereLight.writeGPUData(data, offset, this->ignoreViewModel, this->ignoreFirstPersonPlayerShadow);
     break;
   case RtLightType::Rect:
-    m_rectLight.writeGPUData(data, offset, this->ignoreViewModel);
+    m_rectLight.writeGPUData(data, offset, this->ignoreViewModel, this->ignoreFirstPersonPlayerShadow);
     break;
   case RtLightType::Disk:
-    m_diskLight.writeGPUData(data, offset, this->ignoreViewModel);
+    m_diskLight.writeGPUData(data, offset, this->ignoreViewModel, this->ignoreFirstPersonPlayerShadow);
     break;
   case RtLightType::Cylinder:
-    m_cylinderLight.writeGPUData(data, offset, this->ignoreViewModel);
+    m_cylinderLight.writeGPUData(data, offset, this->ignoreViewModel, this->ignoreFirstPersonPlayerShadow);
     break;
   case RtLightType::Distant:
-    m_distantLight.writeGPUData(data, offset, this->ignoreViewModel);
+    m_distantLight.writeGPUData(data, offset, this->ignoreViewModel, this->ignoreFirstPersonPlayerShadow);
     break;
   }
 }

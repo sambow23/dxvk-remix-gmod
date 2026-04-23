@@ -253,7 +253,10 @@ bool evalNEESecondary(
     minimalRayInteraction.coneRadius, viewRay.spreadAngle, ratio, isViewModelSurface, false,
     surfaceIndex, texcoords,
     isThinOpaqueSubsurface,
-    opaqueSurfaceMaterialInteraction.shadingNormal);
+    opaqueSurfaceMaterialInteraction.shadingNormal,
+    true,
+    lightSample.ignoreViewModel,
+    lightSample.ignoreFirstPersonPlayerShadow);
 
   if (visibility.hasOpaqueHit)
   {
