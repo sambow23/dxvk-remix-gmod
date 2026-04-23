@@ -797,6 +797,7 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS)            { result.set(InstanceCategories::SmoothNormals); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_HAIR_CARDS)                { result.set(InstanceCategories::HairCards); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE)           { result.set(InstanceCategories::LegacyEmissive); }
+      if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_FIRST_PERSON_PLAYER_SHADOW){ result.set(InstanceCategories::FirstPersonPlayerShadow); }
       
       // Occluder is an internal category and is not exposed by the Remix API.
       static_assert((int)InstanceCategories::Count == 28, "Instance categories changed, please update Remix SDK");
@@ -1540,6 +1541,9 @@ namespace {
 
       // Set the ignoreViewModel flag from the LightInfo
       rtLight->ignoreViewModel = info->ignoreViewModel;
+
+      // Set the first-person player shadow ignore flag from the LightInfo
+      rtLight->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
 
       auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
@@ -2648,6 +2652,9 @@ extern "C"
 
     // Set the ignoreViewModel flag from the LightInfo
     rt->ignoreViewModel = info->ignoreViewModel;
+
+    // Set the first-person player shadow ignore flag from the LightInfo
+    rt->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
 
     {
       std::lock_guard lock { s_mutex };

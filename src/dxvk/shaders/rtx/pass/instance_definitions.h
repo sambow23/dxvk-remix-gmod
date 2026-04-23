@@ -148,10 +148,12 @@
 //   Bits  0..20 : surface index  (CUSTOM_INDEX_SURFACE_MASK)
 //   Bits 21..22 : material type  (CUSTOM_INDEX_MATERIAL_TYPE_MASK)
 //   Bit  23     : is view model  (CUSTOM_INDEX_IS_VIEW_MODEL)
+//   Bit  24     : first-person player shadow marker in 32-bit synthetic/custom-index paths
 #define CUSTOM_INDEX_SURFACE_MASK      SURFACE_INDEX_MAX_VALUE
 #define CUSTOM_INDEX_MATERIAL_TYPE_BIT  SURFACE_INDEX_BIT_COUNT
 #define CUSTOM_INDEX_MATERIAL_TYPE_MASK (0x3u << CUSTOM_INDEX_MATERIAL_TYPE_BIT)
 #define CUSTOM_INDEX_IS_VIEW_MODEL     (1u << 23)
+#define CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW (1u << 24)
 #define CUSTOM_INDEX_FRONT_HIT         (1u << 24)
 
 #include "common_binding_indices.h"

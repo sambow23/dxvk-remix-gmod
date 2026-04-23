@@ -1021,6 +1021,9 @@ namespace dxvk {
     currentInstance.m_isPlayerModel = currentInstance.testCategoryFlags(InstanceCategories::ThirdPersonPlayerModel);
     currentInstance.m_isWorldSpaceUI = currentInstance.testCategoryFlags(InstanceCategories::WorldUI);
     currentInstance.m_isLegacyEmissive = currentInstance.testCategoryFlags(InstanceCategories::LegacyEmissive);
+    currentInstance.setCustomIndexBit(
+      CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW,
+      currentInstance.testCategoryFlags(InstanceCategories::FirstPersonPlayerShadow));
 
     // Hide the sky instance since it is not raytraced.
     // Sky mesh and material are only good for capture and replacement purposes.
