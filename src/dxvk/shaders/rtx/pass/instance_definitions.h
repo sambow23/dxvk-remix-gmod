@@ -136,13 +136,11 @@
 /****************************** ~Instance Mask - Unordered TLAS **********************************************/
 
 
-// Engine-wide index limits.
-// SurfaceIndex: 21 bits (fits in the 24-bit instanceCustomIndex alongside 2-bit material type + 1-bit view-model flag).
-// PrimitiveIndex: 26 bits (max ~67M triangles per scene).
-#define SURFACE_INDEX_BIT_COUNT       21
-#define SURFACE_INDEX_MAX_VALUE       ((1 << SURFACE_INDEX_BIT_COUNT) - 1)
-#define PRIMITIVE_INDEX_BIT_COUNT     26
-#define PRIMITIVE_INDEX_MAX_VALUE     ((1 << PRIMITIVE_INDEX_BIT_COUNT) - 1)
+// Custom Index encoding
+#define CUSTOM_INDEX_IS_VIEW_MODEL     (1 << 23)
+#define CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW (1 << 24)
+#define CUSTOM_INDEX_MATERIAL_TYPE_BIT (21)
+#define CUSTOM_INDEX_SURFACE_MASK      ((1 << CUSTOM_INDEX_MATERIAL_TYPE_BIT) - 1)
 
 // Custom Index encoding (24-bit VkAccelerationStructureInstanceKHR.instanceCustomIndex)
 //   Bits  0..20 : surface index  (CUSTOM_INDEX_SURFACE_MASK)

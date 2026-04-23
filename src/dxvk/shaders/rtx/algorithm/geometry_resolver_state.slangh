@@ -164,6 +164,12 @@ struct GeometryResolverState : IBasePayloadState
       set { _encodedFlags = packedFlagAssign(_encodedFlags, 1 << 9, newValue); }
   }
 
+    property bool isFirstPersonPlayerShadowSurface
+    {
+      get { return packedFlagGet(_encodedFlags, 1 << 10); }
+      set { _encodedFlags = packedFlagAssign(_encodedFlags, 1 << 10, newValue); }
+    }
+
   // Misc packed properties
 
   // Note: Indicates portal space in which the surface was hit
@@ -337,6 +343,12 @@ struct GeometryPSRResolverState : IBasePayloadState
   {
     get { return packedFlagGet(_encodedFlags, 1 << 10); }
     set { _encodedFlags = packedFlagAssign(_encodedFlags, 1 << 10, newValue); }
+  }
+
+  property bool isFirstPersonPlayerShadowSurface
+  {
+    get { return packedFlagGet(_encodedFlags, 1 << 11); }
+    set { _encodedFlags = packedFlagAssign(_encodedFlags, 1 << 11, newValue); }
   }
 
   property bool directionAltered

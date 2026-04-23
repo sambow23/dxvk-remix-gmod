@@ -38,6 +38,12 @@
 static const int kSurfaceRISType = 1;
 static const uint16_t kInvalidLightIdx = 0xffff;
 
+bool shouldSkipLightForCustomIndex(DecodedPolymorphicLight decodedLight, uint customIndex)
+{
+  return (decodedLight.ignoreViewModel && (customIndex & CUSTOM_INDEX_IS_VIEW_MODEL))
+    || (decodedLight.ignoreFirstPersonPlayerShadow && (customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW));
+}
+
 // Selects and samples from a light using RTXDI. Returns if the sample and the is valid or not
 // Note: Camera used only for resolution purposes in RTXDI offset calculations.
 bool sampleLightRTXDI(
@@ -56,13 +62,13 @@ bool sampleLightRTXDI(
     return false;
   }
 
-  // When sampling for a view model context, skip lights flagged as ignoreViewModel.
-  if ((customIndex & CUSTOM_INDEX_IS_VIEW_MODEL) != 0)
+  // Check if this light should be skipped for the current surface.
+  if ((customIndex & (CUSTOM_INDEX_IS_VIEW_MODEL | CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW)) != 0)
   {
     MemoryPolymorphicLight memoryPolymorphicLight = lights[reservoir.lightIdx];
     DecodedPolymorphicLight decodedLight = decodePolymorphicLight(memoryPolymorphicLight);
 
-    if (decodedLight.ignoreViewModel)
+    if (shouldSkipLightForCustomIndex(decodedLight, customIndex))
     {
       return false;
     }
@@ -236,9 +242,8 @@ bool sampleLightAdvancedRIS(
       // can effectively unroll the loop and remove the switch from decodedPolymorphicLightCalcWeight
       DecodedPolymorphicLight decodedPolymorphicLight = decodePolymorphicLight(memoryPolymorphicLight);
       decodedPolymorphicLight.polymorphicType = lightType;
-
-      // Skip lights with ignoreViewModel flag when sampling for view model geometry.
-      if (decodedPolymorphicLight.ignoreViewModel && (customIndex & CUSTOM_INDEX_IS_VIEW_MODEL))
+      
+      if (shouldSkipLightForCustomIndex(decodedPolymorphicLight, customIndex))
       {
         continue;
       }
