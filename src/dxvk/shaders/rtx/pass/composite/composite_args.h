@@ -114,5 +114,5 @@ struct CompositeArgs {
   float alphaBlendSurfacePackMult; // for packing/unpacking hitT into Float16 in AlphaBlendSurface
   float postFilterThreshold;
   uint writeRayReconstructionHitDistance;
-  float pad1;
+  float skyFogOpacity;
 };
