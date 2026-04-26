@@ -610,6 +610,7 @@ void applySkyContribution(
 
 void applyFog(
   float viewDistance,
+  bool primaryMiss,
   float radianceScale,
   inout vec3 radianceOutput,
   inout vec4 particleLayerOutput)
@@ -621,7 +622,13 @@ void applyFog(
 
   // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
   // as emissive hits will be over-attenuated.
-  vec4 fogColor = calculateFog(viewDistance);
+  const float fogDistance = primaryMiss ? cb.maxFogDistance : viewDistance;
+  vec4 fogColor = calculateFog(fogDistance);
+
+  if (primaryMiss)
+  {
+    fogColor.a *= cb.skyFogOpacity;
+  }
 
   if (cb.sparseRenderingArgs.mode != SparseRenderingMode::Off)
   {
@@ -787,7 +794,7 @@ vec4 compositeResult(
   applySkyContribution(pixelCoordinate, primaryRayDirections, primaryMiss, radianceScale, volumeAttenuation, radianceOutput);
 
   // Apply fog 
-  applyFog(viewDistance, radianceScale, radianceOutput, particleLayerOutput);
+  applyFog(viewDistance, primaryMiss, radianceScale, radianceOutput, particleLayerOutput);
 
   // DLSS-RR needs to do alpha blending using the backgroundAlpha, so the input is untouched here.
   // Output final composite result for NRD denoiser.
