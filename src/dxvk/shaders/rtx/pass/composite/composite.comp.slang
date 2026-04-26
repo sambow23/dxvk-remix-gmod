@@ -565,7 +565,12 @@ void applySkyContribution(
     // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
     // as emissive hits will be over-attenuated.
     const float fogDistance = primaryMiss ? cb.maxFogDistance : viewDistance;
-    const vec4 fogColor = calculateFog(fogDistance, cb.fogColor);
+    vec4 fogColor = calculateFog(fogDistance, cb.fogColor);
+
+    if (primaryMiss)
+    {
+      fogColor.a *= cb.skyFogOpacity;
+    }
 
     // Blend fog over output
     attenuatedOutput = radianceOutput * (1.0f - fogColor.a) + fogColor.rgb * fogColor.a;
