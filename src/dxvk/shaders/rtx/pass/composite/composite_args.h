@@ -121,4 +121,5 @@ struct CompositeArgs {
   uint enableHDR;
   uint detectUITextures;
   uint separateUIProcessing;
+  float skyFogOpacity;
 };
