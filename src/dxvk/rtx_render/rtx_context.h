@@ -162,6 +162,7 @@ namespace dxvk {
     // Queue a pixel buffer to be alpha-composited over the final tone-mapped image in the next frame.
     // Used by remixapi_DrawScreenOverlay. Ownership of stagingBuffer transfers here.
     void setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity);
+    void setScreenTint(float r, float g, float b, float a);
 
     static void blitImageHelper(Rc<DxvkContext> ctx, const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& dstImage, VkFilter filter);
 
@@ -259,6 +260,7 @@ namespace dxvk {
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
     void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
+    void dispatchScreenTint(Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
     void initSkyProbe();
@@ -345,6 +347,15 @@ namespace dxvk {
     uint32_t m_screenOverlayWidth = 0;
     uint32_t m_screenOverlayHeight = 0;
     VkFormat m_screenOverlayFormat = VK_FORMAT_UNDEFINED;
+
+    // Screen tint state (fullscreen solid-color alpha tint applied before screen overlay).
+    struct ScreenTintState {
+      float r = 0.0f;
+      float g = 0.0f;
+      float b = 0.0f;
+      float a = 0.0f;
+    };
+    ScreenTintState m_screenTint {};
 
 #ifdef REMIX_DEVELOPMENT
     void queryAvailableResourceAliasing();

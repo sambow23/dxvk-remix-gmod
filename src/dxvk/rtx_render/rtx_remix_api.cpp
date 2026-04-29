@@ -1693,6 +1693,27 @@ namespace {
   // TextureHashMutation enum). Both call sites hold s_mutex across the call
   // per the lock-ordering rule documented alongside s_mutex.
 
+  remixapi_ErrorCode REMIXAPI_CALL impl_SetScreenTint(
+      float colorR,
+      float colorG,
+      float colorB,
+      float alpha) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+
+    const float clampedA = alpha > 0.0f ? (alpha < 1.0f ? alpha : 1.0f) : 0.0f;
+
+    std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([colorR, colorG, colorB, clampedA](dxvk::DxvkContext* ctx) {
+      static_cast<dxvk::RtxContext*>(ctx)->setScreenTint(colorR, colorG, colorB, clampedA);
+    });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL impl_SetFogState(
     const remixapi_FogInfo* info) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_FOG_INFO) {
@@ -2680,6 +2701,14 @@ extern "C"
     return impl_SetFogState(info);
   }
 
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetScreenTint(
+      float colorR,
+      float colorG,
+      float colorB,
+      float alpha) {
+    return impl_SetScreenTint(colorR, colorG, colorB, alpha);
+  }
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
     return dxvk::fork_hooks::setUiState(tryAsDxvk(), state);
   }
@@ -2805,10 +2834,11 @@ extern "C"
       interf.RequestTextureVramFree = remixapi_RequestTextureVramFree;
       interf.GetGameValue = remixapi_GetGameValue;
       interf.SetFogState = remixapi_SetFogState;
+      interf.SetScreenTint = remixapi_SetScreenTint;
       // Fork-added vtable slots (extern-C exported; delegated to fork hook)
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 336, "Add/remove function registration");
+    static_assert(sizeof(interf) == 336 + sizeof(void*), "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

@@ -979,6 +979,21 @@ extern "C" {
     remixapi_Format   format,
     float             opacity);
 
+  // Screen tint API: applies a fullscreen solid-colour alpha tint on the final
+  // output before the HUD screen overlay composite. Passing alpha == 0 (or any
+  // negative value) disables the tint. Colour components are in linear space.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetScreenTint)(
+    float             colorR,
+    float             colorG,
+    float             colorB,
+    float             alpha);
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetScreenTint(
+    float             colorR,
+    float             colorG,
+    float             colorB,
+    float             alpha);
+
 
   typedef struct remixapi_InitializeLibraryInfo {
     remixapi_StructType sType;
@@ -1119,6 +1134,7 @@ extern "C" {
     PFN_remixapi_RequestTextureVramFree     RequestTextureVramFree;
     PFN_remixapi_GetGameValue               GetGameValue;
     PFN_remixapi_SetFogState                SetFogState;
+    PFN_remixapi_SetScreenTint              SetScreenTint;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
