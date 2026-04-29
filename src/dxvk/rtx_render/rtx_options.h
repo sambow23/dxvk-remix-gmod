@@ -1120,6 +1120,7 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", bool, sunDisc, true, "Include the sun itself in the output.");
     RTX_OPTION("rtx.atmosphere", float, sunSize, 0.545f, "Size of sun disc in degrees.");
     RTX_OPTION("rtx.atmosphere", float, sunIntensity, 1.0f, "Strength of Sun.");
+    RTX_OPTION("rtx.atmosphere", float, sunVolumetricRadianceScale, 1.0f, "Multiplier for the sun's direct contribution to volumetric lighting. Lower values reduce 'glow' on translucent surfaces in direct sunlight.");
     RTX_OPTION("rtx.atmosphere", float, sunElevation, 15.0f, "Sun angle from horizon in degrees.");
     RTX_OPTION("rtx.atmosphere", float, sunRotation, 0.0f, "Rotation of sun around zenith in degrees.");
     RTX_OPTION("rtx.atmosphere", float, altitude, 100.0f, "Height from sea level in meters.");

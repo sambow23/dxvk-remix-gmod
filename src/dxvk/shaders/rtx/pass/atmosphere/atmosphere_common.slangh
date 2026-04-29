@@ -689,9 +689,12 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
   float phase = hgPhase(cosTheta, kVolumetricAnisotropy);
   
   // For volumetrics, we include the phase function in the radiance
-  // The phase function replaces the BRDF for volume scattering
-  // Boost brightness by 10x for volumetrics since they need more energy to be visible
-  result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * 5.0f;
+  // The phase function replaces the BRDF for volume scattering.
+  // Modulate by mie scattering coefficient (in-scattering term) so the contribution
+  // respects atmospheric density and doesn't dominate when light shafts are enabled.
+  // sunVolumetricRadianceScale is the user-tunable scale (defaults to 1.0).
+  vec3 inScatteringCoefficient = args.mieScattering + args.rayleighScattering;
+  result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * args.sunVolumetricRadianceScale * inScatteringCoefficient;
   result.valid = any(transmittance > vec3(0.0f));
   
   return result;

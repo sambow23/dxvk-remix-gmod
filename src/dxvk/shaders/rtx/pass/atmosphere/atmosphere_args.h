@@ -49,7 +49,7 @@ struct AtmosphereArgs {
   uint skyViewLutHeight;
   float ozoneLayerWidth;  // Width of ozone layer (km)
   float viewAltitude;     // Camera altitude offset (km)
-  uint pad2;
+  float sunVolumetricRadianceScale;  // Multiplier for sun radiance contribution to volumetrics
   
   // Derived parameters (computed on CPU)
   float atmosphereRadius;  // planetRadius + atmosphereThickness

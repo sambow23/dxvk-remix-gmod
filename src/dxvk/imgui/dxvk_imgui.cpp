@@ -3314,6 +3314,9 @@ namespace dxvk {
             ImGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
             ImGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
             
+            ImGui::DragFloat("Sun Volumetric Radiance Scale", &RtxOptions::sunVolumetricRadianceScaleObject(), 0.05f, 0.0f, 100.0f, "%.3f", sliderFlags);
+            ImGui::SetTooltipToLastWidgetOnHover("Multiplier for the sun's direct contribution to volumetric lighting. Lower values reduce 'glow' on translucent surfaces in direct sunlight.");
+            
             ImGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f°", sliderFlags);
             ImGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
             
