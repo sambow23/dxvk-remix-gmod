@@ -1,0 +1,1465 @@
+/*
+* Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+#pragma once
+
+// Hillaire Physically-Based Atmospheric Scattering
+// Based on "Physically Based Sky, Atmosphere and Cloud Rendering in Frostbite" by Sebastien Hillaire (2016)
+
+#include "rtx/utility/common.slangh"
+#include "rtx/utility/math.slangh"
+#include "rtx/pass/atmosphere/atmosphere_args.h"
+
+// Constants
+static const float kAtmosphereEpsilon = 1e-3f;
+static const float kPi = 3.14159265358979323846f;
+
+// Rayleigh phase function (isotropic scattering for molecules)
+float rayleighPhase(float cosTheta) {
+  float factor = 3.0f / (16.0f * kPi);
+  return factor * (1.0f + cosTheta * cosTheta);
+}
+
+// Henyey-Greenstein phase function (anisotropic scattering for aerosols)
+float hgPhase(float cosTheta, float g) {
+  // Clamp g to prevent numerical issues and complete extinction at g=1.0
+  // At g=1.0, the phase function becomes 0 everywhere, making Mie scattering invisible
+  g = min(g, 0.999f);
+  
+  float g2 = g * g;
+  float numerator = 1.0f - g2;
+  float denominator = 4.0f * kPi * pow(1.0f + g2 - 2.0f * g * cosTheta, 1.5f);
+  return numerator / max(denominator, kAtmosphereEpsilon);
+}
+
+// Exponential density profile
+// altitude in km, returns normalized density [0, 1]
+float exponentialDensity(float altitude, float scaleHeight) {
+  return exp(-max(0.0f, altitude) / scaleHeight);
+}
+
+// Get atmospheric density at given altitude
+// Uses standard exponential falloff with configurable scale height
+float rayleighDensity(float altitude, AtmosphereArgs args) {
+  return exponentialDensity(altitude, args.rayleighScaleHeight);
+}
+
+float mieDensity(float altitude, AtmosphereArgs args) {
+  return exponentialDensity(altitude, args.mieScaleHeight);
+}
+
+// Ozone density profile - concentrated in a layer (Hillaire paper Section 3.4)
+// Uses a simple Gaussian profile centered at the ozone layer altitude
+float ozoneDensity(float altitude, AtmosphereArgs args) {
+  // Ozone is concentrated in a layer, typically around 25km altitude
+  // Use a simple Gaussian profile for predictable behavior
+  
+  float distFromCenter = abs(altitude - args.ozoneLayerAltitude);
+  float sigma = args.ozoneLayerWidth * 0.4f;  // Width parameter
+  
+  // Gaussian falloff
+  float density = exp(-distFromCenter * distFromCenter / (2.0f * sigma * sigma));
+  
+  // Scale down the overall ozone effect to prevent excessive purple at sunset
+  // The absorption coefficients in rtx_options.h are already quite strong
+  return density * 0.5f;
+}
+
+// Ray-sphere intersection with improved numerical stability
+// Returns true if intersection exists, outputs near and far intersection distances
+bool intersectSphere(vec3 origin, vec3 direction, vec3 center, float radius, out float t0, out float t1) {
+  vec3 oc = origin - center;
+  float a = dot(direction, direction);
+  float b = 2.0f * dot(oc, direction);
+  float c = dot(oc, oc) - radius * radius;
+  float discriminant = b * b - 4.0f * a * c;
+  
+  // Use a small positive threshold to handle grazing angles more robustly
+  // This prevents precision issues when ray is nearly tangent to sphere
+  const float kDiscriminantEpsilon = 1e-6f;
+  if (discriminant < -kDiscriminantEpsilon) {
+    t0 = t1 = -1.0f;
+    return false;
+  }
+  
+  // Clamp discriminant to zero for near-tangent cases
+  discriminant = max(0.0f, discriminant);
+  
+  float sqrtDiscriminant = sqrt(discriminant);
+  float inv2A = 0.5f / max(a, 1e-7f);  // Prevent division by zero
+  
+  // Use numerically stable formula to avoid catastrophic cancellation
+  // When b > 0, use t0 = (-b - sqrt(disc)) / 2a, then t1 = c / (a * t0)
+  // When b < 0, use t1 = (-b + sqrt(disc)) / 2a, then t0 = c / (a * t1)
+  if (b > 0.0f) {
+    t0 = (-b - sqrtDiscriminant) * inv2A;
+    t1 = (abs(t0) > 1e-6f) ? (c / (a * t0)) : ((-b + sqrtDiscriminant) * inv2A);
+  } else {
+    t1 = (-b + sqrtDiscriminant) * inv2A;
+    t0 = (abs(t1) > 1e-6f) ? (c / (a * t1)) : ((-b - sqrtDiscriminant) * inv2A);
+  }
+  
+  // Ensure t0 <= t1
+  if (t0 > t1) {
+    float temp = t0;
+    t0 = t1;
+    t1 = temp;
+  }
+  
+  return true;
+}
+
+// Convert UV coordinates to atmosphere parameters for transmittance LUT
+// uv: [0, 1]^2
+// Returns (viewZenithCosAngle, altitude in km)
+void uvToTransmittanceLutParams(vec2 uv, AtmosphereArgs args, out float viewZenithCosAngle, out float altitude) {
+  float H = sqrt(args.atmosphereRadius * args.atmosphereRadius - args.planetRadius * args.planetRadius);
+  float rho = H * uv.y;
+  altitude = sqrt(rho * rho + args.planetRadius * args.planetRadius) - args.planetRadius;
+  
+  float dMin = args.atmosphereRadius - altitude - args.planetRadius;
+  float dMax = rho + H;
+  float d = dMin + uv.x * (dMax - dMin);
+  
+  if (d == 0.0f) {
+    viewZenithCosAngle = 1.0f;
+  } else {
+    float r = altitude + args.planetRadius;
+    viewZenithCosAngle = (H * H - rho * rho - d * d) / (2.0f * r * d);
+    viewZenithCosAngle = clamp(viewZenithCosAngle, -1.0f, 1.0f);
+  }
+}
+
+// Convert atmosphere parameters to UV coordinates for transmittance LUT
+vec2 transmittanceLutParamsToUv(float altitude, float viewZenithCosAngle, AtmosphereArgs args) {
+  float H = sqrt(max(0.0f, args.atmosphereRadius * args.atmosphereRadius - args.planetRadius * args.planetRadius));
+  float rho = sqrt(max(0.0f, altitude * altitude + 2.0f * args.planetRadius * altitude));
+  
+  float discriminant = altitude * altitude - args.planetRadius * args.planetRadius + args.atmosphereRadius * args.atmosphereRadius;
+  float dMin = max(0.0f, args.atmosphereRadius - altitude - args.planetRadius);
+  float dMax = rho + H;
+  
+  float r = altitude + args.planetRadius;
+  float mu = clamp(viewZenithCosAngle, -1.0f, 1.0f);
+  float d = max(0.0f, (-r * mu + sqrt(max(0.0f, r * r * (mu * mu - 1.0f) + args.atmosphereRadius * args.atmosphereRadius))));
+  
+  float u = clamp((d - dMin) / max(dMax - dMin, 1e-6f), 0.0f, 1.0f);
+  float v = clamp(rho / max(H, 1e-6f), 0.0f, 1.0f);
+  
+  return vec2(u, v);
+}
+
+// Sample transmittance LUT
+vec3 sampleTransmittanceLut(Texture2D transmittanceLut, SamplerState lutSampler, float altitude, float viewZenithCosAngle, AtmosphereArgs args) {
+  vec2 uv = transmittanceLutParamsToUv(altitude, viewZenithCosAngle, args);
+  return transmittanceLut.SampleLevel(lutSampler, uv, 0).rgb;
+}
+
+// Sample multiscattering LUT
+// The LUT stores second-order and higher scattering contribution
+// Parameterized by altitude and sun zenith angle cosine
+vec3 sampleMultiscatteringLut(Texture2D multiscatteringLut, SamplerState lutSampler, float altitude, float sunZenithCosAngle, AtmosphereArgs args) {
+  // LUT layout:
+  // X axis: sun zenith angle cosine [-1, 1] -> [0, 1]
+  // Y axis: altitude [0, atmosphereThickness] -> [0, 1]
+  float u = (sunZenithCosAngle + 1.0f) * 0.5f;  // Map [-1, 1] to [0, 1]
+  float v = saturate(altitude / args.atmosphereThickness);
+  
+  return multiscatteringLut.SampleLevel(lutSampler, vec2(u, v), 0).rgb;
+}
+
+// Convert UV coordinates to sky view LUT parameters
+// Returns view direction in atmosphere space
+vec3 uvToSkyViewLutParams(vec2 uv, vec3 viewDir, vec3 sunDir, vec3 cameraPos, AtmosphereArgs args) {
+  // Sky view LUT stores a hemisphere view from camera position
+  // uv.x maps to azimuth angle around the sun direction
+  // uv.y maps to elevation angle from horizon to zenith
+  
+  float azimuth = uv.x * 2.0f * kPi;
+  float elevation = uv.y * kPi - kPi * 0.5f;
+  
+  // Build coordinate system with sun direction
+  vec3 up = normalize(cameraPos);
+  vec3 sunRight = normalize(cross(up, sunDir));
+  vec3 sunUp = cross(sunDir, sunRight);
+  
+  // Rotate view direction
+  float cosElevation = cos(elevation);
+  vec3 dir = sunDir * sin(elevation) + 
+             cosElevation * (sunRight * cos(azimuth) + sunUp * sin(azimuth));
+  
+  return normalize(dir);
+}
+
+// ============================================================================
+// Per-moon physical irradiance scaffold (fork) — shared across all moon-
+// lighting consumers (disk, cloud, atmospheric coupling, surface NEE, halo).
+//
+// Returns: args.sunIlluminance × albedo × moonAirTrans × m.brightness / π
+//
+// Units: radiance (W/m²/sr equivalent in shader-normalized units). Represents
+// the surface radiance of the moon's lit hemisphere as seen through atmosphere.
+// Callers multiply per-path geometric / phase factors on top:
+//   Disk (per-pixel):   × surfaceDetail × diffuse × limbDarkening
+//   Cloud / NEE / atm:  × phaseGlow × moonSolidAngleSr × <strength slider>
+//   Halo:               × phaseGlow × glow × kHaloMagnitude
+//
+// `albedo` is parameterized so disk paths can pass per-pixel `surfaceColor`
+// (perturbed by surface noise) while uniform-albedo paths pass `m.color`.
+//
+// `moonAirTrans` (Kasten-Young + ozone + twilight) is computed internally via
+// getAtmosphericTransmittanceForDir; same atmospheric-extinction model the
+// sun NEE path uses. Forward-references that helper (defined later in this
+// file, line ~648); slang permits forward references to top-level functions.
+// ============================================================================
+vec3 computeMoonSharedFactor(MoonParams m, AtmosphereArgs args, vec3 albedo) {
+  vec3 moonAirTrans = getAtmosphericTransmittanceForDir(normalize(m.direction), args);
+  return args.sunIlluminance * albedo * moonAirTrans * m.brightness / kPi;
+}
+
+// Evaluate atmosphere radiance along a ray with multiscattering
+// This is used in direct evaluation
+vec3 evalAtmosphereRadiance(
+  vec3 rayOrigin,
+  vec3 rayDir,
+  vec3 sunDir,
+  AtmosphereArgs args,
+  int numSamples = 32
+) {
+  // Intersect ray with atmosphere
+  vec3 planetCenter = vec3(0.0f, -args.planetRadius, 0.0f);
+  float t0, t1;
+  
+  // Check if we're inside or outside the atmosphere
+  float distToCenter = length(rayOrigin - planetCenter);
+  bool insideAtmosphere = distToCenter < args.atmosphereRadius;
+  
+  // Check if ray intersects atmosphere
+  if (!intersectSphere(rayOrigin, rayDir, planetCenter, args.atmosphereRadius, t0, t1)) {
+    return vec3(0.0f);  // No intersection - shouldn't happen if inside
+  }
+  
+  // If inside atmosphere, start from ray origin (t0 might be negative)
+  if (insideAtmosphere) {
+    t0 = 0.0f;  // Start from camera position
+  }
+  
+  // Check if ray intersects planet
+  float tPlanet0, tPlanet1;
+  bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
+  
+  // Clamp to valid range
+  t0 = max(0.0f, t0);
+  if (hitsPlanet && tPlanet0 > 0.0f) {
+    t1 = tPlanet0;  // Stop at planet surface
+  }
+  
+  if (t1 <= t0) {
+    return vec3(0.0f);
+  }
+  
+  // Use FIXED physical step size instead of dividing ray into equal parts
+  // This eliminates artifacts caused by certain ray lengths producing bad step sizes
+  const float fixedStepSize = 2.0f;  // 2 km per step
+  int actualSamples = max(1, int(ceil((t1 - t0) / fixedStepSize)));
+  float dt = (t1 - t0) / float(actualSamples);
+  
+  vec3 L = vec3(0.0f);
+  vec3 transmittance = vec3(1.0f);
+  
+  float cosTheta = dot(rayDir, sunDir);
+  float phaseR = rayleighPhase(cosTheta);
+  float phaseM = hgPhase(cosTheta, args.mieAnisotropy);
+  
+  // Combined-moon direction + irradiance precompute (Lever-4 style — fork).
+  // Brightness-weighted average direction across enabled, above-horizon moons,
+  // and summed irradiance across the same. One scattering term per sample
+  // instead of N per-moon terms; visual delta is near-zero at moon magnitudes
+  // and the perf saving is real (no per-moon dot/phase/exp inside the loop).
+  //
+  // Phase 2 (2026-05-08): per-moon irradiance is now the unified physical
+  // scaffold — args.sunIlluminance × m.color × moonAirTrans × m.brightness × π⁻¹
+  // × phaseGlow × moonSolidAngleSr — replacing the prior kAtmosphereMoonIllumScale
+  // = 1e-4 magic-number scaling. Magnitude at default settings is within ~5%
+  // of the prior calibration; sun-following-ness is now correct.
+  vec3 combinedMoonDir        = vec3(0.0f, 1.0f, 0.0f);
+  vec3 combinedMoonIrradiance = vec3(0.0f);
+  if (args.moonAtmosphericCouplingStrength > 0.001f) {
+    float sunElev_local = sunDir.y;
+    float nightFactor   = smoothstep(0.02f, -0.05f, sunElev_local);
+    if (nightFactor > 0.001f) {
+      vec3  sumWeightedDir = vec3(0.0f);
+      float sumWeight      = 0.0f;
+      [unroll] for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
+        MoonParams m = args.moons[mi];
+        if (m.enabled < 0.5f) continue;
+        vec3 moonDir = normalize(m.direction);
+        if (moonDir.y <= 0.01f) continue;
+        float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
+        if (phaseGlow <= 0.001f) continue;
+        vec3 sharedFactor = computeMoonSharedFactor(m, args, m.color);
+        float moonSolidAngleSr = 2.0f * kPi * (1.0f - cos(m.angularRadius));
+        vec3 moonIrradiance = sharedFactor * phaseGlow * moonSolidAngleSr
+                            * nightFactor * args.moonAtmosphericCouplingStrength;
+        float w = max(max(moonIrradiance.r, moonIrradiance.g), moonIrradiance.b);
+        if (w <= 0.0f) continue;
+        sumWeightedDir += moonDir * w;
+        sumWeight      += w;
+        combinedMoonIrradiance += moonIrradiance;
+      }
+      if (sumWeight > 0.0f && length(sumWeightedDir) > 0.001f) {
+        combinedMoonDir = normalize(sumWeightedDir);
+      }
+    }
+  }
+
+  for (int i = 0; i < actualSamples && i < 512; ++i) {
+    float t = t0 + (float(i) + 0.5f) * dt;
+    vec3 samplePos = rayOrigin + rayDir * t;
+    float altitude = length(samplePos - planetCenter) - args.planetRadius;
+    
+    // Clamp altitude to valid range to prevent artifacts
+    altitude = clamp(altitude, 0.0f, args.atmosphereThickness);
+    
+    // Sample atmospheric density
+    float densityR = rayleighDensity(altitude, args);
+    float densityM = mieDensity(altitude, args);
+    float densityO3 = ozoneDensity(altitude, args);
+    
+    // Compute scattering coefficients at this point
+    vec3 scatteringR = args.rayleighScattering * densityR;
+    vec3 scatteringM = args.mieScattering * densityM;
+    vec3 scattering = scatteringR + scatteringM;
+    
+    // Ozone absorption (Hillaire paper Section 3.4)
+    // Ozone only absorbs, it doesn't scatter
+    vec3 ozoneAbsorption = args.ozoneAbsorption * densityO3;
+    
+    // Extinction = scattering (Rayleigh + Mie) + absorption (Ozone)
+    vec3 extinction = scattering + ozoneAbsorption;
+    
+    // BYPASS TRANSMITTANCE LUT - compute sun transmittance analytically
+    // This eliminates quantization artifacts from the transmittance LUT
+    vec3 sunDir_normalized = normalize(sunDir);
+    vec3 up = normalize(samplePos - planetCenter);
+    float sunZenithCosAngle = dot(up, sunDir_normalized);
+    
+    // Improved analytical transmittance following Blender's approach
+    // Key insight: when sun is at horizon, light still travels through atmosphere
+    // - it just has to traverse a VERY long path (the "air mass" factor)
+    float H = args.rayleighScaleHeight;
+    
+    // Air mass factor: how much atmosphere the sun ray traverses relative to zenith
+    // At zenith (cos=1): air mass = 1
+    // At horizon (cos=0): air mass → very large (we use Kasten-Young formula for accuracy)
+    // Below horizon: continue increasing for twilight
+    
+    // Kasten-Young approximation for air mass, extended for negative sun angles
+    // Original: 1 / (cos(z) + 0.50572*(96.07995 - z)^-1.6364)
+    // We use a simpler but robust approximation that handles the full range
+    float sunElevationRad = acos(clamp(sunZenithCosAngle, -1.0f, 1.0f));  // 0 = zenith, π/2 = horizon, π = nadir
+    float sunElevationDeg = degrees(sunElevationRad);
+    
+    // Modified air mass that smoothly increases past horizon for twilight
+    // At zenith (0°): ~1, at horizon (90°): ~40, at -10° below: ~100
+    float airMass;
+    if (sunZenithCosAngle > 0.01f) {
+      // Above horizon: standard air mass calculation
+      airMass = 1.0f / (sunZenithCosAngle + 0.15f * pow(93.885f - sunElevationDeg, -1.253f));
+    } else {
+      // At/below horizon: smoothly extended air mass
+      // Uses exponential growth past horizon for physically plausible twilight
+      float horizonAirMass = 40.0f;  // Air mass at exact horizon
+      float belowHorizonFactor = exp(-sunZenithCosAngle * 10.0f);  // Grows exponentially below
+      airMass = horizonAirMass * belowHorizonFactor;
+    }
+    
+    // Clamp air mass to prevent numerical issues while allowing strong twilight
+    airMass = min(airMass, 200.0f);
+    
+    // Optical depth scales with air mass and altitude-dependent density
+    float opticalDepthToSun = H * exp(-altitude / H) * airMass;
+    
+    // Include ozone absorption in sun transmittance
+    // Ozone path is weighted by the ozone density profile - reduced to prevent purple cast
+    float ozonePathLength = ozoneDensity(args.ozoneLayerAltitude, args) * airMass;
+    vec3 sunTransmittance = exp(-args.rayleighScattering * opticalDepthToSun - 
+                                 args.ozoneAbsorption * ozonePathLength * 0.15f);  // Reduced from 0.3
+    
+    // Twilight fade: sky should go dark by -15 degrees below horizon
+    // Civil twilight ends around -6°, nautical twilight at -12°, astronomical at -18°
+    // Apply exponential falloff below horizon for realistic darkening
+    float twilightFactor;
+    if (sunZenithCosAngle >= 0.0f) {
+      // Above horizon: full brightness
+      twilightFactor = 1.0f;
+    } else {
+      // Below horizon: exponential fade
+      // At -15° (cos ≈ -0.259), should be ~0.01 (nearly dark)
+      // At -90° (cos = 0), should be ~0.0001 (essentially black)
+      float angleBelow = -sunZenithCosAngle;  // 0 at horizon, positive below
+      twilightFactor = exp(-angleBelow * 15.0f);  // Exponential falloff
+    }
+    
+    // Apply twilight fade to sun transmittance
+    sunTransmittance *= twilightFactor;
+    
+    // Single scattering contribution
+    vec3 singleScatter = args.sunIlluminance * sunTransmittance *
+                          (scatteringR * phaseR + scatteringM * phaseM);
+
+    // Moon contribution to single scattering. Combined-moon direction +
+    // irradiance precomputed above the per-sample loop (Lever-4 style —
+    // brightness-weighted average across enabled, above-horizon moons).
+    // Per-sample we just dot the ray direction against the combined moon
+    // direction and apply the same Rayleigh + Mie phase functions used for
+    // the sun.
+    if (any(combinedMoonIrradiance > vec3(0.0f))) {
+      float moonCosTheta = dot(rayDir, combinedMoonDir);
+      float moonPhaseR = rayleighPhase(moonCosTheta);
+      float moonPhaseM = hgPhase(moonCosTheta, args.mieAnisotropy);
+      vec3 moonSingleScatter = combinedMoonIrradiance *
+                               (scatteringR * moonPhaseR + scatteringM * moonPhaseM);
+      singleScatter += moonSingleScatter;
+    }
+
+    // Multiscattering contribution
+    // Use high-accuracy analytical approximation instead of LUT
+    vec3 multiScatter = getAnalyticalMultiscattering(altitude, sunZenithCosAngle, args);
+    // Modulate by local scattering coefficient and sun illuminance
+    // Multiscattering is isotropic (phase = 1/4π, integrated gives 1) so we use total scattering
+    vec3 multiScatterContrib = args.sunIlluminance * multiScatter * scattering;
+    
+    // Combined scattering
+    vec3 scatteredLight = singleScatter + multiScatterContrib;
+    
+    // Apply twilight fade to ALL scattering (not just sun transmittance)
+    // This ensures the entire sky darkens uniformly below horizon
+    scatteredLight *= twilightFactor;
+    
+    // Energy-conserving analytical integration (Hillaire paper Section 5.6.3, Equation 17)
+    // This is crucial for correct behavior in thick media
+    // Formula: ∫exp(-σt*x) * S dx = (S - S*exp(-σt*d)) / σt
+    vec3 sampleTransmittance = exp(-extinction * dt);
+    sampleTransmittance = clamp(sampleTransmittance, vec3(0.0f), vec3(1.0f));
+    scatteredLight = max(scatteredLight, vec3(0.0f));
+    
+    // Clamp extinction to avoid division by zero
+    // Use component-wise max for proper RGB handling
+    vec3 clampedExtinction = max(extinction, vec3(1e-7f));
+    
+    // Energy-conserving integration per Hillaire Equation 17:
+    // integScatt = (S - S * transmittance) / extinction
+    vec3 integScatt = (scatteredLight - scatteredLight * sampleTransmittance) / clampedExtinction;
+    
+    // Check for NaN/Inf and skip this sample if invalid
+    // This prevents black spots from numerical edge cases
+    vec3 contribution = transmittance * integScatt;
+    if (any(isnan(contribution)) || any(isinf(contribution))) {
+      continue;  // Skip invalid samples
+    }
+    
+    L += contribution;
+    transmittance *= sampleTransmittance;
+    
+    // Early exit if transmittance becomes negligible
+    if (all(transmittance < vec3(1e-4f))) {
+      break;
+    }
+  }
+  
+  // Final sanitization: replace any NaN/Inf with zero
+  L = max(L, vec3(0.0f));
+  if (any(isnan(L)) || any(isinf(L))) {
+    L = vec3(0.0f);
+  }
+  
+  // BLUE TWILIGHT HAZE (added outside loop for proper falloff)
+  // When sun is below horizon (-15° to 0°), add blue ambient glow from high-altitude scattering
+  // This is view-independent and fades out properly with sun elevation
+  float sunElevation = dot(normalize(sunDir), vec3(0.0f, 1.0f, 0.0f));
+  
+  const float kTwilightStart = -0.01f;       // Starts just below horizon
+  const float kTwilightPeak  = -0.04f;       // Peaks at ~ -2.3 degrees (earlier peak to blend better)
+  const float kTwilightEnd   = -0.20f;       // Ends at ~ -11.5 degrees
+  
+  if (sunElevation < kTwilightStart && sunElevation > kTwilightEnd) {
+    // Calculate strength using a triangle/bell curve: 0 -> 1 -> 0
+    float blueTwilightStrength = 0.0f;
+    
+    if (sunElevation > kTwilightPeak) {
+      // Ramping UP from Horizon to Peak
+      // Map [kTwilightStart, kTwilightPeak] -> [0, 1]
+      blueTwilightStrength = smoothstep(kTwilightStart, kTwilightPeak, sunElevation);
+    } else {
+      // Ramping DOWN from Peak to Deep Night
+      // Map [kTwilightPeak, kTwilightEnd] -> [1, 0]
+      blueTwilightStrength = smoothstep(kTwilightEnd, kTwilightPeak, sunElevation);
+    }
+    
+    blueTwilightStrength = pow(blueTwilightStrength, 1.0f);  // Linear fade
+    
+    // Add subtle blue ambient term (view-independent)
+    // This represents light scattered from high altitude where sun is still visible
+    vec3 blueTwilight = vec3(0.5f, 0.7f, 1.0f) * blueTwilightStrength * 0.015f;
+    L += args.sunIlluminance * blueTwilight;
+  }
+  
+  return L;
+}
+
+// ============================================================================
+// Procedural Cloud Layer
+// ============================================================================
+// Analytical cloud rendering via ray/plane intersection with a cloud dome at
+// fixed altitude. Density is computed from FBM noise scaled by coverage.
+// Shading uses a simple single-scatter approximation: sun transmittance through
+// the slab plus Henyey-Greenstein forward scatter for silver lining, mixed with
+// ambient sky/night light.
+//
+// The cloud layer is treated as a flat layer above the spherical planet. For a
+// given view direction we compute the intersection with a sphere at the cloud
+// altitude, sample the noise at that point, and then composite (alpha, color).
+// Returns cloud radiance premultiplied by coverage in .rgb and coverage in .a.
+
+// Effective planet radius for the cloud sphere. cloudCurvature=0 reproduces
+// the real planet radius (very subtle dome at Earth scale). Higher values
+// shrink the effective radius exponentially so clouds visibly curve down
+// toward the horizon. Atmospheric scattering math still uses the real
+// planet radius — only cloud sphere intersections are affected.
+float cloudPlanetRadius(AtmosphereArgs args) {
+  const float kMinRadius = 100.0f;  // km, floor at maximum curvature
+  return max(kMinRadius, args.planetRadius * exp(-args.cloudCurvature * 5.0f));
+}
+
+// Compute height fraction within the cloud slab from a world-space sample
+// position. hf=0 at slab base (cloudAltitude); hf=1 at slab top
+// (cloudAltitude + cloudThickness). Saturates outside the slab. Uses the
+// effective cloud planet radius so geometry is consistent with curvature.
+float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
+  float cloudR = cloudPlanetRadius(args);
+  vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
+  float altitudeAboveSea = length(samplePos - planetCenter) - cloudR;
+  return saturate((altitudeAboveSea - args.cloudAltitude) / max(args.cloudThickness, 0.001f));
+}
+
+// Nubis sliding-keypoint vertical density profile. Type slides the rise/peak/fall
+// keypoints from stratus values (narrow band low in slab) to cumulus values (full
+// vertical extent). Stratocumulus emerges naturally at type=0.5.
+//   stratus  (type=0):   rise 0..0.10, plateau 0.10..0.20, fall 0.20..0.30
+//   cumulus  (type=1):   rise 0..0.20, plateau 0.20..0.75, fall 0.75..0.95
+// The cumulus plateau extends through the upper slab so the Nubis anvil pow
+// trick (gated 0.7..0.8 in sampleCloudDensityTextured) lands on dense cloud rather
+// than already-faded tail. Without the long plateau the anvil widening
+// applies to ~30% density and reads as "no visible change" on the silhouette.
+// No integral normalization across types -- cumulus is naturally denser than
+// stratus, matching reality (cumulus carries more total water).
+float cloudTypeProfile(float hf, float type) {
+  float riseEnd   = mix(0.10f, 0.20f, type);
+  float fallStart = mix(0.20f, 0.75f, type);
+  float fallEnd   = mix(0.30f, 0.95f, type);
+  float rise = saturate(hf / max(riseEnd, 1e-4f));
+  float fall = saturate((fallEnd - hf) / max(fallEnd - fallStart, 1e-4f));
+  return saturate(rise * fall);
+}
+
+// Intersect view ray with the cloud shell. Returns true and the hit distance
+// if we hit the upward-looking cloud sphere at altitude args.cloudAltitude.
+// Ray origin is at the camera (0,0,0) in Y-up space; the cloud sphere uses
+// the effective curvature-adjusted planet radius (see cloudPlanetRadius).
+bool intersectCloudLayer(vec3 rayDir, AtmosphereArgs args, out float t, out vec3 hitPos) {
+  t = -1.0f;
+  hitPos = vec3(0.0f);
+
+  // Looking below the horizon: no cloud layer hit above us.
+  if (rayDir.y <= 0.001f) return false;
+
+  float cloudR = cloudPlanetRadius(args);
+  vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
+  float cloudSphereRadius = cloudR + args.cloudAltitude;
+
+  float t0, t1;
+  if (!intersectSphere(vec3(0.0f), rayDir, planetCenter, cloudSphereRadius, t0, t1)) {
+    return false;
+  }
+
+  // We're inside the cloud sphere; the far side is what we want (upward ray
+  // going through the layer from below).
+  float hitT = t1 > 0.0f ? t1 : t0;
+  if (hitT <= 0.0f) return false;
+
+  t = hitT;
+  hitPos = rayDir * hitT;
+  return true;
+}
+
+// Compute cloud shadowing for light arriving from the sun direction. Returns
+// a multiplier in [0, 1] — 1 means no cloud blocking, 0 means fully overcast
+// and shadowed. Used by getTransmittanceToSun to darken ground/atmosphere
+// lighting under heavy cloud cover.
+float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
+#ifndef ATMOSPHERE_AVAILABLE
+  // The cloud noise SRV/sampler globals (AtmosphereCloudNoise3D /
+  // AtmosphereCloudNoise3DSampler) are declared only in shaders that include a
+  // bindings file (common_bindings.slangh or atmosphere_bindings.slangh); the
+  // atmosphere LUT compute shaders pull in atmosphere_common.slangh without
+  // those bindings to access shared math helpers, so they need a binding-free
+  // fallback. Returning 1.0 here means no cloud occlusion in those passes,
+  // which is correct — the LUTs encode pure atmospheric scattering.
+  return 1.0f;
+#else
+  if (args.cloudEnabled < 0.5f || args.cloudCoverageMean < 0.01f) return 1.0f;
+  if (args.cloudShadowStrength < 0.01f) return 1.0f;
+
+  float t;
+  vec3 hitPos;
+  if (!intersectCloudLayer(sunDir, args, t, hitPos)) {
+    return 1.0f;  // Sun direction doesn't pierce the cloud layer (below horizon etc.)
+  }
+
+  // Compute local type and coverage at the cloud-hit point. Independent
+  // smoothNoise2D evals with separate seeds so the two fields are
+  // spatially decorrelated (Nubis weather-texture style).
+  vec2 hitXZ = vec2(hitPos.x, hitPos.z);
+  float typeNoise     = smoothNoise2D(hitXZ * args.cloudTypeNoiseScale,     200.0f);
+  float coverageNoise = smoothNoise2D(hitXZ * args.cloudCoverageNoiseScale, 250.0f);
+  float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
+  float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
+
+  // Sample at the type-aware peak height of the bell, not mid-slab. The
+  // cloudTypeProfile plateau midpoint slides as plateau widens with type:
+  // riseEnd = 0.10 + 0.10*type, fallStart = 0.20 + 0.55*type
+  // → midpoint = 0.15 + 0.325*type (stratus 0.15, stratocumulus 0.31, cumulus 0.475).
+  // Sampling at any hf in the plateau gives profile=1.0; midpoint is the
+  // most conservative choice given the noise sampling jitter at the call site.
+  float hfPeak = 0.15f + 0.325f * typeLocal;
+  float density = sampleCloudDensityTextured(hitPos, hfPeak, typeLocal, coverageLocal, args,
+                                              AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
+  float transmittance = exp(-density * args.cloudDensity * 2.0f);
+
+  return mix(1.0f, transmittance, args.cloudShadowStrength);
+#endif
+}
+
+// Sun disk angular radius is now dynamic (args.sunAngularRadius)
+// static const float kSunAngularRadius = 0.00873f;
+
+// Pure atmospheric transmittance to a Y-up direction at ground level. Uses
+// Kasten-Young air mass above horizon and an exponential extension below,
+// matching the per-sample model inside evalAtmosphereRadiance so that cloud,
+// moon, and atmosphere paths all crush consistently at low elevation. Real
+// transmittance on blue at horizon is ~4e-5 (Hillaire/Frostbite Fig 23) — the
+// simpler 1/cos(z) clamped model previously used here only reached ~0.56,
+// which is the source of the "lit clouds at sunset" look.
+//
+// dirYUp must be normalized and in Y-up space (Y = up). Does NOT include cloud
+// ground shadow — callers that need it (ground-surface NEE) should add it
+// after, via getTransmittanceToSun. Cloud-self-lighting and moon-direction
+// callers should use this directly to avoid double-counting their own
+// self-shadow march with the cloud-layer ground shadow.
+vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
+  float H = args.rayleighScaleHeight;
+  float zenithCosAngle = dirYUp.y;
+
+  // Kasten-Young air mass above horizon, exponential continuation below.
+  // Mirrors lines 308-328 of evalAtmosphereRadiance verbatim — single
+  // source of truth for sun-direction transmittance physics.
+  float airMass;
+  if (zenithCosAngle > 0.01f) {
+    float zenithRad = acos(clamp(zenithCosAngle, -1.0f, 1.0f));
+    float zenithDeg = degrees(zenithRad);
+    airMass = 1.0f / (zenithCosAngle + 0.15f * pow(93.885f - zenithDeg, -1.253f));
+  } else {
+    const float kHorizonAirMass = 40.0f;
+    float belowHorizonFactor = exp(-zenithCosAngle * 10.0f);
+    airMass = kHorizonAirMass * belowHorizonFactor;
+  }
+  airMass = min(airMass, 200.0f);
+
+  // Optical depth for ground-level samples: H * density(0) * airMass = H * airMass.
+  float opticalDepthToSun = H * airMass;
+  float ozonePathLength = ozoneDensity(args.ozoneLayerAltitude, args) * airMass;
+  vec3 transmittance = exp(-args.rayleighScattering * opticalDepthToSun
+                            - args.ozoneAbsorption * ozonePathLength * 0.15f);
+
+  // Twilight fade — sky/light should be effectively black by ~-15° below
+  // horizon (astronomical twilight ends around -18°). Identical falloff
+  // constant to evalAtmosphereRadiance.
+  if (zenithCosAngle < 0.0f) {
+    float angleBelow = -zenithCosAngle;
+    transmittance *= exp(-angleBelow * 15.0f);
+  }
+
+  return transmittance;
+}
+
+// Compute transmittance from a point to the sun (simplified for ground-level surfaces).
+// Adds cloud-layer occlusion on top of the pure atmospheric term — used by NEE
+// surface/volume sampling so that overcast skies darken ground shading.
+vec3 getTransmittanceToSun(vec3 worldPos, AtmosphereArgs args, bool isZUp = false) {
+  vec3 transmittance = getAtmosphericTransmittanceForDir(args.sunDirection, args);
+  transmittance *= evalCloudGroundShadow(normalize(args.sunDirection), args);
+  return transmittance;
+}
+
+// Structure for direct sun lighting sample (NEE)
+struct AtmosphereSunSample {
+  vec3 direction;       // Direction TO the sun (normalized), in world space
+  vec3 radiance;        // Sun radiance reaching the surface (with transmittance)
+  float solidAnglePdf;  // Solid angle PDF (effectively 1.0 for directional light)
+  bool valid;           // True if sun is above horizon
+  float coneAngle;      // Half-angle of the sun cone for soft shadows (radians)
+  int numSamples;       // Number of shadow samples to take for soft shadows
+};
+
+// Get the sun cone angle and sample count based on Mie anisotropy
+// High anisotropy = sharp sun = small cone, few samples
+// Low anisotropy = diffuse sun = large cone, many samples
+void getSunSoftShadowParams(float mieAnisotropy, out float coneAngle, out int numSamples) {
+  // Work across the full [0.0, 1.0] range
+  float normalizedG = saturate(mieAnisotropy);
+  
+  // Map anisotropy [0, 1] to cone angle [0.6, 0.008] radians (~34° to ~0.46°)
+  // Avoid exactly hitting the early-exit threshold at g=1.0
+  // g = 1.0  -> 0.008 rad (~0.46°) = very sharp sun, hard shadows
+  // g = 0.8  -> 0.03 rad (~1.7°) = clear sun, slightly soft
+  // g = 0.5  -> 0.15 rad (~8.5°) = diffuse sun, soft shadows
+  // g = 0.0  -> 0.6 rad (~34°) = extremely diffuse sun, very soft shadows
+  coneAngle = mix(0.6f, 0.008f, normalizedG * normalizedG);  // Quadratic falloff for smoother transition
+  
+  // Map to sample count: more samples for softer shadows
+  // g = 1.0  -> 1 sample (hard shadows)
+  // g = 0.8  -> 2 samples (slightly soft)
+  // g = 0.5  -> 4 samples (medium soft)
+  // g = 0.0  -> 12 samples (very soft, diffuse)
+  numSamples = int(mix(12.0f, 1.0f, normalizedG * normalizedG));
+  numSamples = max(1, numSamples);
+}
+
+// Generate a direction jittered within a cone around the main direction
+// Uses a simple but effective disk sampling approach
+vec3 getJitteredSunDirection(vec3 sunDir, float coneAngle, float u1, float u2) {
+  if (coneAngle < 0.005f) {
+    return sunDir;  // No jitter for very small cones
+  }
+  
+  // Create orthonormal basis around sun direction
+  vec3 up = abs(sunDir.y) < 0.999f ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
+  vec3 tangent = normalize(cross(up, sunDir));
+  vec3 bitangent = cross(sunDir, tangent);
+  
+  // Sample a point on a disk and project to cone
+  float r = sqrt(u1) * tan(coneAngle);  // Radius on disk
+  float phi = u2 * 2.0f * kPi;          // Angle around disk
+  
+  // Offset direction
+  vec3 offset = tangent * (r * cos(phi)) + bitangent * (r * sin(phi));
+  
+  return normalize(sunDir + offset);
+}
+
+// Sample direct sun lighting for NEE at a surface point
+AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal, AtmosphereArgs args, bool isZUp = false) {
+  AtmosphereSunSample result;
+  
+  // Get sun direction in world space
+  // args.sunDirection is in Y-up space, convert if needed
+  if (isZUp) {
+    // Convert from Y-up to Z-up: (x, y, z) -> (x, z, y)
+    // Y-up: X=right, Y=up, Z=forward
+    // Z-up: X=right, Y=forward, Z=up
+    // So: X stays, Y->Z, Z->Y
+    result.direction = normalize(vec3(args.sunDirection.x, args.sunDirection.z, args.sunDirection.y));
+  } else {
+    result.direction = normalize(args.sunDirection);
+  }
+  
+  // Check if sun is above the surface horizon
+  float NdotL = dot(surfaceNormal, result.direction);
+  if (NdotL <= 0.0f) {
+    result.valid = false;
+    result.radiance = vec3(0.0f);
+    result.solidAnglePdf = 1.0f;
+    return result;
+  }
+  
+  // Compute transmittance from surface to sun
+  vec3 transmittance = getTransmittanceToSun(surfacePos, args, isZUp);
+  
+  // Apply Mie anisotropy to simulate atmospheric scattering effects
+  // High anisotropy = sharp, concentrated sun (forward scattering dominant)
+  // Low anisotropy = diffuse sun (scattered in all directions, faint but still present)
+  
+  // Sun visibility fade: smoothly fade direct lighting as sun becomes more diffuse
+  // g >= 0.80: Sun is sharp and bright (full intensity)
+  // g = 0.00-0.80: Sun becomes progressively more diffuse and dim
+  // g = 0.00: Sun is extremely diffuse but still contributing some light
+  const float kSunFullyVisible = 0.80f;
+  
+  // Smooth visibility fade using smoothstep, but never fully off
+  // Maps [0.0, 0.8] to [0.05, 1.0] - even at g=0, sun contributes 5% light (very diffuse)
+  float sunVisibility = mix(0.05f, 1.0f, smoothstep(0.0f, kSunFullyVisible, args.mieAnisotropy));
+  
+  // Brightness modulation: sharper sun = brighter direct light
+  // Map anisotropy [0.0, 1.0] to brightness multiplier [0.3, 2.0]
+  // g = 1.0  -> 2.0x (very sharp, bright sun)
+  // g = 0.8  -> 1.5x (clear sun, full visibility)
+  // g = 0.5  -> 0.8x (diffuse sun)
+  // g = 0.0  -> 0.3x (very diffuse, faint sun)
+  float mieModulation = mix(0.3f, 2.0f, args.mieAnisotropy);
+  
+  // Sun radiance = illuminance * transmittance * Mie modulation * visibility fade * user brightness
+  // The 0.5x factor provides a baseline reduction, then user can adjust with sunRayBrightness
+  result.radiance = args.sunIlluminance * transmittance * mieModulation * sunVisibility * args.sunRayBrightness * 0.5f;
+  result.solidAnglePdf = 1.0f;  // Directional light has delta PDF, but we use 1.0 for math
+  result.valid = any(transmittance > vec3(0.0f));
+  
+  // Get soft shadow parameters based on Mie anisotropy
+  getSunSoftShadowParams(args.mieAnisotropy, result.coneAngle, result.numSamples);
+
+  return result;
+}
+
+// ============================================================================
+// Moon NEE — surface direct lighting from the moon (fork)
+// ============================================================================
+// Mirrors the sun-NEE structure above. One moon picked per ray via importance
+// sampling (weight = brightness * phaseGlow * max(direction.y, 0)); ReSTIR +
+// DLSS handle temporal averaging across frames. Shares getJitteredSunDirection
+// for soft-shadow cone jitter -- that helper is direction-agnostic despite the
+// name.
+
+// Structure for direct moon lighting sample (NEE) -- fork.
+struct AtmosphereMoonSample {
+  vec3 direction;       // Direction TO the picked moon (normalized), in world space
+  vec3 radiance;        // Moon radiance reaching the surface (with transmittance)
+  float solidAnglePdf;  // Discrete pick PDF over enabled moons; integrator divides into accumulation
+  bool valid;           // True if a moon was successfully picked and is above horizon
+  float coneAngle;      // Half-angle of the moon cone for soft shadows (radians)
+  int numSamples;       // Number of shadow samples to take for soft shadows
+  uint pickedMoonIdx;   // Diagnostic; MAX_MOONS if invalid
+};
+
+// Importance-pick a single enabled, above-horizon moon by a discrete CDF over
+// per-moon weight = m.brightness * phaseGlow * max(direction.y, 0). `u` is a
+// uniform [0,1) random; `outPickPdf` receives the discrete pick probability
+// (1.0 if only one moon contributes, fractional otherwise). Returns MAX_MOONS
+// if no moon qualifies (daytime, all moons disabled, all below horizon, or
+// all at new-moon phase).
+uint pickMoon(AtmosphereArgs args, float u, out float outPickPdf) {
+  outPickPdf = 0.0f;
+  float weights[MAX_MOONS];
+  float total = 0.0f;
+  [unroll] for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
+    weights[mi] = 0.0f;
+    MoonParams m = args.moons[mi];
+    if (m.enabled < 0.5f) continue;
+    vec3 moonDir = normalize(m.direction);
+    if (moonDir.y <= 0.01f) continue;
+    float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
+    if (phaseGlow <= 0.001f) continue;
+    float w = m.brightness * phaseGlow * moonDir.y;
+    weights[mi] = w;
+    total += w;
+  }
+  if (total <= 0.0f) {
+    return MAX_MOONS;
+  }
+  float threshold = u * total;
+  float accum = 0.0f;
+  [unroll] for (uint mi2 = 0u; mi2 < MAX_MOONS; ++mi2) {
+    if (weights[mi2] <= 0.0f) continue;
+    accum += weights[mi2];
+    if (accum >= threshold) {
+      outPickPdf = weights[mi2] / total;
+      return mi2;
+    }
+  }
+  // Fallback for floating-point edge: return the last positive-weight moon.
+  [unroll] for (uint mi3 = 0u; mi3 < MAX_MOONS; ++mi3) {
+    uint idx = MAX_MOONS - 1u - mi3;
+    if (weights[idx] > 0.0f) {
+      outPickPdf = weights[idx] / total;
+      return idx;
+    }
+  }
+  return MAX_MOONS;
+}
+
+// Sample direct moon lighting for NEE at a surface point -- fork.
+// Mirrors sampleAtmosphereSunLight. One moon picked per call via the
+// importance helper above; integrator divides accumulated contribution by
+// solidAnglePdf to debias the pick.
+AtmosphereMoonSample sampleAtmosphereMoonLight(vec3 surfacePos, vec3 surfaceNormal,
+                                               AtmosphereArgs args, float u_pick,
+                                               bool isZUp = false) {
+  AtmosphereMoonSample result;
+  result.direction      = vec3(0.0f, 1.0f, 0.0f);
+  result.radiance       = vec3(0.0f);
+  result.solidAnglePdf  = 1.0f;
+  result.valid          = false;
+  result.coneAngle      = 0.05f;
+  result.numSamples     = 1;
+  result.pickedMoonIdx  = MAX_MOONS;
+
+  if (args.moonNeeStrength <= 0.0f) {
+    return result;
+  }
+
+  // Night-factor gate -- moon NEE only contributes once the sun has dropped
+  // past the twilight band. Same gate shape as cloud and atmospheric coupling.
+  float sunElev = args.sunDirection.y;
+  float nightFactor = smoothstep(0.02f, -0.05f, sunElev);
+  if (nightFactor < 0.001f) {
+    return result;
+  }
+
+  float pickPdf;
+  uint mIdx = pickMoon(args, u_pick, pickPdf);
+  if (mIdx >= MAX_MOONS) {
+    return result;
+  }
+
+  MoonParams m = args.moons[mIdx];
+  vec3 moonDirYUp = normalize(m.direction);
+
+  // Direction in caller's coordinate space (Y-up or Z-up).
+  result.direction = isZUp ? vec3(moonDirYUp.x, moonDirYUp.z, moonDirYUp.y) : moonDirYUp;
+
+  // Surface-facing check.
+  float NdotL = dot(surfaceNormal, result.direction);
+  if (NdotL <= 0.0f) {
+    return result;
+  }
+
+  vec3 transmittance = getAtmosphericTransmittanceForDir(moonDirYUp, args);
+  if (all(transmittance <= vec3(1e-6f))) {
+    return result;
+  }
+
+  float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
+
+  // Phase 2 (2026-05-08): physical irradiance via computeMoonSharedFactor.
+  // Replaces the prior kSurfaceMoonIllumScale = 1e-5 magic-number scaling.
+  //
+  // Magnitude analysis for FNV defaults (sunIlluminance ~20, m.color 0.12,
+  // m.brightness 1.0, full moon, zenith):
+  //   sharedFactor      = 20 × 0.12 × 0.97 × 1.0 / π ≈ 0.74 per channel
+  //   moonSolidAngleSr  = 2π × (1 - cos(0.0305 rad)) ≈ 2.93e-3 sr
+  //   result.radiance   = 0.74 × 1.0 × 2.93e-3 × 1.0 × 1.0 ≈ 2.17e-3 per channel
+  //
+  // Sun-to-moon ratio: 2.17e-3 / 20 ≈ 1.09e-4 — within 5% of the physical
+  // reference for a stylized 3.5° angular-diameter moon (Earth's 0.5° moon
+  // would yield ~2.5e-6, but the game's larger angular size scales solid
+  // angle ~46×). Tunable via args.moonNeeStrength at runtime if too bright
+  // under the FNV tonemapper.
+  vec3 sharedFactor = computeMoonSharedFactor(m, args, m.color);
+  float moonSolidAngleSr = 2.0f * kPi * (1.0f - cos(m.angularRadius));
+  // Phase 3 (2026-05-08): args.surfaceMoonBrightness is the per-path stylistic
+  // multiplier on surface NEE (default 8.0 = tonemapper-corrected baseline).
+  result.radiance = sharedFactor * phaseGlow * moonSolidAngleSr
+                  * args.moonNeeStrength * args.surfaceMoonBrightness * nightFactor;
+
+  result.solidAnglePdf = pickPdf;
+  result.valid         = any(result.radiance > vec3(0.0f));
+  result.pickedMoonIdx = mIdx;
+
+  // Soft-shadow cone: moons typically have ~3.5deg angular diameter (~6x sun),
+  // so the cone is bigger than the sun's. Cap to 0.6 rad (~34deg) for stability.
+  result.coneAngle  = clamp(m.angularRadius * 0.5f, 0.005f, 0.6f);
+  result.numSamples = 4;  // Constant; moon shadows are softer than sun's.
+
+  return result;
+}
+
+// Structure for volumetric sun light sample
+struct AtmosphereVolumeSunSample {
+  vec3 direction;       // Direction TO the sun (normalized), in world space
+  vec3 radiance;        // Sun radiance reaching the volume sample point
+  bool valid;           // True if sun is above horizon
+};
+
+// Sample direct sun lighting for volumetrics at a volume position
+// Unlike surface lighting, volumetrics use a phase function instead of BRDF
+AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 viewDir, AtmosphereArgs args, bool isZUp = false) {
+  AtmosphereVolumeSunSample result;
+  
+  // Get sun direction in world space
+  if (isZUp) {
+    result.direction = normalize(vec3(args.sunDirection.x, args.sunDirection.z, args.sunDirection.y));
+  } else {
+    result.direction = normalize(args.sunDirection);
+  }
+  
+  // Check if sun is contributing light (tighten twilight range)
+  // Match the atmospheric scattering twilight cutoff at -15°
+  const float kTwilightThreshold = -0.259f;  // -15 degrees below horizon
+  if (args.sunDirection.y < kTwilightThreshold) {
+    result.valid = false;
+    result.radiance = vec3(0.0f);
+    return result;
+  }
+  
+  // Get transmittance to sun (simplified for atmosphere)
+  vec3 transmittance = getTransmittanceToSun(volumePos, args, isZUp);
+  
+  // Sun visibility based on Mie anisotropy (same as surface lighting)
+  const float kSunFullyVisible = 0.80f;
+  float sunVisibility = mix(0.05f, 1.0f, smoothstep(0.0f, kSunFullyVisible, args.mieAnisotropy));
+  float mieModulation = mix(0.3f, 2.0f, args.mieAnisotropy);
+  
+  // Apply Henyey-Greenstein phase function for volumetric scattering
+  // cosTheta = dot(-viewDir, sunDir) because we want angle between incoming light and view
+  // For volumetrics, use a less extreme anisotropy (0.3) for better scattering visibility
+  // High anisotropy (like atmospheric Mie) would make volumetrics only visible when looking at sun
+  float cosTheta = dot(-normalize(viewDir), result.direction);
+  const float kVolumetricAnisotropy = 0.3f;  // Moderate forward scattering
+  float phase = hgPhase(cosTheta, kVolumetricAnisotropy);
+  
+  // For volumetrics, we include the phase function in the radiance
+  // The phase function replaces the BRDF for volume scattering.
+  // Modulate by mie scattering coefficient (in-scattering term) so the contribution
+  // respects atmospheric density and doesn't dominate when light shafts are enabled.
+  // sunVolumetricRadianceScale is the user-tunable scale (defaults to 1.0).
+  vec3 inScatteringCoefficient = args.mieScattering + args.rayleighScattering;
+  result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * args.sunVolumetricRadianceScale * inScatteringCoefficient;
+  result.valid = any(transmittance > vec3(0.0f));
+  
+  return result;
+}
+
+// 1. Analytical Ground Reflection (Replaces LUT-based version)
+vec3 computeGroundReflectionAnalytical(float altitude, float sunZenithCosAngle, AtmosphereArgs args) {
+  // Ground parameters
+  const vec3 GROUND_ALBEDO = vec3(0.3f, 0.3f, 0.3f);
+  const float PHASE_ISOTROPIC = 1.0f / (4.0f * kPi);
+
+  // A. Sun -> Ground Transmittance
+  // We can reuse the high-quality analytical transmittance function
+  // Ground is at altitude 0
+  vec3 T_sun_to_ground = getTransmittanceToSun(vec3(0.0f), args, false);
+
+  // B. Ground -> Sample Transmittance
+  // Calculate optical depth analytically for the vertical-ish path from ground to sample
+  // OpticalDepth(h1, h2) = H * (exp(-h1/H) - exp(-h2/H))
+  // Here h1 = 0, h2 = altitude
+  
+  float H_R = args.rayleighScaleHeight;
+  float H_M = args.mieScaleHeight;
+  
+  float od_R = H_R * (1.0f - exp(-altitude / H_R));
+  float od_M = H_M * (1.0f - exp(-altitude / H_M));
+  
+  // Approximate ozone absorption (uniform distribution approximation for this short path)
+  float od_O3 = args.ozoneLayerWidth * 0.1f * (altitude / args.atmosphereThickness);
+
+  vec3 extinction = args.rayleighScattering * od_R + 
+                    args.mieScattering * od_M + 
+                    args.ozoneAbsorption * od_O3;
+                    
+  vec3 T_ground_to_sample = exp(-max(extinction, vec3(0.0f)));
+
+  // C. Geometric Factor (Solid Angle of Planet)
+  // How much of the sphere around the sample is covered by the planet?
+  float d = args.planetRadius + altitude;
+  float ratio = args.planetRadius / d;
+  float omega = 2.0f * kPi * (1.0f - sqrt(max(0.0f, 1.0f - ratio * ratio)));
+
+  // Combine: Incoming Sun * Albedo * Phase * SolidAngle * PathTransmittance
+  float cosTheta = max(sunZenithCosAngle, 0.0f); // Sun must be above horizon for ground bounce
+  
+  return args.sunIlluminance * T_sun_to_ground * (GROUND_ALBEDO / kPi) * omega * PHASE_ISOTROPIC * T_ground_to_sample * cosTheta;
+}
+
+// 2. Accurate Analytical Air Multiscattering (Replaces static curve fit)
+vec3 computeAirMultiscatteringAnalytical(float altitude, float sunZenithCosAngle, AtmosphereArgs args) {
+  // A. Dynamic Color
+  // Multiscattering is dominated by Rayleigh (blue/white) because Mie scatters forward.
+  // We mix them based on their scattering strength.
+  vec3 totalScattering = args.rayleighScattering + args.mieScattering * 0.1f;
+  
+  // B. Altitude Attenuation
+  // Multiscattering is strong at the bottom of the atmosphere, weak at the top.
+  // Use an average scale height to fade it out.
+  float avgScaleHeight = (args.rayleighScaleHeight + args.mieScaleHeight) * 0.5f;
+  float densityFade = exp(-altitude / avgScaleHeight);
+  
+  // C. Sun Angle Factor (The "Curve")
+  // This sigmoid approximates the integral of light entering the atmosphere hemisphere.
+  // It effectively models "how much atmosphere is lit" based on sun angle.
+  float sunFactor = 1.0f / (1.0f + 5.0f * exp(-17.92f * sunZenithCosAngle));
+  
+  // D. Calibration Scalar
+  // Derived to match the Monte Carlo reference magnitude
+  const float MS_STRENGTH = 0.5f; 
+  
+  return args.sunIlluminance * totalScattering * densityFade * sunFactor * MS_STRENGTH;
+}
+
+// Combined Analytical Multiscattering (Use this to replace LUT sampling)
+vec3 getAnalyticalMultiscattering(float altitude, float sunZenithCosAngle, AtmosphereArgs args) {
+  vec3 groundReflect = computeGroundReflectionAnalytical(altitude, sunZenithCosAngle, args);
+  vec3 airScatter = computeAirMultiscatteringAnalytical(altitude, sunZenithCosAngle, args);
+  
+  return groundReflect + airScatter;
+}
+
+// Procedural noise utilities — shared by the cloud layer
+// (sampleCloudDensityTextured / evalClouds via fbmNoise2D below) and the sky-path
+// star / moon / night-sky shaders in atmosphere_sky.slangh. Based on integer
+// lattice hashing for stable, non-repeating patterns.
+float hash31(vec3 p) {
+  // Integer hash — avoids sin() patterns
+  uvec3 q = uvec3(int(p.x * 1597.0f), int(p.y * 2549.0f), int(p.z * 3571.0f));
+  uint n = (q.x ^ q.y ^ q.z) * 2654435761u;
+  n = (n >> 16u) ^ n;
+  return float(n) / 4294967296.0f;
+}
+
+// Smooth 2D value noise using hash31 for lattice values
+float smoothNoise2D(vec2 p, float seed) {
+  // Scale up coordinates to ensure integer hash gets distinct values
+  vec2 sp = p * 100.0f + vec2(seed * 13.7f, seed * 7.3f);
+  vec2 i = floor(sp);
+  vec2 f = fract(sp);
+  f = f * f * (3.0f - 2.0f * f);
+
+  float a = hash31(vec3(i.x, i.y, seed));
+  float b = hash31(vec3(i.x + 1.0f, i.y, seed));
+  float c = hash31(vec3(i.x, i.y + 1.0f, seed));
+  float d = hash31(vec3(i.x + 1.0f, i.y + 1.0f, seed));
+
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Multi-octave FBM using smoothNoise2D
+float fbmNoise2D(vec2 p, int octaves, float seed) {
+  float value = 0.0f;
+  float amplitude = 0.5f;
+
+  for (int i = 0; i < octaves && i < 6; i++) {
+    value += amplitude * smoothNoise2D(p, seed + float(i) * 17.31f);
+    p *= 2.0f;
+    amplitude *= 0.5f;
+  }
+  return value;
+}
+
+// 3D Perlin gradient noise utilities — used only by the cloud-noise bake
+// compute pass (rtx_cloud_noise_baker.comp.slang). Per-frame paths sample
+// the prebaked Texture3D instead. True gradient noise (Ken Perlin's 12
+// cube-edge gradients + dot products) distinct from the value-noise helpers
+// above (smoothNoise2D / fbmNoise2D).
+
+// Ken Perlin's 12 cube-edge gradient vectors. Each is one of (±1,±1,0),
+// (±1,0,±1), (0,±1,±1) — uniform magnitude (sqrt(2)), avoids axis-aligned
+// bias of random unit gradients.
+vec3 perlinGradient3D(vec3 ip) {
+  // hash31 returns [0, 1); bin into 12 buckets.
+  uint h = uint(hash31(ip) * 12.0f);
+  if      (h == 0u)  return vec3( 1.0f,  1.0f,  0.0f);
+  else if (h == 1u)  return vec3(-1.0f,  1.0f,  0.0f);
+  else if (h == 2u)  return vec3( 1.0f, -1.0f,  0.0f);
+  else if (h == 3u)  return vec3(-1.0f, -1.0f,  0.0f);
+  else if (h == 4u)  return vec3( 1.0f,  0.0f,  1.0f);
+  else if (h == 5u)  return vec3(-1.0f,  0.0f,  1.0f);
+  else if (h == 6u)  return vec3( 1.0f,  0.0f, -1.0f);
+  else if (h == 7u)  return vec3(-1.0f,  0.0f, -1.0f);
+  else if (h == 8u)  return vec3( 0.0f,  1.0f,  1.0f);
+  else if (h == 9u)  return vec3( 0.0f, -1.0f,  1.0f);
+  else if (h == 10u) return vec3( 0.0f,  1.0f, -1.0f);
+  else               return vec3( 0.0f, -1.0f, -1.0f); // h == 11u
+}
+
+// 3D Perlin gradient noise — single octave at the input frequency.
+// Output range approximately [-1, 1] (gradient noise's classic range —
+// different from value noise's [0, 1]; do NOT saturate or remap here).
+// Used only by the cloud-noise bake compute pass; per-frame paths sample
+// the prebaked Texture3D instead.
+float perlinNoise3D(vec3 p) {
+  vec3 pi = floor(p);
+  vec3 pf = p - pi;
+  vec3 f  = pf * pf * (3.0f - 2.0f * pf); // cubic-Hermite fade
+
+  // Dot product of gradient at each integer corner with the offset vector
+  // from that corner to the sample point.
+  float n000 = dot(perlinGradient3D(pi + vec3(0.0f, 0.0f, 0.0f)), pf - vec3(0.0f, 0.0f, 0.0f));
+  float n100 = dot(perlinGradient3D(pi + vec3(1.0f, 0.0f, 0.0f)), pf - vec3(1.0f, 0.0f, 0.0f));
+  float n010 = dot(perlinGradient3D(pi + vec3(0.0f, 1.0f, 0.0f)), pf - vec3(0.0f, 1.0f, 0.0f));
+  float n110 = dot(perlinGradient3D(pi + vec3(1.0f, 1.0f, 0.0f)), pf - vec3(1.0f, 1.0f, 0.0f));
+  float n001 = dot(perlinGradient3D(pi + vec3(0.0f, 0.0f, 1.0f)), pf - vec3(0.0f, 0.0f, 1.0f));
+  float n101 = dot(perlinGradient3D(pi + vec3(1.0f, 0.0f, 1.0f)), pf - vec3(1.0f, 0.0f, 1.0f));
+  float n011 = dot(perlinGradient3D(pi + vec3(0.0f, 1.0f, 1.0f)), pf - vec3(0.0f, 1.0f, 1.0f));
+  float n111 = dot(perlinGradient3D(pi + vec3(1.0f, 1.0f, 1.0f)), pf - vec3(1.0f, 1.0f, 1.0f));
+
+  // Trilinear interpolation using faded weights
+  float nx00 = mix(n000, n100, f.x);
+  float nx10 = mix(n010, n110, f.x);
+  float nx01 = mix(n001, n101, f.x);
+  float nx11 = mix(n011, n111, f.x);
+
+  float nxy0 = mix(nx00, nx10, f.y);
+  float nxy1 = mix(nx01, nx11, f.y);
+
+  return mix(nxy0, nxy1, f.z);
+}
+
+// 3D Perlin FBM. Mirrors fbmNoise2D's octave-loop shape (lacunarity 2.0,
+// gain 0.5, 6-octave cap, no amplitude normalization, per-octave seed
+// stride 17.31) but uses the gradient-noise primitive perlinNoise3D rather
+// than value noise. Frequency control via pre-scaling p: caller passes
+// p * baseFreq before calling. Output range approximately [-1, 1].
+float fbmNoise3D(vec3 p, int octaves, float seed) {
+  float value     = 0.0f;
+  float amplitude = 0.5f;
+
+  for (int i = 0; i < octaves && i < 6; i++) {
+    // Per-octave seed offset shifts the lattice to decorrelate octaves.
+    // Same stride (17.31) used in fbmNoise2D for cross-function consistency.
+    float seedOffset  = seed + float(i) * 17.31f;
+    vec3  octaveOff   = vec3(seedOffset * 1.7f, seedOffset * 2.3f, seedOffset * 3.1f);
+    value     += amplitude * perlinNoise3D(p + octaveOff);
+    p         *= 2.0f;
+    amplitude *= 0.5f;
+  }
+  return value;
+}
+
+// Periodic 3D Perlin gradient noise — same dot-product math as perlinNoise3D
+// but with each of the 8 corner lattice positions wrapped to `period` before
+// hashing. Sampling perlinNoise3DPeriodic(p, period) at p and at p + period
+// produces identical values, which is the precondition for a tilable bake:
+// the texture's left-edge voxel matches its right-edge voxel and the runtime
+// frac()-wraparound at tile boundaries reads as continuous, not seamed.
+//
+// `period` MUST be a positive integer vector. Non-integer periods break the
+// integer-lattice tilability invariant. The bake passes integer values
+// derived from cloudNoiseTileKm × the per-octave frequency pre-scale.
+//
+// Used only by the cloud-noise bake compute pass; per-frame paths sample the
+// prebaked Texture3D and do not touch this function.
+float perlinNoise3DPeriodic(vec3 p, vec3 period) {
+  vec3 pi = floor(p);
+  vec3 pf = p - pi;
+  vec3 f  = pf * pf * (3.0f - 2.0f * pf);
+
+  // Wrap each corner's lattice position into [0, period). The dot-product
+  // offset (pf - corner) stays in the original [0,1] cube — only the hash
+  // input is wrapped, so the gradient interpolation remains continuous.
+  vec3 c000 = mod(pi + vec3(0, 0, 0), period);
+  vec3 c100 = mod(pi + vec3(1, 0, 0), period);
+  vec3 c010 = mod(pi + vec3(0, 1, 0), period);
+  vec3 c110 = mod(pi + vec3(1, 1, 0), period);
+  vec3 c001 = mod(pi + vec3(0, 0, 1), period);
+  vec3 c101 = mod(pi + vec3(1, 0, 1), period);
+  vec3 c011 = mod(pi + vec3(0, 1, 1), period);
+  vec3 c111 = mod(pi + vec3(1, 1, 1), period);
+
+  float n000 = dot(perlinGradient3D(c000), pf - vec3(0, 0, 0));
+  float n100 = dot(perlinGradient3D(c100), pf - vec3(1, 0, 0));
+  float n010 = dot(perlinGradient3D(c010), pf - vec3(0, 1, 0));
+  float n110 = dot(perlinGradient3D(c110), pf - vec3(1, 1, 0));
+  float n001 = dot(perlinGradient3D(c001), pf - vec3(0, 0, 1));
+  float n101 = dot(perlinGradient3D(c101), pf - vec3(1, 0, 1));
+  float n011 = dot(perlinGradient3D(c011), pf - vec3(0, 1, 1));
+  float n111 = dot(perlinGradient3D(c111), pf - vec3(1, 1, 1));
+
+  float nx00 = mix(n000, n100, f.x);
+  float nx10 = mix(n010, n110, f.x);
+  float nx01 = mix(n001, n101, f.x);
+  float nx11 = mix(n011, n111, f.x);
+
+  float nxy0 = mix(nx00, nx10, f.y);
+  float nxy1 = mix(nx01, nx11, f.y);
+
+  return mix(nxy0, nxy1, f.z);
+}
+
+// Periodic 3D Perlin FBM. Octave loop matches fbmNoise3D's shape (lacunarity
+// 2.0, gain 0.5, 6-octave cap, seed-stride 17.31, no normalization), but each
+// octave's underlying noise is wrapped to a doubling period so the FBM as a
+// whole tiles cleanly at the input range basePeriod.
+//
+// `basePeriod` MUST equal the bake's input range at the FIRST octave (i.e.,
+// cloudNoiseTileKm × the caller's frequency pre-scale). Period doubles each
+// octave to track the implicit `p *= 2.0` so all octaves remain individually
+// tilable at multiples of basePeriod.
+float fbmNoise3DPeriodic(vec3 p, int octaves, float seed, vec3 basePeriod) {
+  float value     = 0.0f;
+  float amplitude = 0.5f;
+  vec3  period    = basePeriod;
+
+  for (int i = 0; i < octaves && i < 6; i++) {
+    float seedOffset = seed + float(i) * 17.31f;
+    vec3  octaveOff  = vec3(seedOffset * 1.7f, seedOffset * 2.3f, seedOffset * 3.1f);
+    value     += amplitude * perlinNoise3DPeriodic(p + octaveOff, period);
+    p         *= 2.0f;
+    period    *= 2.0f;
+    amplitude *= 0.5f;
+  }
+  return value;
+}
+
+// Sigg-Hadwiger 4-tap-per-axis B-spline tricubic. In 3D, separability gives
+// 8 hardware trilinear taps with C2 continuous filtering and no boxy
+// linear-filter artifact at close-up density gradients.
+//
+// Reference: GPU Gems 2, ch. 20.6, "Fast Third-Order Texture Filtering."
+//
+// Inputs:
+//   tex:     the Texture3D<float> to sample.
+//   s:       a linear (trilinear) sampler — the kernel does its own weighting
+//            via 8 trilinear taps; tex MUST be sampled with linear filtering
+//            for the math to work.
+//   uvw:     normalized texture coordinates in [0, 1].
+//   texSize: vec3 of texture dimensions (e.g. vec3(256.0)).
+//
+// Returns: the tricubic-interpolated scalar at uvw.
+float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
+                            vec3 uvw, vec3 texSize) {
+  // Convert normalized uvw to texel space, offset by 0.5 to center on texels.
+  vec3 coord    = uvw * texSize - 0.5f;
+  vec3 fracPart = fract(coord);
+  vec3 intPart  = floor(coord);
+
+  // B-spline cubic weights per axis (4 weights w0..w3 each).
+  vec3 fp2 = fracPart * fracPart;
+  vec3 fp3 = fp2 * fracPart;
+
+  vec3 w0 = (1.0f / 6.0f) * (-fp3 + 3.0f * fp2 - 3.0f * fracPart + 1.0f);
+  vec3 w1 = (1.0f / 6.0f) * (3.0f * fp3 - 6.0f * fp2 + 4.0f);
+  vec3 w2 = (1.0f / 6.0f) * (-3.0f * fp3 + 3.0f * fp2 + 3.0f * fracPart + 1.0f);
+  vec3 w3 = (1.0f / 6.0f) * fp3;
+
+  // Combine pairs of weights to fold 4 weights into 2 trilinear-tap
+  // positions per axis (Sigg-Hadwiger separable optimization).
+  vec3 g0 = w0 + w1;
+  vec3 g1 = w2 + w3;
+
+  vec3 invTexSize = 1.0f / texSize;
+  vec3 h0 = (intPart - 1.0f + (w1 / g0) + 0.5f) * invTexSize;
+  vec3 h1 = (intPart + 1.0f + (w3 / g1) + 0.5f) * invTexSize;
+
+  // 8 trilinear taps (one per corner of a 2-cubed cube of merged samples).
+  float t000 = tex.SampleLevel(s, vec3(h0.x, h0.y, h0.z), 0).r;
+  float t100 = tex.SampleLevel(s, vec3(h1.x, h0.y, h0.z), 0).r;
+  float t010 = tex.SampleLevel(s, vec3(h0.x, h1.y, h0.z), 0).r;
+  float t110 = tex.SampleLevel(s, vec3(h1.x, h1.y, h0.z), 0).r;
+  float t001 = tex.SampleLevel(s, vec3(h0.x, h0.y, h1.z), 0).r;
+  float t101 = tex.SampleLevel(s, vec3(h1.x, h0.y, h1.z), 0).r;
+  float t011 = tex.SampleLevel(s, vec3(h0.x, h1.y, h1.z), 0).r;
+  float t111 = tex.SampleLevel(s, vec3(h1.x, h1.y, h1.z), 0).r;
+
+  // Combine via 7 lerps with the merged weights (3-axis separable).
+  float tx00 = mix(t100, t000, g0.x);
+  float tx10 = mix(t110, t010, g0.x);
+  float tx01 = mix(t101, t001, g0.x);
+  float tx11 = mix(t111, t011, g0.x);
+
+  float txy0 = mix(tx10, tx00, g0.y);
+  float txy1 = mix(tx11, tx01, g0.y);
+
+  return mix(txy1, txy0, g0.z);
+}
+
+// Stage C replacement for sampleCloudDensity AND sampleCloudDensityShadow.
+// Reads a tricubic sample of the prebaked 3D Perlin FBM, layers a small
+// per-frame analytic detail FBM for shape-jitter, and applies the same
+// per-frame coverage / anvil / cloud-type shaping logic the analytic
+// sampleCloudDensity used to do inline.
+//
+// Visual notes:
+//   - The 3D noise volume gives genuine top-to-bottom shape variation
+//     inside a cumulus body — a quality win over 2D-extruded noise.
+//   - Tricubic interpolation eliminates the boxy linear-filter artifact
+//     visible at close-up cloud detail.
+//   - The 1-octave detail layer (~10% weight) provides slow per-frame
+//     shape evolution so the cloud field doesn't read as frozen during
+//     static-camera shots.
+//
+// cloudNoise3D / cloudSampler are passed as parameters (instead of referenced
+// as globals) so this helper compiles in any translation unit that includes
+// atmosphere_common.slangh, regardless of whether the consumer pulled in
+// common_bindings.slangh or atmosphere_bindings.slangh. cloudSampler must be
+// a linear (trilinear) SamplerState — the tricubic kernel does its own
+// weighting via 8 trilinear taps and requires linear filtering to be correct.
+float sampleCloudDensityTextured(vec3 worldPosKm,
+                                 float heightFraction,
+                                 float typeLocal,
+                                 float coverageLocal,
+                                 AtmosphereArgs args,
+                                 Texture3D<float> cloudNoise3D,
+                                 SamplerState cloudSampler) {
+  // 1. Wind perturbation (translation only — texture is tilable).
+  //    The old analytic sampleCloudDensity also applied a height-dependent
+  //    shear (heightFraction * cloudThickness * typeLocal * cloudWindShearStrength).
+  //    That term is intentionally dropped here: the 3D volume already encodes
+  //    vertical structure, so a UV shear would fight the volume's own variation.
+  //    If a deliberate shear-skewed look is wanted later, layer it on the
+  //    texcoord here rather than in this helper's contract.
+  vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
+  vec3 perturbed  = worldPosKm + windOffset;
+
+  // 2. World-pos → texcoord. Anisotropic mapping: horizontal axes use the
+  //    cloudNoiseTileKm period (multiple cumulus widths per tile, ~12 km),
+  //    vertical axis is mapped to the cloud-layer-relative span [0, 1] across
+  //    cloudThickness so the bake's full 6-cycle base-octave structure runs
+  //    across the cloud layer's 1 km vertical extent. A uniform (worldPos / 12)
+  //    mapping would compress the cloud layer into ~8% of the texture's Y
+  //    axis — too little base-octave variation, reading as "stacked 2D layers"
+  //    rather than true volumetric structure.
+  float yRelative = (perturbed.y - args.cloudAltitude) / max(args.cloudThickness, 0.01f);
+  vec3 texcoord = vec3(
+      frac(perturbed.x / args.cloudNoiseTileKm),
+      frac(yRelative),
+      frac(perturbed.z / args.cloudNoiseTileKm));
+
+  // 3. Tricubic 3D sample. Texture-size literal must match the baker's
+  //    dispatch resolution (RtxAtmosphere::kCloudNoise3DSize = 256). If the
+  //    bake resolution ever changes, update both sites in lockstep.
+  float texturedNoise = sampleTricubicBSpline(
+      cloudNoise3D, cloudSampler,
+      texcoord, vec3(256.0f));
+
+  // 4. Per-frame 1-octave analytic detail (shape jitter at ~10% weight).
+  //    Frequency tuned for sub-voxel-scale variation that the prebaked
+  //    texture cannot represent.
+  //    NOTE: perlinNoise3D returns gradient noise in [-1, 1]; the plan's
+  //    - 0.5f shift is preserved as-is per plan spec (Task 9 re-tuning will
+  //    address the asymmetry if visually problematic).
+  float detailWeight = 0.10f;  // tune in Task 9 re-tuning loop
+  float detail       = perlinNoise3D(perturbed * 720.0f) - 0.5f;
+  float density      = texturedNoise + detailWeight * detail;
+
+  // 5. Coverage threshold + anvil pow + cloud-type vertical profile.
+  //    Lifted verbatim from sampleCloudDensity.
+  float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
+                            smoothstep(0.7f, 0.8f, heightFraction));
+  float coverageAnvil = pow(coverageLocal, anvilExponent);
+
+  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
+  density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
+
+  density *= cloudTypeProfile(heightFraction, typeLocal);
+
+  return saturate(density);
+}
+
