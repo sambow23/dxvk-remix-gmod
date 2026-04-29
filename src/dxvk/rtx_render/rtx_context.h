@@ -116,6 +116,7 @@ namespace dxvk {
     void commitExternalGeometryToRT(ExternalDrawState&& state);
 
     void setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity);
+    void setScreenTint(float r, float g, float b, float a);
 
     static void blitImageHelper(Rc<DxvkContext> ctx, const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& dstImage, VkFilter filter);
 
@@ -210,6 +211,7 @@ namespace dxvk {
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
     void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
+    void dispatchScreenTint(Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
 
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
@@ -283,6 +285,15 @@ namespace dxvk {
     uint32_t m_screenOverlayWidth = 0;
     uint32_t m_screenOverlayHeight = 0;
     VkFormat m_screenOverlayFormat = VK_FORMAT_UNDEFINED;
+
+    // Screen tint state (fullscreen solid-color alpha tint applied after screen overlay).
+    struct ScreenTintState {
+      float r = 0.0f;
+      float g = 0.0f;
+      float b = 0.0f;
+      float a = 0.0f;
+    };
+    ScreenTintState m_screenTint {};
 
     IntegrateIndirectMode m_prevIntegrateIndirectMode = IntegrateIndirectMode::Count;
 
