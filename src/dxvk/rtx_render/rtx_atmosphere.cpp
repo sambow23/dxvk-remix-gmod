@@ -254,7 +254,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.atmosphereRadius = args.planetRadius + args.atmosphereThickness;
   args.rayleighScaleHeight = kRayleighScaleHeight;
   args.mieScaleHeight = kMieScaleHeight;
-  args.pad2 = 0;
+  args.sunVolumetricRadianceScale = RtxOptions::sunVolumetricRadianceScale();
 
   // ----- Night-sky shading (fork) -----
   args.starBrightness     = RtxOptions::starBrightness();
