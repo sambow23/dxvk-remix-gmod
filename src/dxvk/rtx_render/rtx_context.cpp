@@ -74,10 +74,41 @@
 #include "rtx_matrix_helpers.h"
 #include "../util/util_fastops.h"
 
+#include "rtx/pass/screen_overlay/screen_overlay.h"
+#include <rtx_shaders/screen_overlay.h>
+#include "rtx/pass/screen_tint/screen_tint.h"
+#include <rtx_shaders/screen_tint.h>
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
 
 namespace dxvk {
+
+  namespace {
+    class ScreenOverlayShader : public ManagedShader {
+      SHADER_SOURCE(ScreenOverlayShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_overlay)
+
+      PUSH_CONSTANTS(ScreenOverlayArgs)
+
+      BEGIN_PARAMETER()
+        RW_TEXTURE2D(SCREEN_OVERLAY_INPUT_OUTPUT)
+        SAMPLER2D(SCREEN_OVERLAY_TEXTURE)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(ScreenOverlayShader);
+
+    class ScreenTintShader : public ManagedShader {
+      SHADER_SOURCE(ScreenTintShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_tint)
+
+      PUSH_CONSTANTS(ScreenTintArgs)
+
+      BEGIN_PARAMETER()
+        RW_TEXTURE2D(SCREEN_TINT_INPUT_OUTPUT)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(ScreenTintShader);
+  }
 
   Metrics Metrics::s_instance;
 
@@ -759,6 +790,14 @@ namespace dxvk {
           }
         }
 
+        // Apply solid-color screen tint (from external C API) before the HUD
+        // overlay so the HUD is drawn over the tinted scene (used for effects
+        // like the vanilla underwater overlay).
+        dispatchScreenTint(rtOutput);
+
+        // Composite screen overlay (from external C API) after tone mapping
+        dispatchScreenOverlay(rtOutput);
+
         // Set up output src
         Rc<DxvkImage> srcImage = rtOutput.m_finalOutput.resource(Resources::AccessType::Read).image;
 
@@ -995,6 +1034,20 @@ namespace dxvk {
     getSceneManager().submitExternalDraw(this, std::move(state));
   }
 
+  void RtxContext::setScreenTint(float r, float g, float b, float a) {
+    m_screenTint.r = r;
+    m_screenTint.g = g;
+    m_screenTint.b = b;
+    m_screenTint.a = std::clamp(a, 0.0f, 1.0f);
+  }
+
+  void RtxContext::setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity) {
+    m_pendingScreenOverlay = ScreenOverlayFrame {
+      std::move(stagingBuffer),
+      width, height,
+      format, opacity
+    };
+  }
   static uint32_t jenkinsHash(uint32_t a) {
     // http://burtleburtle.net/bob/hash/integer.html
     a = (a + 0x7ed55d16) + (a << 12);
@@ -1858,6 +1911,32 @@ namespace dxvk {
     ScopedCpuProfileZone();
 
     m_common->metaSRGBDither().dispatch(this, rtOutput, performSRGBConversion);
+  }
+
+  void RtxContext::dispatchScreenTint(Resources::RaytracingOutput& rtOutput) {
+    if (m_screenTint.a <= 0.0f) {
+      return;
+    }
+
+    ScopedGpuProfileZone(this, "Screen Tint");
+
+    this->setPushConstantBank(DxvkPushConstantBank::RTX);
+
+    auto& finalOutput = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
+    const VkExtent3D outputSize = finalOutput.image->info().extent;
+    const VkExtent3D workgroups = util::computeBlockCount(outputSize, VkExtent3D { SCREEN_TINT_TILE_SIZE, SCREEN_TINT_TILE_SIZE, 1 });
+
+    ScreenTintArgs pushArgs = {};
+    pushArgs.imageSize = { outputSize.width, outputSize.height };
+    pushArgs.colorR = m_screenTint.r;
+    pushArgs.colorG = m_screenTint.g;
+    pushArgs.colorB = m_screenTint.b;
+    pushArgs.alpha = m_screenTint.a;
+    this->pushConstants(0, sizeof(pushArgs), &pushArgs);
+
+    this->bindResourceView(SCREEN_TINT_INPUT_OUTPUT, finalOutput.view, nullptr);
+    this->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, ScreenTintShader::getShader());
+    this->dispatch(workgroups.width, workgroups.height, workgroups.depth);
   }
 
   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {

@@ -1275,6 +1275,27 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL impl_SetScreenTint(
+      float colorR,
+      float colorG,
+      float colorB,
+      float alpha) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+
+    const float clampedA = alpha > 0.0f ? (alpha < 1.0f ? alpha : 1.0f) : 0.0f;
+
+    std::lock_guard lock { s_mutex };
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([colorR, colorG, colorB, clampedA](dxvk::DxvkContext* ctx) {
+      static_cast<dxvk::RtxContext*>(ctx)->setScreenTint(colorR, colorG, colorB, clampedA);
+    });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL impl_SetFogState(
     const remixapi_FogInfo* info) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_FOG_INFO) {
@@ -1762,6 +1783,32 @@ extern "C"
     const remixapi_FogInfo* info) {
     return impl_SetFogState(info);
   }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetScreenTint(
+      float colorR,
+      float colorG,
+      float colorB,
+      float alpha) {
+    return impl_SetScreenTint(colorR, colorG, colorB, alpha);
+  }
+  
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
+    return dxvk::fork_hooks::setUiState(tryAsDxvk(), state);
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawScreenOverlay(
+    const void*     pPixelData,
+    uint32_t        width,
+    uint32_t        height,
+    remixapi_Format format,
+    float           opacity) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    std::lock_guard lock { s_mutex };
+    return dxvk::fork_hooks::drawScreenOverlay(remixDevice, pPixelData, width, height, format, opacity);
+  }
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,
                                                                        remixapi_Interface* out_result) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO) {
@@ -1800,8 +1847,9 @@ extern "C"
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
       interf.SetFogState = remixapi_SetFogState;
+      interf.SetScreenTint = remixapi_SetScreenTint;
     }
-    static_assert(sizeof(interf) == 184, "Add/remove function registration");
+      static_assert(sizeof(interf) == 192, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

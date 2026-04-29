@@ -113,6 +113,10 @@ namespace dxvk {
     void commitGeometryToRT(const DrawParameters& params, DrawCallState& drawCallState);
     void commitExternalGeometryToRT(ExternalDrawState&& state);
 
+    // Queue a pixel buffer to be alpha-composited over the final tone-mapped image in the next frame.
+    // Used by remixapi_DrawScreenOverlay. Ownership of stagingBuffer transfers here.
+    void setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity);
+    void setScreenTint(float r, float g, float b, float a);
     static void blitImageHelper(Rc<DxvkContext> ctx, const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& dstImage, VkFilter filter);
 
     virtual void flushCommandList() override;
@@ -204,6 +208,8 @@ namespace dxvk {
     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
+    void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
+    void dispatchScreenTint(Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
     void initSkyProbe();
@@ -271,6 +277,46 @@ namespace dxvk {
 
     std::vector<DrawCallState> m_delayedRayTracedSky;
 
+    // Screen overlay state - populated by remixapi_DrawScreenOverlay via setScreenOverlayData,
+    // consumed and cleared by dispatchScreenOverlay once per frame.
+    struct ScreenOverlayFrame {
+      Rc<DxvkBuffer> stagingBuffer;
+      uint32_t width = 0;
+      uint32_t height = 0;
+      VkFormat format = VK_FORMAT_UNDEFINED;
+      float opacity = 1.0f;
+    };
+    std::optional<ScreenOverlayFrame> m_pendingScreenOverlay;
+    Rc<DxvkImage> m_screenOverlayImage;
+    Rc<DxvkImageView> m_screenOverlayView;
+    uint32_t m_screenOverlayWidth = 0;
+    uint32_t m_screenOverlayHeight = 0;
+    VkFormat m_screenOverlayFormat = VK_FORMAT_UNDEFINED;
+
+    // Screen tint state (fullscreen solid-color alpha tint applied after screen overlay).
+    struct ScreenTintState {
+      float r = 0.0f;
+      float g = 0.0f;
+      float b = 0.0f;
+      float a = 0.0f;
+    };
+    ScreenTintState m_screenTint {};
+    
+    // Sky camera state tracking
+    uint32_t m_lastSkyCameraFrame = 0;         // Frame when sky camera was last seen
+    uint32_t m_skyGeometryQueuedFrame = 0;     // Frame when sky geometry was first queued
+    XXH64_hash_t m_lastSkyCameraSignature = 0; // Signature of the last seen sky camera
+    XXH64_hash_t m_lastMainCameraSignature = 0; // Signature of the last seen main camera
+    
+    // Sky camera helper methods
+    bool isSkyCameraStale() const;
+    void updateSkyCameraState();
+    void cleanupStaleDelayedSkyGeometry();
+    bool isSkyCameraDataValid(const DrawCallState& skyGeometry) const;
+    bool shouldFallbackToRasterization() const;
+    XXH64_hash_t calculateCameraSignature(const DrawCallTransforms& transforms) const;
+    bool isConflictingCameraRender(const DrawCallState& drawCallState) const;
+    void resetCameraSignatures();
 #ifdef REMIX_DEVELOPMENT
     void queryAvailableResourceAliasing();
     void clearResourceAliasingCache();
