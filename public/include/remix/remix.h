@@ -204,6 +204,7 @@ namespace remix {
     Result< void >                    UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info);
     Result< void >                    SetConfigVariable(const char* key, const char* value);
     Result< void >                    SetFogState(const remixapi_FogInfo& info);
+    Result< void >                    SetScreenTint(float colorR, float colorG, float colorB, float alpha);
     Result< void >                    AddTextureHash(const char* textureCategory, const char* textureHash);
     Result< void >                    RemoveTextureHash(const char* textureCategory, const char* textureHash);
 
@@ -249,7 +250,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 336,
+      static_assert(sizeof(remixapi_Interface) == 336 + sizeof(void*),
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -298,6 +299,13 @@ namespace remix {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.SetFogState(&info);
+  }
+
+  inline Result< void > Interface::SetScreenTint(float colorR, float colorG, float colorB, float alpha) {
+    if (!m_CInterface.SetScreenTint) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.SetScreenTint(colorR, colorG, colorB, alpha);
   }
 
   inline Result< void > Interface::AddTextureHash(const char* textureCategory, const char* textureHash) {
