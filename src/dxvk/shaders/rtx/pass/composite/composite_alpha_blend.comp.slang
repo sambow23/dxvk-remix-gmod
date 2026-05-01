@@ -67,6 +67,7 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
   if (surface.isValid())
   {
     vec3 particleNormal = surface.normal;
+    const bool useForegroundGeometryHash = !surface.usesBackgroundGeometryHash();
 
     RNG randomState = createRNG(thread_id, cb.frameIdx, 4);
 
@@ -102,7 +103,7 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
             bool isDepthSimilar = length(positionDiff) < cb.stochasticAlphaBlendDepthDifference;
             bool isNormalSimilar = dot(neighborNormal, particleNormal) > cb.stochasticAlphaBlendNormalSimilarity;
             bool isSameGeometry = true;
-            if (cb.stochasticAlphaBlendSearchTheSameObject)
+            if (cb.stochasticAlphaBlendSearchTheSameObject && useForegroundGeometryHash)
             {
               uint16_t neighborGeometryHash = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[neighborPixel], cb.alphaBlendSurfacePackMult).geometryHash;
               isSameGeometry = (i == 0) || surface.geometryHash == neighborGeometryHash;

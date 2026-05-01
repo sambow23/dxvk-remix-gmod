@@ -102,6 +102,11 @@ struct AlphaBlendSurface
     return color.a == 1.0;
   }
 
+  bool usesBackgroundGeometryHash()
+  {
+    return !isOpaque() && randomThreshold >= 1.0 - backgroundTransparency;
+  }
+
   [mutating] void setOpaque()
   {
     color.a = 1.0;

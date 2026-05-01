@@ -107,6 +107,9 @@ RWTexture2D<float2> PrimaryViewDirection;
 layout(r16f, binding = GBUFFER_BINDING_PRIMARY_CONE_RADIUS_OUTPUT)
 RWTexture2D<float> PrimaryConeRadius;
 
+layout(r32f, binding = GBUFFER_BINDING_PRIMARY_FIRST_HIT_LINEAR_VIEW_Z_OUTPUT)
+RWTexture2D<float> PrimaryFirstHitLinearViewZ;
+
 layout(r32f, binding = GBUFFER_BINDING_PRIMARY_POSITION_ERROR_OUTPUT)
 RWTexture2D<float> PrimaryPositionError;
 
