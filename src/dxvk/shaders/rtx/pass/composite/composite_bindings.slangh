@@ -45,6 +45,8 @@ layout(binding = COMPOSITE_PRIMARY_SPECULAR_ALBEDO_INPUT)
 Texture2D<float4> PrimarySpecularAlbedo;
 layout(binding = COMPOSITE_PRIMARY_LINEAR_VIEW_Z_INPUT)
 Texture2D<float> PrimaryLinearViewZ;
+layout(binding = COMPOSITE_PRIMARY_FIRST_HIT_LINEAR_VIEW_Z_INPUT)
+Texture2D<float> PrimaryFirstHitLinearViewZ;
 layout(rgba16, binding = COMPOSITE_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_INPUT)
 Texture2D<float4> PrimaryVirtualWorldNormalPerceptualRoughness;
 

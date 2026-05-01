@@ -247,6 +247,7 @@ namespace dxvk
       Resource m_primaryWorldInterpolatedNormal;
       Resource m_primaryPerceptualRoughness;
       Resource m_primaryLinearViewZ;
+      Resource m_primaryFirstHitLinearViewZ;
       ResourceQueue m_primaryDepthQueue;
       Resource m_primaryDepth;  // points at a resource from m_primaryDepthQueue
       Resource m_primaryAlbedo;

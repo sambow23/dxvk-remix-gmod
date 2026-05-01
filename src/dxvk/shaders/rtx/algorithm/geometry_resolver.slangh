@@ -151,6 +151,7 @@ void geometryResolverOutputMiss<
   if (PRIMARY_SURFACE)
   {
     PrimaryHitDistance[pixelCoordinate] = missHitDistance;
+    PrimaryFirstHitLinearViewZ[pixelCoordinate] = cb.primaryDirectNrd.missLinearViewZ;
     PrimaryScreenSpaceMotionVector[pixelCoordinate] = calcMotionVectorForRayMiss(pixelCoordinate);
     PrimarySurfaceFlags[pixelCoordinate] = 0;
     PrimaryDisocclusionThresholdMix[pixelCoordinate] = 0;
@@ -193,37 +194,16 @@ void geometryResolverOutputMiss<
   }
 }
 
-void geometryResolverOutputMissDynamic(
-  bool primarySurface, bool selectedIntegrationSurface, uvec2 pixelCoordinate)
+void storePrimaryFirstHitLinearViewZ(uvec2 pixelCoordinate, float hitDistance)
 {
-  if (primarySurface)
-  {
-    if (selectedIntegrationSurface)
-    {
-      geometryResolverOutputMiss<true, true>(pixelCoordinate);
-    }
-    else
-    {
-      geometryResolverOutputMiss<true, false>(pixelCoordinate);
-    }
-  }
-  else
-  {
-    if (selectedIntegrationSurface)
-    {
-      geometryResolverOutputMiss<false, true>(pixelCoordinate);
-    }
-    else
-    {
-      geometryResolverOutputMiss<false, false>(pixelCoordinate);
-    }
-  }
+  const Ray originalCameraRay = rayCreatePrimaryFromPixel(cb.camera, pixelCoordinate, false);
+  const vec3 firstHitPosition = rayEvaluate(originalCameraRay, hitDistance);
+  const float firstHitLinearViewZ = cameraWorldPosToLinearViewZ(cb.camera, firstHitPosition);
+  imageStore(PrimaryFirstHitLinearViewZ, pixelCoordinate, firstHitLinearViewZ);
 }
 
-void geometryResolverOutputSurface<
-  let PRIMARY_SURFACE : bool,
-  let SELECTED_INTEGRATION_SURFACE : bool>(
-  uvec2 pixelCoordinate,
+void geometryResolverOutputSurface(
+  bool primarySurface, bool selectedIntegrationSurface, uvec2 pixelCoordinate,
   Ray ray, RayInteraction rayInteraction,
   Surface surface, SurfaceInteraction surfaceInteraction,
   PolymorphicSurfaceMaterialInteraction polymorphicSurfaceMaterialInteraction,
@@ -266,6 +246,7 @@ void geometryResolverOutputSurface<
     imageStore(PrimaryDepth, pixelCoordinate, depth);
     imageStore(PrimaryLinearViewZ, pixelCoordinate, linearViewZ);
     imageStore(PrimaryHitDistance, pixelCoordinate, virtualHitDistance);
+    imageStore(PrimaryFirstHitLinearViewZ, pixelCoordinate, linearViewZ);
 
     // Set value of 10000.f that forces RR to discard history.
     // Set the log value of 10000.f since RR uses log scale. RR prepass will revert the log operation after blurring the values.
@@ -2121,6 +2102,7 @@ void geometryResolverVertex(
       storeTransmissionPSRData(psrData, geometryResolverState.pixelCoordinate);
       PrimaryConeRadius[geometryResolverState.pixelCoordinate] = newRay.coneRadius;
       PrimaryHitDistance[geometryResolverState.pixelCoordinate] = geometryResolverState.accumulatedHitDistance;
+      storePrimaryFirstHitLinearViewZ(geometryResolverState.pixelCoordinate, geometryResolverState.accumulatedHitDistance);
     }
 
     // ray that passes through the screen (replacing transmission)
@@ -2212,6 +2194,7 @@ void geometryResolverVertex(
     PrimaryConeRadius[geometryResolverState.pixelCoordinate] = rayInteraction.coneRadius;
     PrimaryHitDistance[geometryResolverState.pixelCoordinate] = geometryResolverState.accumulatedHitDistance;
     SecondaryHitDistance[geometryResolverState.pixelCoordinate] = geometryResolverState.accumulatedHitDistance;
+    storePrimaryFirstHitLinearViewZ(geometryResolverState.pixelCoordinate, geometryResolverState.accumulatedHitDistance);
 
     // The actual threshold value will be set when storing gbuffer data for the PSR resolved primary surface.
     // Right now we just set the flag to carry over alternate threshold being set to the PSR pass.
