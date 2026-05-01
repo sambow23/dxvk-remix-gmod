@@ -1037,6 +1037,7 @@ namespace dxvk {
     m_raytracingOutput.m_primaryWorldInterpolatedNormal = createImageResource(ctx, "primary world interpolated normal", m_downscaledExtent, VK_FORMAT_R32_UINT);
     m_raytracingOutput.m_primaryPerceptualRoughness = createImageResource(ctx, "primary perceptual roughness", m_downscaledExtent, VK_FORMAT_R8_UNORM);
     m_raytracingOutput.m_primaryLinearViewZ = createImageResource(ctx, "primary linear view Z", m_downscaledExtent, VK_FORMAT_R32_SFLOAT);
+    m_raytracingOutput.m_primaryFirstHitLinearViewZ = createImageResource(ctx, "primary first hit linear view z", m_downscaledExtent, VK_FORMAT_R32_SFLOAT);
     uint32_t primaryDepthIndex = 0;
     for (auto& i : m_raytracingOutput.m_primaryDepthQueue) {
       i = createImageResource(ctx, std::string("primary depth " + std::to_string(primaryDepthIndex++)).c_str(), m_downscaledExtent, VK_FORMAT_R32_SFLOAT);

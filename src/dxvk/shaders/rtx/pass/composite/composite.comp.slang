@@ -404,6 +404,7 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
       surface.color = surface.color;
       vec3 particleNormal = surface.normal;
       backgroundAlpha = surface.backgroundTransparency;
+      vec3 surfacePosition = cameraPosition + surface.hitT * primaryRayDirections.worldDirection;
 
       vec4 totalLight = vec4(centerLight.xyz, 1);
 
@@ -426,6 +427,16 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
           {
             const CameraDirections neighborRayDirections = cameraPixelCoordinateToDirection(fakeCamera, neighborPixel.xy);
             vec3 neighborPosition = cameraPosition + neighborSurface.hitT * neighborRayDirections.worldDirection;
+            float depthDiff = abs(neighborSurface.hitT - surface.hitT);
+            float3 positionDiff = neighborPosition - surfacePosition;
+            bool isDepthSimilar = length(positionDiff) < cb.stochasticAlphaBlendDepthDifference;
+            bool isNormalSimilar = dot(neighborSurface.normal, particleNormal) > cb.stochasticAlphaBlendNormalSimilarity;
+            bool isSameGeometry = !cb.stochasticAlphaBlendSearchTheSameObject || surface.geometryHash == neighborSurface.geometryHash;
+
+            if (!(isDepthSimilar && isNormalSimilar && isSameGeometry))
+            {
+              continue;
+            }
 
             const float transparencyBandwidth = 0.05;
             const float distanceWeight = 0.5;
@@ -547,9 +558,22 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
   vec3 attenuatedOutput = radianceOutput;
   if (!volumeArgs.enable)
   {
+    float fogDistance = cb.maxFogDistance;
+
+    if (!primaryMiss)
+    {
+      fogDistance = viewDistance;
+
+      if (geometryFlags.performPSTR)
+      {
+        const float firstHitLinearViewZ = texelFetch(PrimaryFirstHitLinearViewZ, thread_id.xy, 0).x;
+        const vec3 firstHitViewPosition = cameraReconstructViewPosition(fakeCamera, primaryRayDirections.viewDirection, firstHitLinearViewZ);
+        fogDistance = length(firstHitViewPosition);
+      }
+    }
+
     // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
     // as emissive hits will be over-attenuated.
-    const float fogDistance = primaryMiss ? cb.maxFogDistance : viewDistance;
     vec4 fogColor = calculateFog(fogDistance, cb.fogColor);
 
     if (primaryMiss)
