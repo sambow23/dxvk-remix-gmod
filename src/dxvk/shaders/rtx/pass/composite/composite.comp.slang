@@ -563,13 +563,6 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
     if (!primaryMiss)
     {
       fogDistance = viewDistance;
-
-      if (geometryFlags.performPSTR)
-      {
-        const float firstHitLinearViewZ = texelFetch(PrimaryFirstHitLinearViewZ, thread_id.xy, 0).x;
-        const vec3 firstHitViewPosition = cameraReconstructViewPosition(fakeCamera, primaryRayDirections.viewDirection, firstHitLinearViewZ);
-        fogDistance = length(firstHitViewPosition);
-      }
     }
 
     // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
