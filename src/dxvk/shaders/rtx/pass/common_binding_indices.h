@@ -141,6 +141,10 @@
 // Note: Used to represent a non-existent buffer
 #define BINDING_INDEX_INVALID uint16_t(0xFFFF)
 
+// Surface indices occupy 21 bits in packed shader data structures.
+#define SURFACE_INDEX_BIT_COUNT 21
+#define SURFACE_INDEX_MAX_VALUE 0x001FFFFFu
+
 // Sentinel for an invalid surface index.  Equals the 21-bit maximum (SURFACE_INDEX_MAX_VALUE
 // from instance_definitions.h) so that it fits inside the packed RayInteraction._surfaceAndFlags
 // field.  The surfaceMapping buffer returns int32_t(-1) for unmapped surfaces; the 21-bit

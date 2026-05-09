@@ -163,9 +163,6 @@ public:
   // Note: this is only safe to call from the dxvk-cs thread.
   void destroyExternalMesh(remixapi_MeshHandle handle);
   
-  void setExternalStartInMediumMaterial(const MaterialData& translucentMaterial);
-  void clearExternalStartInMediumMaterial();
-  
   bool areAllReplacementsLoaded() const;
   std::vector<Mod::State> getReplacementStates() const;
 
@@ -412,7 +409,6 @@ private:
   std::optional<MaterialData> m_persistentStartInMediumMaterial;
   uint32_t m_startInMediumMaterialIndex = SURFACE_INDEX_INVALID;
   uint32_t m_fogStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
-  uint32_t m_externalStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
   uint32_t m_startInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
   uint32_t m_lastResolvedStartInMediumMaterialIndexInCache = kInvalidMaterialCacheIndex;
   uint32_t m_lastUploadedStartInMediumMaterialIndexInCache = kInvalidMaterialCacheIndex;

@@ -1414,41 +1414,6 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetCameraMediumMaterial(
-    const remixapi_CameraMediumInfo* info) {
-    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
-    if (!remixDevice) {
-      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
-    }
-    if (!info || info->sType != REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    const remixapi_MaterialHandle handle = info->medium;
-
-    std::lock_guard lock { s_mutex };
-    remixDevice->EmitCs([handle](dxvk::DxvkContext* ctx) {
-      auto& sceneManager = ctx->getCommonObjects()->getSceneManager();
-      if (handle == nullptr) {
-        sceneManager.clearExternalStartInMediumMaterial();
-        return;
-      }
-
-      const dxvk::MaterialData* material = sceneManager.getAssetReplacer()->accessExternalMaterial(handle);
-      if (material == nullptr) {
-        dxvk::Logger::warn("SetCameraMediumMaterial: material handle not found");
-        return;
-      }
-      if (material->getType() != dxvk::MaterialDataType::Translucent) {
-        dxvk::Logger::warn("SetCameraMediumMaterial: material must be translucent");
-        return;
-      }
-
-      sceneManager.setExternalStartInMediumMaterial(*material);
-    });
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawInstance(
     const remixapi_InstanceInfo* info) {
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
@@ -2708,7 +2673,6 @@ extern "C"
       float alpha) {
     return impl_SetScreenTint(colorR, colorG, colorB, alpha);
   }
-
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
     return dxvk::fork_hooks::setUiState(tryAsDxvk(), state);
   }
@@ -2802,7 +2766,6 @@ extern "C"
       interf.CreateMesh = remixapi_CreateMesh;
       interf.DestroyMesh = remixapi_DestroyMesh;
       interf.SetupCamera = remixapi_SetupCamera;
-      interf.SetCameraMediumMaterial = remixapi_SetCameraMediumMaterial;
       interf.DrawInstance = remixapi_DrawInstance;
       interf.CreateLight = remixapi_CreateLight;
       interf.DestroyLight = remixapi_DestroyLight;
@@ -2838,7 +2801,7 @@ extern "C"
       // Fork-added vtable slots (extern-C exported; delegated to fork hook)
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 336 + sizeof(void*), "Add/remove function registration");
+    static_assert(sizeof(interf) == 336, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

@@ -320,7 +320,6 @@ namespace dxvk {
     m_previousFrameSceneAvailable = false;
     m_startInMediumMaterialIndex = SURFACE_INDEX_INVALID;
     m_fogStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
-    m_externalStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
     m_startInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
     m_lastResolvedStartInMediumMaterialIndexInCache = kInvalidMaterialCacheIndex;
     m_lastUploadedStartInMediumMaterialIndexInCache = kInvalidMaterialCacheIndex;
@@ -1939,20 +1938,6 @@ namespace dxvk {
     return m_externalSampler;
   }
 
-  void SceneManager::setExternalStartInMediumMaterial(const MaterialData& translucentMaterial) {
-    assert(translucentMaterial.getType() == MaterialDataType::Translucent);
-
-    const auto samplerIndex = trackSampler(getOrCreateExternalSampler());
-    const auto surfaceMaterial = RtSurfaceMaterial(
-      createTranslucentSurfaceMaterial(translucentMaterial.getTranslucentMaterialData(), samplerIndex, true));
-
-    m_externalStartInMediumMaterialIndex_inCache = m_surfaceMaterialCache.track(surfaceMaterial);
-  }
-
-  void SceneManager::clearExternalStartInMediumMaterial() {
-    m_externalStartInMediumMaterialIndex_inCache = UINT32_MAX;
-  }
-
   void SceneManager::setStartInMediumMaterial(const MaterialData& translucentMaterial) {
     assert(translucentMaterial.getType() == MaterialDataType::Translucent);
     std::lock_guard lock { m_startInMediumMaterialMutex };
@@ -2457,11 +2442,9 @@ namespace dxvk {
         persistentStartInMediumMaterialIndexInCache = m_surfaceMaterialCache.track(surfaceMaterial);
       }
 
-      m_startInMediumMaterialIndex_inCache = m_externalStartInMediumMaterialIndex_inCache != kInvalidMaterialCacheIndex
-        ? m_externalStartInMediumMaterialIndex_inCache
-        : persistentStartInMediumMaterialIndexInCache != kInvalidMaterialCacheIndex
-          ? persistentStartInMediumMaterialIndexInCache
-          : m_fogStartInMediumMaterialIndex_inCache;
+      m_startInMediumMaterialIndex_inCache = persistentStartInMediumMaterialIndexInCache != kInvalidMaterialCacheIndex
+        ? persistentStartInMediumMaterialIndexInCache
+        : m_fogStartInMediumMaterialIndex_inCache;
 
       if (m_startInMediumMaterialIndex_inCache != kInvalidMaterialCacheIndex &&
           m_startInMediumMaterialIndex_inCache >= m_surfaceMaterialCache.getObjectTable().size()) {
