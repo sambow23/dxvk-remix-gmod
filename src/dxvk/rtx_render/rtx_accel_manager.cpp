@@ -1013,14 +1013,6 @@ namespace dxvk {
       totalPrimitiveIDOffset += primitiveCount;
     }
 
-    // Validate total primitive count against the engine-wide PRIMITIVE_INDEX_BIT_COUNT limit.
-    if (totalPrimitiveIDOffset > PRIMITIVE_INDEX_MAX_VALUE) {
-      ONCE(Logger::err(str::format("DxvkRaytrace: total primitive count (", totalPrimitiveIDOffset,
-        ") exceeds the maximum primitive index (", PRIMITIVE_INDEX_MAX_VALUE,
-        ") representable in ", PRIMITIVE_INDEX_BIT_COUNT, " bits. "
-        "Downstream systems (NEE cache, prefix-sum lookups) may produce incorrect results.")));
-    }
-
     buildBlases(ctx, execBarriers, cameraManager, opacityMicromapManager, instanceManager, 
                 textures, instances, blasBuckets, blasToBuild, blasRangesToBuild, totalScratchMemory);
 

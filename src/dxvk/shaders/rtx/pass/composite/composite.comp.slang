@@ -263,7 +263,7 @@ vec3 loadSecondaryRadiance(
 }
 
 // Loads, combines, and remodulates the primary direct + indirect radiance contribution.
-// Caller must gate this on pixelIsActive — direct/indirect inputs are only valid on active pixels.
+// Caller must gate this on pixelIsActive - direct/indirect inputs are only valid on active pixels.
 vec3 loadPrimaryRadiance(
   uint2 pixelCoordinate,
   bool isDirectActive,
@@ -685,7 +685,7 @@ vec4 compositeResult(
   // Load GBuffer Information.
   // PrimaryAttenuation and secondary GBuffer data are needed at every PSR pixel so the secondary
   // remodulation path in loadInputRadiance produces correct results regardless of sparse active
-  // state — keeps the RR particle layer dense. Primary GBuffer reads stay gated since
+  // state - keeps the RR particle layer dense. Primary GBuffer reads stay gated since
   // loadPrimaryRadiance is skipped on sparse-inactive pixels.
   const vec3 primaryAttenuation = r11g11b10ToColor(PrimaryAttenuation[pixelCoordinate]);
   vec3 primaryAlbedo = vec3(0);

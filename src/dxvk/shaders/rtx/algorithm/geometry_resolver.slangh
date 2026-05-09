@@ -1,4 +1,4 @@
-/*
+﻿/*
 * Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
@@ -223,6 +223,7 @@ void geometryResolverOutputMissDynamic(
     }
   }
 }
+
 
 void geometryResolverOutputSurface<
   let PRIMARY_SURFACE : bool,
@@ -1904,7 +1905,7 @@ void geometryResolverVertex(
 #ifdef ATMOSPHERE_AVAILABLE
     else if (cb.skyMode == 1)
     {
-      // Primary view ray — enable cloud temporal smoothing. The motion vector
+      // Primary view ray â€” enable cloud temporal smoothing. The motion vector
       // for sky misses comes from calcMotionVectorForRayMiss (already used
       // below to write PrimaryScreenSpaceMotionVector), and historyResolution
       // is the downscaled render extent (where this raygen writes).
