@@ -673,7 +673,7 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_FIRST_PERSON_PLAYER_SHADOW){ result.set(InstanceCategories::FirstPersonPlayerShadow); }
       // Note: Occluder category is not exposed through the Remix API as it's primarily for Source engine NODRAW materials
       
-      static_assert((int)InstanceCategories::Count == 27, "Instance categories changed, please update Remix SDK");
+      static_assert((int)InstanceCategories::Count == 28, "Instance categories changed, please update Remix SDK");
       return result;
     }
 
@@ -1088,41 +1088,6 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetCameraMediumMaterial(
-    const remixapi_CameraMediumInfo* info) {
-    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
-    if (!remixDevice) {
-      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
-    }
-    if (!info || info->sType != REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    const remixapi_MaterialHandle handle = info->medium;
-
-    std::lock_guard lock { s_mutex };
-    remixDevice->EmitCs([handle](dxvk::DxvkContext* ctx) {
-      auto& sceneManager = ctx->getCommonObjects()->getSceneManager();
-      if (handle == nullptr) {
-        sceneManager.clearExternalStartInMediumMaterial();
-        return;
-      }
-
-      const dxvk::MaterialData* material = sceneManager.getAssetReplacer()->accessExternalMaterial(handle);
-      if (material == nullptr) {
-        dxvk::Logger::warn("SetCameraMediumMaterial: material handle not found");
-        return;
-      }
-      if (material->getType() != dxvk::MaterialDataType::Translucent) {
-        dxvk::Logger::warn("SetCameraMediumMaterial: material must be translucent");
-        return;
-      }
-
-      sceneManager.setExternalStartInMediumMaterial(*material);
-    });
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawInstance(
     const remixapi_InstanceInfo* info) {
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
@@ -1305,13 +1270,6 @@ namespace {
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
     if (!remixDevice) {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
-    }
-
-    if (!s_inFrame.exchange(true)) {
-      auto cb = s_beginCallback;
-      if (cb) {
-        cb();
-      }
     }
 
     dxvk::FogState fog;
@@ -1779,6 +1737,178 @@ namespace {
 
 extern "C"
 {
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    // Drain pending work and apply on render thread at a safe point
+    std::vector<PendingLightCreate> creates;
+    std::vector<PendingLightUpdate> updates;
+    std::vector<PendingDomeUpdate> domeUpdates;
+    std::vector<remixapi_LightHandle> destroys;
+    std::vector<PendingMeshCreate> meshCreates;
+    {
+      std::lock_guard lock { s_mutex };
+      s_handlesDeletedThisFrame.clear();
+      creates.swap(s_pendingLightCreates);
+      updates.swap(s_pendingLightUpdates);
+      domeUpdates.swap(s_pendingDomeUpdates);
+      destroys.swap(s_pendingLightDestroys);
+      meshCreates.swap(s_pendingMeshCreates);
+    }
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), domeUpdates = std::move(domeUpdates), destroys = std::move(destroys), meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
+      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+      // Apply destroys first
+      for (auto h : destroys) {
+        if (h) {
+          lightMgr.unregisterPersistentExternalLight(h);
+          lightMgr.removeExternalLight(h);
+        }
+      }
+      // Apply creates
+      for (auto& create : creates) {
+        if (create.isDome) {
+          // Build dome light on the render thread
+          auto preloadTexture = [ctx](const std::filesystem::path& path) {
+            if (path.empty()) {
+              return dxvk::TextureRef{};
+            }
+            auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
+            if (assetData == nullptr) {
+              return dxvk::TextureRef{};
+            }
+            auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
+              .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
+            return dxvk::TextureRef{ uploadedTexture };
+          };
+
+          dxvk::DomeLight domeLight;
+          domeLight.radiance = create.radiance;
+          domeLight.worldToLight = inverse(create.transform);
+          domeLight.texture = preloadTexture(create.texturePath);
+
+          uint32_t unused;
+          ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
+
+          lightMgr.addExternalDomeLight(create.handle, domeLight);
+        } else if (create.rtLight.has_value()) {
+          // Analytical light
+          lightMgr.addExternalLight(create.handle, *create.rtLight);
+        }
+        // Register all created lights as persistent
+        lightMgr.registerPersistentExternalLight(create.handle);
+        lightMgr.addExternalLightInstance(create.handle);
+      }
+      // Apply analytical updates
+      for (auto& upd : updates) {
+        if (upd.rtLight.has_value()) {
+          lightMgr.registerPersistentExternalLight(upd.handle);
+          lightMgr.addExternalLight(upd.handle, *upd.rtLight);
+          lightMgr.addExternalLightInstance(upd.handle);
+        }
+      }
+      // Apply dome updates
+      for (auto& du : domeUpdates) {
+        auto preloadTexture = [ctx](const std::filesystem::path& path) {
+          if (path.empty()) {
+            return dxvk::TextureRef{};
+          }
+          auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
+          if (assetData == nullptr) {
+            return dxvk::TextureRef{};
+          }
+          auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
+            .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
+          return dxvk::TextureRef{ uploadedTexture };
+        };
+
+        dxvk::DomeLight domeLight;
+        domeLight.radiance = du.radiance;
+        domeLight.worldToLight = inverse(du.transform);
+        domeLight.texture = preloadTexture(du.texturePath);
+
+        uint32_t unused;
+        ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
+
+        lightMgr.registerPersistentExternalLight(du.handle);
+        lightMgr.addExternalDomeLight(du.handle, domeLight);
+        lightMgr.addExternalLightInstance(du.handle);
+      }
+
+      // Apply any mesh creates not already flushed by remixapi_DrawInstance
+      applyPendingMeshCreatesOnCs(ctx, meshCreates);
+
+      // Ensure persistent auto-instancing happens every frame
+      lightMgr.queueAutoInstancePersistent();
+    });
+
+    // Forward any pending screen overlay to the render thread for this frame.
+    dxvk::fork_hooks::presentScreenOverlayFlush(remixDevice);
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLightDefinition(
+    remixapi_LightHandle handle,
+    const remixapi_LightInfo* info) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!handle || !info) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Handle dome light update if present in pNext chain
+    if (auto extDome = pnext::find<remixapi_LightInfoDomeEXT>(info)) {
+      auto cTransform = convert::tomat4(extDome->transform);
+      auto cTexturePath = convert::topath(extDome->colorTexture);
+      auto cRadiance = convert::tovec3(info->radiance);
+      {
+        std::lock_guard lock { s_mutex };
+        s_pendingDomeUpdates.push_back(PendingDomeUpdate{ handle, cTransform, cTexturePath, cRadiance });
+      }
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    // For analytical lights require base LightInfo; convert immediately
+    if (info->sType != REMIXAPI_STRUCT_TYPE_LIGHT_INFO) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    auto rt = convert::toRtLight(*info);
+    if (!rt.has_value()) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Set the isDynamic flag from the LightInfo
+    rt->isDynamic = info->isDynamic;
+
+    // Set the ignoreViewModel flag from the LightInfo
+    rt->ignoreViewModel = info->ignoreViewModel;
+
+    // Set the first-person player shadow ignore flag from the LightInfo
+    rt->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
+    
+    {
+      std::lock_guard lock { s_mutex };
+      s_pendingLightUpdates.push_back(PendingLightUpdate{ handle, std::move(rt) });
+    }
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterCallbacks(
+    PFN_remixapi_BridgeCallback beginSceneCallback,
+    PFN_remixapi_BridgeCallback endSceneCallback,
+    PFN_remixapi_BridgeCallback presentCallback) {
+    dxvk::fork_hooks::registerCallbacks(beginSceneCallback, endSceneCallback, presentCallback);
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
+    return dxvk::fork_hooks::getUiState(tryAsDxvk());
+  }
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetFogState(
     const remixapi_FogInfo* info) {
     return impl_SetFogState(info);
@@ -1792,7 +1922,7 @@ extern "C"
     return impl_SetScreenTint(colorR, colorG, colorB, alpha);
   }
   
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
     return dxvk::fork_hooks::setUiState(tryAsDxvk(), state);
   }
 
@@ -1832,7 +1962,6 @@ extern "C"
       interf.CreateMesh = remixapi_CreateMesh;
       interf.DestroyMesh = remixapi_DestroyMesh;
       interf.SetupCamera = remixapi_SetupCamera;
-      interf.SetCameraMediumMaterial = remixapi_SetCameraMediumMaterial;
       interf.DrawInstance = remixapi_DrawInstance;
       interf.CreateLight = remixapi_CreateLight;
       interf.DestroyLight = remixapi_DestroyLight;
@@ -1849,7 +1978,7 @@ extern "C"
       interf.SetFogState = remixapi_SetFogState;
       interf.SetScreenTint = remixapi_SetScreenTint;
     }
-      static_assert(sizeof(interf) == 192, "Add/remove function registration");
+    static_assert(sizeof(interf) == 184, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

@@ -36,6 +36,9 @@
 #include "rtx/concept/surface/alpha_blend_surface.slangh"
 #include "rtx/utility/geometry_flags.slangh"
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#ifdef ATMOSPHERE_AVAILABLE
+#include "rtx/pass/atmosphere/atmosphere_sky.slangh"
+#endif
 
 #include "rtx/algorithm/volume_composite_helpers.slangh"
 #include "rtx/algorithm/accumulate.slangh"
@@ -55,7 +58,11 @@ vec3 sampleSkyRadiance(float3 worldDirection, float2 screenUV)
     return cb.domeLightArgs.radiance * sampleDomeLightTexture(SkyLight, worldDirection, cb.domeLightArgs.worldToLightTransform);
 
   if (cb.skyMode == 1)
+#ifdef ATMOSPHERE_AVAILABLE
     return evalSkyRadiance(worldDirection, cb.atmosphereArgs, cb.isZUp != 0);
+#else
+    return cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0);
+#endif
 
   return cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0);
 }
@@ -692,54 +699,11 @@ void applySkyContribution(
 {
   if (!primaryMiss)
   {
-    radianceOutput += skyRadiance * volumeAttenuation;
-  }
-  
-  vec3 attenuatedOutput = radianceOutput;
-  if (!volumeArgs.enable)
-  {
-    float fogDistance = cb.maxFogDistance;
-
-    if (!primaryMiss)
-    {
-      fogDistance = viewDistance;
-
-      if (geometryFlags.performPSTR)
-      {
-        const float firstHitLinearViewZ = texelFetch(PrimaryFirstHitLinearViewZ, thread_id.xy, 0).x;
-        const vec3 firstHitViewPosition = cameraReconstructViewPosition(fakeCamera, primaryRayDirections.viewDirection, firstHitLinearViewZ);
-        fogDistance = length(firstHitViewPosition);
-      }
-    }
-
-    // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
-    // as emissive hits will be over-attenuated.
-    vec4 fogColor = calculateFog(fogDistance, cb.fogColor);
-
-    if (primaryMiss)
-    {
-      fogColor.a *= cb.skyFogOpacity;
-    }
-
-    // Blend fog over output
-    attenuatedOutput = radianceOutput * (1.0f - fogColor.a) + fogColor.rgb * fogColor.a;
-
-    if (cb.outputParticleLayer)
-    {
-      particleLayerOutput.rgb = lerp(particleLayerOutput.rgb, fogColor.rgb, fogColor.a);
-    }
+    return;
   }
 
-  vec3 skyContribution;
-  if (cb.domeLightArgs.active)
-  {
-    skyContribution = cb.domeLightArgs.radiance * sampleDomeLightTexture(SkyLight, primaryRayDirections.worldDirection, cb.domeLightArgs.worldToLightTransform) * volumeAttenuation;
-  }
-  else
-  {
-    vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, pixelCoordinate);
-    skyContribution = cb.skyBrightness * SkyLight.SampleLevel(screenUV, 0) * volumeAttenuation;
-  }
+  vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, pixelCoordinate);
+  vec3 skyContribution = sampleSkyRadiance(primaryRayDirections.worldDirection, screenUV) * volumeAttenuation;
 
   if (cb.sparseRenderingArgs.mode != SparseRenderingMode::Off &&
       cb.sparseRenderingArgs.enableSparsePrimaryRayMissComposition)
@@ -752,6 +716,7 @@ void applySkyContribution(
 
 void applyFog(
   float viewDistance,
+  bool primaryMiss,
   float radianceScale,
   inout vec3 radianceOutput,
   inout vec4 particleLayerOutput)
@@ -763,7 +728,12 @@ void applyFog(
 
   // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
   // as emissive hits will be over-attenuated.
-  vec4 fogColor = calculateFog(viewDistance);
+  vec4 fogColor = calculateFog(viewDistance, cb.fogColor);
+
+  if (primaryMiss)
+  {
+    fogColor.a *= cb.skyFogOpacity;
+  }
 
   if (cb.sparseRenderingArgs.mode != SparseRenderingMode::Off)
   {
@@ -929,7 +899,7 @@ vec4 compositeResult(
   applySkyContribution(pixelCoordinate, primaryRayDirections, primaryMiss, radianceScale, volumeAttenuation, radianceOutput);
 
   // Apply fog 
-  applyFog(viewDistance, radianceScale, radianceOutput, particleLayerOutput);
+  applyFog(viewDistance, primaryMiss, radianceScale, radianceOutput, particleLayerOutput);
 
   // DLSS-RR needs to do alpha blending using the backgroundAlpha, so the input is untouched here.
   // Output final composite result for NRD denoiser.

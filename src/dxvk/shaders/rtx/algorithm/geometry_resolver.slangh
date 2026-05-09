@@ -194,6 +194,33 @@ void geometryResolverOutputMiss<
 #endif
 }
 
+void geometryResolverOutputMissDynamic(
+  bool primarySurface, bool selectedIntegrationSurface, uvec2 pixelCoordinate)
+{
+  if (primarySurface)
+  {
+    if (selectedIntegrationSurface)
+    {
+      geometryResolverOutputMiss<true, true>(pixelCoordinate);
+    }
+    else
+    {
+      geometryResolverOutputMiss<true, false>(pixelCoordinate);
+    }
+  }
+  else
+  {
+    if (selectedIntegrationSurface)
+    {
+      geometryResolverOutputMiss<false, true>(pixelCoordinate);
+    }
+    else
+    {
+      geometryResolverOutputMiss<false, false>(pixelCoordinate);
+    }
+  }
+}
+
 void storePrimaryFirstHitLinearViewZ(uvec2 pixelCoordinate, float hitDistance)
 {
   const Ray originalCameraRay = rayCreatePrimaryFromPixel(cb.camera, pixelCoordinate, false);
@@ -202,8 +229,10 @@ void storePrimaryFirstHitLinearViewZ(uvec2 pixelCoordinate, float hitDistance)
   imageStore(PrimaryFirstHitLinearViewZ, pixelCoordinate, firstHitLinearViewZ);
 }
 
-void geometryResolverOutputSurface(
-  bool primarySurface, bool selectedIntegrationSurface, uvec2 pixelCoordinate,
+void geometryResolverOutputSurface<
+  let PRIMARY_SURFACE : bool,
+  let SELECTED_INTEGRATION_SURFACE : bool>(
+  uvec2 pixelCoordinate,
   Ray ray, RayInteraction rayInteraction,
   Surface surface, SurfaceInteraction surfaceInteraction,
   PolymorphicSurfaceMaterialInteraction polymorphicSurfaceMaterialInteraction,
@@ -2026,7 +2055,7 @@ void geometryResolverVertex(
   {
     geometryResolverState.isViewModelSurface = true;
   }
-  if (rayInteraction.customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW)
+  if (rayHitInfo.customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW) 
   {
     geometryResolverState.isFirstPersonPlayerShadowSurface = true;
   }
@@ -2742,7 +2771,7 @@ void geometryPSRResolverVertex(
   {
     geometryPSRResolverState.isViewModelSurface = true;
   }
-  if (rayInteraction.customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW)
+  if (rayHitInfo.customIndex & CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW) 
   {
     geometryPSRResolverState.isFirstPersonPlayerShadowSurface = true;
   }

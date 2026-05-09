@@ -288,7 +288,6 @@ namespace dxvk {
     m_previousFrameSceneAvailable = false;
     m_startInMediumMaterialIndex = SURFACE_INDEX_INVALID;
     m_fogStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
-    m_externalStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
     m_startInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
     m_lastResolvedStartInMediumMaterialIndexInCache = kInvalidMaterialCacheIndex;
     m_lastUploadedStartInMediumMaterialIndexInCache = kInvalidMaterialCacheIndex;
@@ -1015,6 +1014,8 @@ namespace dxvk {
         }
       }
     }
+
+  }
 
   const FogState& SceneManager::getEffectiveFogState() const {
     return m_externalFog.has_value() ? *m_externalFog : m_fog;
@@ -1797,33 +1798,6 @@ namespace dxvk {
     return m_externalSampler;
   }
 
-  void SceneManager::setExternalStartInMediumMaterial(const MaterialData& translucentMaterial) {
-    assert(translucentMaterial.getType() == MaterialDataType::Translucent);
-
-    const auto samplerIndex = trackSampler(getOrCreateExternalSampler());
-    const auto surfaceMaterial = RtSurfaceMaterial(
-      createTranslucentSurfaceMaterial(translucentMaterial.getTranslucentMaterialData(), samplerIndex, true));
-
-    m_externalStartInMediumMaterialIndex_inCache = m_surfaceMaterialCache.track(surfaceMaterial);
-  }
-
-  void SceneManager::clearExternalStartInMediumMaterial() {
-    m_externalStartInMediumMaterialIndex_inCache = UINT32_MAX;
-  }
-
-  void SceneManager::setStartInMediumMaterial(const MaterialData& translucentMaterial) {
-    assert(translucentMaterial.getType() == MaterialDataType::Translucent);
-    std::lock_guard lock { m_startInMediumMaterialMutex };
-    m_pendingClearStartInMediumMaterial = false;
-    m_pendingStartInMediumMaterial = translucentMaterial;
-  }
-
-  void SceneManager::clearStartInMediumMaterial() {
-    std::lock_guard lock { m_startInMediumMaterialMutex };
-    m_pendingStartInMediumMaterial.reset();
-    m_pendingClearStartInMediumMaterial = true;
-  }
-
   std::optional<XXH64_hash_t> SceneManager::findLegacyTextureHashByObjectPickingValue(uint32_t objectPickingValue) {
     std::lock_guard lock { m_drawCallMeta.mutex };
 
@@ -2092,63 +2066,7 @@ namespace dxvk {
       m_cameraManager.getCamera(CameraType::Main),
       m_cameraManager.isCameraValid(CameraType::ViewModel) ? &m_cameraManager.getCamera(CameraType::ViewModel) : nullptr);
 
-    {
-      const uint32_t previousStartInMediumMaterialIndexInCache = m_lastResolvedStartInMediumMaterialIndexInCache;
-      std::optional<MaterialData> pendingStartInMediumMaterial;
-      uint32_t persistentStartInMediumMaterialIndexInCache = kInvalidMaterialCacheIndex;
-      bool clearStartInMediumMaterial = false;
-      {
-        std::lock_guard lock { m_startInMediumMaterialMutex };
-        clearStartInMediumMaterial = m_pendingClearStartInMediumMaterial;
-        m_pendingClearStartInMediumMaterial = false;
-        if (m_pendingStartInMediumMaterial.has_value()) {
-          pendingStartInMediumMaterial = std::move(m_pendingStartInMediumMaterial);
-          m_pendingStartInMediumMaterial.reset();
-        }
-      }
-
-      if (clearStartInMediumMaterial) {
-        m_persistentStartInMediumMaterial.reset();
-      }
-
-      if (pendingStartInMediumMaterial.has_value()) {
-        m_persistentStartInMediumMaterial = std::move(pendingStartInMediumMaterial);
-      }
-
-      if (m_persistentStartInMediumMaterial.has_value()) {
-        assert(m_persistentStartInMediumMaterial->getType() == MaterialDataType::Translucent);
-        const auto samplerIndex = trackSampler(getOrCreateExternalSampler());
-        const auto surfaceMaterial = RtSurfaceMaterial(
-          createTranslucentSurfaceMaterial(m_persistentStartInMediumMaterial->getTranslucentMaterialData(), samplerIndex, true));
-        persistentStartInMediumMaterialIndexInCache = m_surfaceMaterialCache.track(surfaceMaterial);
-      }
-
-      m_startInMediumMaterialIndex_inCache = m_externalStartInMediumMaterialIndex_inCache != kInvalidMaterialCacheIndex
-        ? m_externalStartInMediumMaterialIndex_inCache
-        : persistentStartInMediumMaterialIndexInCache != kInvalidMaterialCacheIndex
-          ? persistentStartInMediumMaterialIndexInCache
-          : m_fogStartInMediumMaterialIndex_inCache;
-
-      if (m_startInMediumMaterialIndex_inCache != kInvalidMaterialCacheIndex &&
-          m_startInMediumMaterialIndex_inCache >= m_surfaceMaterialCache.getObjectTable().size()) {
-        Logger::debug(str::format(
-          "[RTX] Ignoring stale camera medium material cache index ", m_startInMediumMaterialIndex_inCache,
-          " on frame ", m_device->getCurrentFrameId(),
-          "; surfaceMaterialCacheSize=", m_surfaceMaterialCache.getObjectTable().size()));
-        m_startInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
-      }
-
-      if (m_startInMediumMaterialIndex_inCache != previousStartInMediumMaterialIndexInCache) {
-        Logger::debug(str::format(
-          "[RTX] View history invalidated due to camera medium change on frame ", m_device->getCurrentFrameId(),
-          ": previousStartInMediumInCache=", previousStartInMediumMaterialIndexInCache,
-          ", currentStartInMediumInCache=", m_startInMediumMaterialIndex_inCache,
-          ", cleared=", clearStartInMediumMaterial ? "true" : "false",
-          ", pendingSet=", pendingStartInMediumMaterial.has_value() ? "true" : "false"));
-        m_cameraManager.getMainCamera().invalidateViewHistory(m_device->getCurrentFrameId());
-      }
-      m_lastResolvedStartInMediumMaterialIndexInCache = m_startInMediumMaterialIndex_inCache;
-    }
+    m_startInMediumMaterialIndex_inCache = m_fogStartInMediumMaterialIndex_inCache;
 
     if (m_cameraManager.isCameraCutThisFrame()) {
       // Ignore camera cut events on teleportation so we don't flush the caches

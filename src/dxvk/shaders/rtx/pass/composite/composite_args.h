@@ -114,6 +114,12 @@ struct CompositeArgs {
 
   vec3 clearColorFinalColor;
   uint timeSinceStartMS;
+  
+  // HDR and UI Processing
+  uint enableHDR;
+  uint detectUITextures;
+  uint separateUIProcessing;
+  float skyFogOpacity;
 
   float alphaBlendSurfacePackMult; // for packing/unpacking hitT into Float16 in AlphaBlendSurface
   float postFilterThreshold;

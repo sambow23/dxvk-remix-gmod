@@ -137,10 +137,7 @@
 
 
 // Custom Index encoding
-#define CUSTOM_INDEX_IS_VIEW_MODEL     (1 << 23)
 #define CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW (1 << 24)
-#define CUSTOM_INDEX_MATERIAL_TYPE_BIT (21)
-#define CUSTOM_INDEX_SURFACE_MASK      ((1 << CUSTOM_INDEX_MATERIAL_TYPE_BIT) - 1)
 
 // Custom Index encoding (24-bit VkAccelerationStructureInstanceKHR.instanceCustomIndex)
 //   Bits  0..20 : surface index  (CUSTOM_INDEX_SURFACE_MASK)
