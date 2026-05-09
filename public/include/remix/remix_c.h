@@ -138,7 +138,6 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_TEXTURE_INFO                         = 25,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT     = 26,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT      = 27,
-    REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO                    = 28,
     REMIXAPI_STRUCT_TYPE_FOG_INFO                              = 29,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
@@ -425,15 +424,6 @@ extern "C" {
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetupCamera)(
     const remixapi_CameraInfo* info);
-
-  typedef struct remixapi_CameraMediumInfo {
-    remixapi_StructType     sType;
-    void*                   pNext;
-    remixapi_MaterialHandle medium;
-  } remixapi_CameraMediumInfo;
-
-  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetCameraMediumMaterial)(
-    const remixapi_CameraMediumInfo* info);
 
 
 

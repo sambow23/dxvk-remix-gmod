@@ -326,6 +326,22 @@ namespace dxvk {
     };
     ScreenTintState m_screenTint {};
 
+    // Sky camera state tracking
+    uint32_t m_lastSkyCameraFrame = 0;         // Frame when sky camera was last seen
+    uint32_t m_skyGeometryQueuedFrame = 0;     // Frame when sky geometry was first queued
+    XXH64_hash_t m_lastSkyCameraSignature = 0; // Signature of the last seen sky camera
+    XXH64_hash_t m_lastMainCameraSignature = 0; // Signature of the last seen main camera
+
+    // Sky camera helper methods
+    bool isSkyCameraStale() const;
+    void updateSkyCameraState();
+    void cleanupStaleDelayedSkyGeometry();
+    bool isSkyCameraDataValid(const DrawCallState& skyGeometry) const;
+    bool shouldFallbackToRasterization() const;
+    XXH64_hash_t calculateCameraSignature(const DrawCallTransforms& transforms) const;
+    bool isConflictingCameraRender(const DrawCallState& drawCallState) const;
+    void resetCameraSignatures();
+
 #ifdef REMIX_DEVELOPMENT
     void queryAvailableResourceAliasing();
     void clearResourceAliasingCache();

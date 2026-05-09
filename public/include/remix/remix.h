@@ -194,7 +194,6 @@ namespace remix {
     Result< remixapi_MeshHandle >     CreateMeshBatched(const remixapi_MeshInfo& info);
     Result< void >                    DestroyMesh(remixapi_MeshHandle handle);
     Result< void >                    SetupCamera(const remixapi_CameraInfo& info);
-    Result< void >                    SetCameraMediumMaterial(remixapi_MaterialHandle medium);
     Result< void >                    DrawInstance(const remixapi_InstanceInfo& info);
     Result< remixapi_LightHandle >    CreateLight(const remixapi_LightInfo& info);
     Result< remixapi_LightHandle >    CreateLightBatched(const remixapi_LightInfo& info);
@@ -252,7 +251,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 336 + sizeof(void*),
+      static_assert(sizeof(remixapi_Interface) == 336,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -804,18 +803,6 @@ namespace remix {
 
   inline Result< void > Interface::SetupCamera(const remixapi_CameraInfo& info) {
     return m_CInterface.SetupCamera(&info);
-  }
-
-  inline Result< void > Interface::SetCameraMediumMaterial(remixapi_MaterialHandle medium) {
-    if (!m_CInterface.SetCameraMediumMaterial) {
-      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
-    }
-
-    remixapi_CameraMediumInfo info {};
-    info.sType = REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO;
-    info.pNext = nullptr;
-    info.medium = medium;
-    return m_CInterface.SetCameraMediumMaterial(&info);
   }
 
 
