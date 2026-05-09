@@ -58,7 +58,7 @@
 
 #define REMIXAPI_VERSION_MAJOR 0
 #define REMIXAPI_VERSION_MINOR 6
-#define REMIXAPI_VERSION_PATCH 3
+#define REMIXAPI_VERSION_PATCH 2
 
 
 // External
@@ -129,8 +129,10 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_STARTUP_INFO                         = 22,
     REMIXAPI_STRUCT_TYPE_PRESENT_INFO                         = 23,
     REMIXAPI_STRUCT_TYPE_DEPRECATED_LEGACY_PARTICLE_SYSTEM    = 24,
-    REMIXAPI_STRUCT_TYPE_TEXTURE_INFO                         = 25,
-    REMIXAPI_STRUCT_TYPE_FOG_INFO                             = 26,
+    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT    = 25,
+    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT     = 26,
+    REMIXAPI_STRUCT_TYPE_TEXTURE_INFO                         = 27,
+    REMIXAPI_STRUCT_TYPE_FOG_INFO                             = 28,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -410,15 +412,6 @@ extern "C" {
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetupCamera)(
     const remixapi_CameraInfo* info);
-
-  typedef struct remixapi_CameraMediumInfo {
-    remixapi_StructType     sType;
-    void*                   pNext;
-    remixapi_MaterialHandle medium;
-  } remixapi_CameraMediumInfo;
-
-  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetCameraMediumMaterial)(
-    const remixapi_CameraMediumInfo* info);
 
 
 
@@ -976,7 +969,6 @@ extern "C" {
     PFN_remixapi_CreateMeshBatched  CreateMeshBatched;
     PFN_remixapi_DestroyMesh        DestroyMesh;
     PFN_remixapi_SetupCamera        SetupCamera;
-    PFN_remixapi_SetCameraMediumMaterial SetCameraMediumMaterial;
     PFN_remixapi_DrawInstance       DrawInstance;
     PFN_remixapi_CreateLight        CreateLight;
     PFN_remixapi_CreateLightBatched CreateLightBatched;

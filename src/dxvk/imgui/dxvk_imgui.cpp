@@ -279,6 +279,13 @@ namespace dxvk {
       {SkyAutoDetectMode::CameraPositionAndDepthFlags, "By Camera Position and Depth Flags"}
   } });
 
+  static auto skyModeCombo = RemixGui::ComboWithKey<SkyMode>(
+    "Sky Mode",
+    RemixGui::ComboWithKey<SkyMode>::ComboEntries{ {
+      {SkyMode::SkyboxRasterization, "Skybox Rasterization"},
+      {SkyMode::PhysicalAtmosphere, "Physical Atmosphere"}
+  } });
+
   static auto upscalerNoDLSSCombo = RemixGui::ComboWithKey<UpscalerType>(
     "Upscaler Type",
     { {
@@ -2823,10 +2830,10 @@ namespace dxvk {
         
         // Sky mode selection
         skyModeCombo.getKey(&RtxOptions::skyModeObject());
-        ImGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nPhysical Atmosphere: Hillaire atmospheric scattering");
+        RemixGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nPhysical Atmosphere: Hillaire atmospheric scattering");
         
         if (RtxOptions::skyMode() == SkyMode::SkyboxRasterization) {
-          ImGui::DragFloat("Sky Brightness", &RtxOptions::skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
+          RemixGui::DragFloat("Sky Brightness", &RtxOptions::skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
         } else {
           // Atmosphere Presets
           ImGui::Separator();
@@ -2843,7 +2850,7 @@ namespace dxvk {
             RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
             RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
           }
-          ImGui::SetTooltipToLastWidgetOnHover("Physically accurate Earth atmosphere parameters from Hillaire paper");
+          RemixGui::SetTooltipToLastWidgetOnHover("Physically accurate Earth atmosphere parameters from Hillaire paper");
           
           ImGui::SameLine();
           if (ImGui::Button("Mars", ImVec2(120, 0))) {
@@ -2857,7 +2864,7 @@ namespace dxvk {
             RtxOptions::ozoneLayerAltitudeObject().setImmediately(0.0f);
             RtxOptions::ozoneLayerWidthObject().setImmediately(1.0f);
           }
-          ImGui::SetTooltipToLastWidgetOnHover("Mars-like atmosphere: thin, dusty, yellowish sky with blue sunsets");
+          RemixGui::SetTooltipToLastWidgetOnHover("Mars-like atmosphere: thin, dusty, yellowish sky with blue sunsets");
           
           ImGui::SameLine();
           if (ImGui::Button("Clear Sky", ImVec2(120, 0))) {
@@ -2871,7 +2878,7 @@ namespace dxvk {
             RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
             RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
           }
-          ImGui::SetTooltipToLastWidgetOnHover("Crystal clear atmosphere with minimal haze");
+          RemixGui::SetTooltipToLastWidgetOnHover("Crystal clear atmosphere with minimal haze");
           
           if (ImGui::Button("Polluted/Hazy", ImVec2(120, 0))) {
             RtxOptions::sunIlluminanceObject().setImmediately(Vector3(18.0f, 18.0f, 18.0f));
@@ -2884,7 +2891,7 @@ namespace dxvk {
             RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
             RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
           }
-          ImGui::SetTooltipToLastWidgetOnHover("Heavy atmospheric haze with strong light scattering");
+          RemixGui::SetTooltipToLastWidgetOnHover("Heavy atmospheric haze with strong light scattering");
           
           ImGui::SameLine();
           if (ImGui::Button("Alien World", ImVec2(120, 0))) {
@@ -2898,7 +2905,7 @@ namespace dxvk {
             RtxOptions::ozoneLayerAltitudeObject().setImmediately(30.0f);
             RtxOptions::ozoneLayerWidthObject().setImmediately(20.0f);
           }
-          ImGui::SetTooltipToLastWidgetOnHover("Fictional alien atmosphere with green-tinted scattering");
+          RemixGui::SetTooltipToLastWidgetOnHover("Fictional alien atmosphere with green-tinted scattering");
           
           ImGui::SameLine();
           if (ImGui::Button("Desert Planet", ImVec2(120, 0))) {
@@ -2912,51 +2919,51 @@ namespace dxvk {
             RtxOptions::ozoneLayerAltitudeObject().setImmediately(20.0f);
             RtxOptions::ozoneLayerWidthObject().setImmediately(10.0f);
           }
-          ImGui::SetTooltipToLastWidgetOnHover("Hot, arid world with sandy atmospheric dust");
+          RemixGui::SetTooltipToLastWidgetOnHover("Hot, arid world with sandy atmospheric dust");
           
           ImGui::Separator();
           
           // Physical Atmosphere controls (Blender Style)
           if (ImGui::TreeNode("Atmosphere Parameters")) {
             
-            ImGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f°", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
+            RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f°", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
             
-            ImGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
+            RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
             
-            ImGui::DragFloat("Sun Volumetric Radiance Scale", &RtxOptions::sunVolumetricRadianceScaleObject(), 0.05f, 0.0f, 100.0f, "%.3f", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Multiplier for the sun's direct contribution to volumetric lighting. Lower values reduce 'glow' on translucent surfaces in direct sunlight.");
+            RemixGui::DragFloat("Sun Volumetric Radiance Scale", &RtxOptions::sunVolumetricRadianceScaleObject(), 0.05f, 0.0f, 100.0f, "%.3f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Multiplier for the sun's direct contribution to volumetric lighting. Lower values reduce 'glow' on translucent surfaces in direct sunlight.");
             
-            ImGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f°", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
+            RemixGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f°", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
             
-            ImGui::DragFloat("Sun Rotation", &RtxOptions::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f°", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
+            RemixGui::DragFloat("Sun Rotation", &RtxOptions::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f°", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
             
-            ImGui::DragFloat("Altitude", &RtxOptions::altitudeObject(), 1.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Height from sea level");
+            RemixGui::DragFloat("Altitude", &RtxOptions::altitudeObject(), 1.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Height from sea level");
             
-            ImGui::DragFloat("Air", &RtxOptions::airDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Density of air molecules");
+            RemixGui::DragFloat("Air", &RtxOptions::airDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Density of air molecules");
             
-            ImGui::DragFloat("Dust", &RtxOptions::aerosolDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Density of aerosols/dust");
+            RemixGui::DragFloat("Dust", &RtxOptions::aerosolDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Density of aerosols/dust");
             
-            ImGui::DragFloat("Ozone", &RtxOptions::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            ImGui::SetTooltipToLastWidgetOnHover("Density of ozone layer");
+            RemixGui::DragFloat("Ozone", &RtxOptions::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover("Density of ozone layer");
             
             if (ImGui::TreeNode("Advanced")) {
-              ImGui::DragFloat("Planet Radius", &RtxOptions::planetRadiusObject(), 10.0f, 1000.0f, 10000.0f, "%.0f km", sliderFlags);
-              ImGui::DragFloat("Atmosphere Thickness", &RtxOptions::atmosphereThicknessObject(), 1.0f, 10.0f, 500.0f, "%.0f km", sliderFlags);
-              ImGui::DragFloat("Mie Anisotropy", &RtxOptions::mieAnisotropyObject(), 0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
+              RemixGui::DragFloat("Planet Radius", &RtxOptions::planetRadiusObject(), 10.0f, 1000.0f, 10000.0f, "%.0f km", sliderFlags);
+              RemixGui::DragFloat("Atmosphere Thickness", &RtxOptions::atmosphereThicknessObject(), 1.0f, 10.0f, 500.0f, "%.0f km", sliderFlags);
+              RemixGui::DragFloat("Mie Anisotropy", &RtxOptions::mieAnisotropyObject(), 0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
               
-              ImGui::DragFloat3("Base Sun Illuminance", &RtxOptions::sunIlluminanceObject(), 0.1f, 0.0f, 100.0f, "%.1f", sliderFlags);
-              ImGui::DragFloat3("Base Rayleigh", &RtxOptions::rayleighScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
-              ImGui::DragFloat3("Base Mie", &RtxOptions::mieScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
-              ImGui::DragFloat3("Base Ozone", &RtxOptions::ozoneAbsorptionObject(), 0.0001f, 0.0f, 0.01f, "%.6f", sliderFlags);
-              ImGui::DragFloat("Ozone Layer Altitude", &RtxOptions::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
-              ImGui::DragFloat("Ozone Layer Width", &RtxOptions::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
+              RemixGui::DragFloat3("Base Sun Illuminance", &RtxOptions::sunIlluminanceObject(), 0.1f, 0.0f, 100.0f, "%.1f", sliderFlags);
+              RemixGui::DragFloat3("Base Rayleigh", &RtxOptions::rayleighScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
+              RemixGui::DragFloat3("Base Mie", &RtxOptions::mieScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
+              RemixGui::DragFloat3("Base Ozone", &RtxOptions::ozoneAbsorptionObject(), 0.0001f, 0.0f, 0.01f, "%.6f", sliderFlags);
+              RemixGui::DragFloat("Ozone Layer Altitude", &RtxOptions::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
+              RemixGui::DragFloat("Ozone Layer Width", &RtxOptions::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
               
               ImGui::TreePop();
             }
@@ -2965,8 +2972,8 @@ namespace dxvk {
           }
         }
         
-        ImGui::InputInt("First N Untextured Draw Calls", &RtxOptions::skyDrawcallIdThresholdObject(), 1, 1, 0);
-        ImGui::SliderFloat("Sky Min Z Threshold", &RtxOptions::skyMinZThresholdObject(), 0.0f, 1.0f);
+        RemixGui::InputInt("First N Untextured Draw Calls", &RtxOptions::skyDrawcallIdThresholdObject(), 1, 1, 0);
+        RemixGui::SliderFloat("Sky Min Z Threshold", &RtxOptions::skyMinZThresholdObject(), 0.0f, 1.0f);
         skyAutoDetectCombo.getKey(&RtxOptions::skyAutoDetectObject());
 
         if (RemixGui::CollapsingHeader("Advanced", collapsingHeaderClosedFlags)) {

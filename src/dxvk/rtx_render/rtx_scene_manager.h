@@ -157,9 +157,6 @@ public:
   // Remove an externally created mesh and all associated replacement instances.
   void destroyExternalMesh(remixapi_MeshHandle handle);
   
-  void setExternalStartInMediumMaterial(const MaterialData& translucentMaterial);
-  void clearExternalStartInMediumMaterial();
-  
   bool areAllReplacementsLoaded() const;
   std::vector<Mod::State> getReplacementStates() const;
 
@@ -357,7 +354,6 @@ private:
   fast_unordered_cache<FogState> m_fogStates;
   uint32_t m_startInMediumMaterialIndex = SURFACE_INDEX_INVALID;
   uint32_t m_fogStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
-  uint32_t m_externalStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
   uint32_t m_startInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
 
   // TODO: Move the following resources and getters to RtResources class

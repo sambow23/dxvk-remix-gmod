@@ -259,7 +259,6 @@ namespace dxvk {
     m_previousFrameSceneAvailable = false;
     m_startInMediumMaterialIndex = SURFACE_INDEX_INVALID;
     m_fogStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
-    m_externalStartInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
     m_startInMediumMaterialIndex_inCache = kInvalidMaterialCacheIndex;
   }
 
@@ -885,6 +884,8 @@ namespace dxvk {
       }
     }
 
+  }
+
   const FogState& SceneManager::getEffectiveFogState() const {
     return m_externalFog.has_value() ? *m_externalFog : m_fog;
   }
@@ -1465,20 +1466,6 @@ namespace dxvk {
     return m_externalSampler;
   }
 
-  void SceneManager::setExternalStartInMediumMaterial(const MaterialData& translucentMaterial) {
-    assert(translucentMaterial.getType() == MaterialDataType::Translucent);
-
-    const auto samplerIndex = trackSampler(getOrCreateExternalSampler());
-    const auto surfaceMaterial = RtSurfaceMaterial(
-      createTranslucentSurfaceMaterial(translucentMaterial.getTranslucentMaterialData(), samplerIndex, true));
-
-    m_externalStartInMediumMaterialIndex_inCache = m_surfaceMaterialCache.track(surfaceMaterial);
-  }
-
-  void SceneManager::clearExternalStartInMediumMaterial() {
-    m_externalStartInMediumMaterialIndex_inCache = UINT32_MAX;
-  }
-
   std::optional<XXH64_hash_t> SceneManager::findLegacyTextureHashByObjectPickingValue(uint32_t objectPickingValue) {
     std::lock_guard lock { m_drawCallMeta.mutex };
 
@@ -1731,9 +1718,7 @@ namespace dxvk {
       m_cameraManager.getCamera(CameraType::Main),
       m_cameraManager.isCameraValid(CameraType::ViewModel) ? &m_cameraManager.getCamera(CameraType::ViewModel) : nullptr);
 
-    m_startInMediumMaterialIndex_inCache = m_externalStartInMediumMaterialIndex_inCache != kInvalidMaterialCacheIndex
-      ? m_externalStartInMediumMaterialIndex_inCache
-      : m_fogStartInMediumMaterialIndex_inCache;
+    m_startInMediumMaterialIndex_inCache = m_fogStartInMediumMaterialIndex_inCache;
 
     if (m_cameraManager.isCameraCutThisFrame()) {
       // Ignore camera cut events on teleportation so we don't flush the caches

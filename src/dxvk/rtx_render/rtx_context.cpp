@@ -28,6 +28,7 @@
 
 #include "dxvk_device.h"
 #include "dxvk_scoped_annotation.h"
+#include "rtx_fork_hooks.h"
 #include "rtx_shader_manager.h"
 #include "dxvk_adapter.h"
 #include "rtx_context.h"

@@ -325,18 +325,6 @@ namespace dxvk {
       float a = 0.0f;
     };
     ScreenTintState m_screenTint {};
-
-    IntegrateIndirectMode m_prevIntegrateIndirectMode = IntegrateIndirectMode::Count;
-
-    DxvkRaytracingInstanceState m_rtState;
-
-    struct {
-      std::atomic<uint64_t>           signalValue = 1;
-      Rc<sync::Fence>                 signal = new sync::Fence{};
-      std::vector<std::future<void>>  asyncTasks = {};
-    } m_objectPickingReadback {};
-
-    std::vector<DrawCallState> m_delayedRayTracedSky;
     
     // Sky camera state tracking
     uint32_t m_lastSkyCameraFrame = 0;         // Frame when sky camera was last seen

@@ -760,7 +760,7 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_FIRST_PERSON_PLAYER_SHADOW){ result.set(InstanceCategories::FirstPersonPlayerShadow); }
       // Note: Occluder category is not exposed through the Remix API as it's primarily for Source engine NODRAW materials
       
-      static_assert((int)InstanceCategories::Count == 27, "Instance categories changed, please update Remix SDK");
+      static_assert((int)InstanceCategories::Count == 28, "Instance categories changed, please update Remix SDK");
       return result;
     }
 
@@ -1378,41 +1378,6 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetCameraMediumMaterial(
-    const remixapi_CameraMediumInfo* info) {
-    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
-    if (!remixDevice) {
-      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
-    }
-    if (!info || info->sType != REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    const remixapi_MaterialHandle handle = info->medium;
-
-    std::lock_guard lock { s_mutex };
-    remixDevice->EmitCs([handle](dxvk::DxvkContext* ctx) {
-      auto& sceneManager = ctx->getCommonObjects()->getSceneManager();
-      if (handle == nullptr) {
-        sceneManager.clearExternalStartInMediumMaterial();
-        return;
-      }
-
-      const dxvk::MaterialData* material = sceneManager.getAssetReplacer()->accessExternalMaterial(handle);
-      if (material == nullptr) {
-        dxvk::Logger::warn("SetCameraMediumMaterial: material handle not found");
-        return;
-      }
-      if (material->getType() != dxvk::MaterialDataType::Translucent) {
-        dxvk::Logger::warn("SetCameraMediumMaterial: material must be translucent");
-        return;
-      }
-
-      sceneManager.setExternalStartInMediumMaterial(*material);
-    });
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawInstance(
     const remixapi_InstanceInfo* info) {
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
@@ -1664,13 +1629,6 @@ namespace {
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
     if (!remixDevice) {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
-    }
-
-    if (!s_inFrame.exchange(true)) {
-      auto cb = s_beginCallback;
-      if (cb) {
-        cb();
-      }
     }
 
     dxvk::FogState fog;
@@ -2474,7 +2432,7 @@ extern "C"
   }
 
   REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
-    return impl_GetUIState();
+    return dxvk::fork_hooks::getUiState(tryAsDxvk());
   }
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetFogState(
@@ -2491,10 +2449,6 @@ extern "C"
   }
   
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
-    return impl_SetUIState(state);
-  }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
     return dxvk::fork_hooks::setUiState(tryAsDxvk(), state);
   }
 
@@ -2536,7 +2490,6 @@ extern "C"
       interf.CreateMesh = remixapi_CreateMesh;
       interf.DestroyMesh = remixapi_DestroyMesh;
       interf.SetupCamera = remixapi_SetupCamera;
-      interf.SetCameraMediumMaterial = remixapi_SetCameraMediumMaterial;
       interf.DrawInstance = remixapi_DrawInstance;
       interf.CreateLight = remixapi_CreateLight;
       interf.DestroyLight = remixapi_DestroyLight;
@@ -2564,7 +2517,7 @@ extern "C"
       interf.SetFogState = remixapi_SetFogState;
       interf.SetScreenTint = remixapi_SetScreenTint;
     }
-    static_assert(sizeof(interf) == 280 + sizeof(void*), "Add/remove function registration");
+    static_assert(sizeof(interf) == 296, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

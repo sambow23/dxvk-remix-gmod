@@ -122,4 +122,9 @@ struct CompositeArgs {
   uint detectUITextures;
   uint separateUIProcessing;
   float skyFogOpacity;
+
+  float alphaBlendSurfacePackMult; // for packing/unpacking hitT into Float16 in AlphaBlendSurface
+  float pad1;
+  float pad2;
+  float pad3;
 };

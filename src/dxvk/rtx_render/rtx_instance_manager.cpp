@@ -928,7 +928,6 @@ namespace dxvk {
     currentInstance.m_isHidden = currentInstance.testCategoryFlags(InstanceCategories::Hidden);
     currentInstance.m_isPlayerModel = currentInstance.testCategoryFlags(InstanceCategories::ThirdPersonPlayerModel);
     currentInstance.m_isWorldSpaceUI = currentInstance.testCategoryFlags(InstanceCategories::WorldUI);
-    currentInstance.m_isLegacyEmissive = currentInstance.testCategoryFlags(InstanceCategories::LegacyEmissive);
     currentInstance.setCustomIndexBit(
       CUSTOM_INDEX_IS_FIRST_PERSON_PLAYER_SHADOW,
       currentInstance.testCategoryFlags(InstanceCategories::FirstPersonPlayerShadow));

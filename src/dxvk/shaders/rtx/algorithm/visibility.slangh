@@ -430,43 +430,6 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
         continue;
       }
 
-      // If we've passed through an occluder, check if this committed hit is also inside the occluder volume
-      // We need to check if this hit surface is an occluder and update the flag
-      if (!passedThroughOccluder)
-      {
-        // Check if the committed surface is an occluder
-        // Calculate surface index the same way as calculateSurfaceIndex()
-        uint committedGeometryIndex = rayQuery.CommittedGeometryIndex();
-        
-        if (!usePreviousTLAS || !(committedCustomIndex & CUSTOM_INDEX_IS_VIEW_MODEL))
-        {
-          uint16_t surfaceIdx = uint16_t((committedCustomIndex & CUSTOM_INDEX_SURFACE_MASK) + committedGeometryIndex);
-          if (usePreviousTLAS)
-          {
-            surfaceIdx = surfaceMapping[surfaceIdx];
-          }
-          if (surfaceIdx != BINDING_INDEX_INVALID)
-          {
-            Surface committedSurface = surfaces[uint(surfaceIdx)];
-            if (committedSurface.isOccluder)
-            {
-              passedThroughOccluder = true;
-            }
-          }
-        }
-      }
-
-      // If we've passed through an occluder, treat the entire ray as fully transparent
-      // This is much faster than retracing the ray - all geometry inside/behind the occluder is ignored
-      if (passedThroughOccluder)
-      {
-        // Return full transparency - no shadow from anything inside the occluder volume
-        // Explicitly reset attenuation to ensure complete transparency
-        result.attenuation = f16vec3(1.0);
-        result.hasOpaqueHit = false;
-        break;
-      }
-
       if (clearOpaqueHitAttenuation)
       {
         result.attenuation = vec3(0.0f);
