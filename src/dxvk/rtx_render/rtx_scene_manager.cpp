@@ -1973,7 +1973,12 @@ namespace dxvk {
     const Vector3 worldPos = xform[3].xyz();
 
     const ReplacementInstance::LookupKey externalKey { identityHash, spatialMapHash, matHash, kEmptyHash, worldPos, xform };
-    ReplacementInstance* replacementInstance = m_drawCallTracker.findOrCreateReplacementInstance(externalKey);
+    // External API meshes frequently use placeholder material hashes (often 0) and
+    // are managed at a higher level by the client. Allowing tracker cross-topology
+    // fallback here lets unrelated external draws in the same generic material bucket
+    // steal each other's ReplacementInstances, which shows up as mesh/material
+    // instability. Keep external matching to exact identity / exact-transform only.
+    ReplacementInstance* replacementInstance = m_drawCallTracker.findOrCreateReplacementInstance(externalKey, false);
 
     if (std::vector<AssetReplacement>* pReplacements = fork_hooks::externalDrawMeshReplacement(*m_pReplacer, meshHash)) {
       // Copy the DrawCallState so we don't mutate the caller's state. Point geometryData
@@ -2044,10 +2049,14 @@ namespace dxvk {
   }
 
   void SceneManager::destroyExternalMesh(remixapi_MeshHandle handle) {
-    if (handle) {
-      m_drawCallTracker.removeReplacementInstancesWithSpatialMapHash(
-          spatialMapHashForExternalDrawMesh(handle));
-    }
+    // External API clients commonly destroy and recreate logical meshes as part of
+    // normal updates (for example when chunk contents, cloud quads, or particles
+    // are rebuilt). Eagerly invalidating tracked replacement instances on
+    // DestroyMesh forces that churn into the DrawCallTracker and prevents the
+    // normal exact-transform / cross-topology reassociation paths from reusing the
+    // same logical object across frames. Let the next DrawInstance submission
+    // re-associate the object, and let regular tracker GC retire meshes that are
+    // actually gone.
     m_pReplacer->destroyExternalMesh(handle);
   }
 
