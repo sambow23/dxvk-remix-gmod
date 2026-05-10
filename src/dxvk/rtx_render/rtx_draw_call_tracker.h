@@ -56,7 +56,8 @@ public:
   // render MaterialData is not required for tracking.
   // Portal-aware matching for ViewModel draw calls is performed using the RayPortalManager.
   ReplacementInstance* findOrCreateReplacementInstance(
-    const ReplacementInstance::LookupKey& key);
+    const ReplacementInstance::LookupKey& key,
+    bool allowSpatialReassociation = true);
 
   // Wrapper for the above function that constructs the LookupKey from the DrawCallState.
   ReplacementInstance* findOrCreateReplacementInstance(
