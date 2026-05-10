@@ -169,7 +169,8 @@ namespace dxvk {
   }
 
   ReplacementInstance* DrawCallTracker::findOrCreateReplacementInstance(
-      const ReplacementInstance::LookupKey& key) {
+      const ReplacementInstance::LookupKey& key,
+      bool allowSpatialReassociation) {
     ScopedCpuProfileZone();
     const uint32_t currentFrameId = m_device->getCurrentFrameId();
 
@@ -226,18 +227,20 @@ namespace dxvk {
         return exactTransformMatch;
       }
 
-      // Spatial nearest-neighbor search
-      float nearestDistSqr = FLT_MAX;
-      const ReplacementInstance* nearestMatch = spatialMapIter->second.getNearestData(
-        key.worldPos, uniqueObjectDistanceSqr, nearestDistSqr, l2Filter);
+      if (allowSpatialReassociation) {
+        // Spatial nearest-neighbor search
+        float nearestDistSqr = FLT_MAX;
+        const ReplacementInstance* nearestMatch = spatialMapIter->second.getNearestData(
+          key.worldPos, uniqueObjectDistanceSqr, nearestDistSqr, l2Filter);
 
-      if (nearestMatch != nullptr) {
-        // Compute diff before reassociation overwrites the cached fields. The
-        // transform differs (otherwise we would have hit the exact-transform
-        // branch above); other fields may also have changed.
-        ReplacementInstance* match = const_cast<ReplacementInstance*>(nearestMatch);
-        computeDirtyFlags(match, key);
-        return reassociateMatch(match, key, &spatialMapIter->second);
+        if (nearestMatch != nullptr) {
+          // Compute diff before reassociation overwrites the cached fields. The
+          // transform differs (otherwise we would have hit the exact-transform
+          // branch above); other fields may also have changed.
+          ReplacementInstance* match = const_cast<ReplacementInstance*>(nearestMatch);
+          computeDirtyFlags(match, key);
+          return reassociateMatch(match, key, &spatialMapIter->second);
+        }
       }
     }
 
