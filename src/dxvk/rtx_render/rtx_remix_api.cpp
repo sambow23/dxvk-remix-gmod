@@ -1568,10 +1568,13 @@ namespace {
 
     // async load
     std::lock_guard lock { s_mutex };
-    remixDevice->EmitCs([lightHandle](dxvk::DxvkContext* ctx) {
-      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
-      lightMgr.addExternalLightInstance(lightHandle);
-    });
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([lightHandle](dxvk::DxvkContext* ctx) {
+        auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+        lightMgr.addExternalLightInstance(lightHandle);
+      });
+    }
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
@@ -2562,6 +2565,7 @@ extern "C"
       interf.SetupCamera = remixapi_SetupCamera;
       interf.DrawInstance = remixapi_DrawInstance;
       interf.CreateLight = remixapi_CreateLight;
+      interf.CreateLightBatched = remixapi_CreateLightBatched;
       interf.DestroyLight = remixapi_DestroyLight;
       interf.DrawLightInstance = remixapi_DrawLightInstance;
       interf.SetConfigVariable = remixapi_SetConfigVariable;
@@ -2584,7 +2588,6 @@ extern "C"
       interf.GetUIState = remixapi_GetUIState;
       interf.SetUIState = remixapi_SetUIState;
       interf.DrawScreenOverlay = remixapi_DrawScreenOverlay;
-      interf.CreateLightBatched = remixapi_CreateLightBatched;
       interf.SetGameValue = remixapi_SetGameValue;
       interf.RequestVramCompaction = remixapi_RequestVramCompaction;
       interf.GetVramStats = remixapi_GetVramStats;
