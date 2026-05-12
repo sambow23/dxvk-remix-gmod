@@ -6,8 +6,8 @@
 set -e
 
 # SSH connection details
-SSH_HOST="cr@localhost"
-SSH_PORT="2222"
+SSH_HOST="cr@devpc"
+SSH_PORT="22"
 WINDOWS_REPO_PATH="C:\Users\cr\proj\dxvk-remix-gmod"
 
 echo "Starting remote configure on Windows VM..."
