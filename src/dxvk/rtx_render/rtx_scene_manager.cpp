@@ -477,9 +477,13 @@ namespace dxvk {
 
     manageTextureVram();
 
-    if (m_enqueueDelayedClear || m_pReplacer->checkForChanges(ctx)) {
+    if (m_enqueueDelayedClear) {
       clear(ctx, true);
       m_enqueueDelayedClear = false;
+    } else if (m_pReplacer->checkForChanges(ctx)) {
+      // Async reload completed - clear caches without waitForIdle()
+      // The GPU doesn't need to be idle for us to swap data structures
+      clear(ctx, false);
     }
 
     m_cameraManager.onFrameEnd();
@@ -2152,6 +2156,10 @@ namespace dxvk {
 
   void SceneManager::clearFrameMeshHashes() {
     m_currentFrameMeshHashes.clear();
+  }
+
+  void SceneManager::enqueueClearForNextFrame() {
+    m_enqueueDelayedClear = true;
   }
 
 }  // namespace dxvk
