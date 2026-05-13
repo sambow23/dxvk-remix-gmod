@@ -345,6 +345,9 @@ namespace dxvk {
     for (auto&& pair : m_sceneManager.getLightManager().getExternallyTrackedLightTable()) {
       captureLight(pair.second);
     }
+    for (auto&& pair : m_sceneManager.getLightManager().getExternalLights()) {
+      captureLight(pair.second);
+    }
   }
 
   void GameCapturer::captureSphereLight(const dxvk::RtSphereLight& rtLight) {
