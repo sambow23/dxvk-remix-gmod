@@ -258,7 +258,7 @@ void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool 
 
   // Note: Sphere light type (0) + shaping enabled flag + ignoreViewModel flag
   uint32_t flags = lightTypeSphere << 29; // Light Type at bits 29,30,31.
-  flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
+  if (m_shaping.getEnabled()) flags |= 1 << 0; // Shaping enabled flag at bit 0
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
   writeGPUHelper(data, offset, flags);
 
@@ -413,7 +413,9 @@ void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ig
   // Note: Rect light type (1) + shaping enabled flag + ignoreViewModel flag
   uint32_t flags = lightTypeRect << 29; // Light Type at bits 29,30,31.
   flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
-  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (ignoreViewModel) {
+    flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  }
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -596,7 +598,9 @@ void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ig
   // Note: Disk light type (2) + shaping enabled flag + ignoreViewModel flag
   uint32_t flags = lightTypeDisk << 29; // Light Type at bits 29,30,31.
   flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
-  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (ignoreViewModel) {
+    flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  }
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -746,8 +750,10 @@ void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset, boo
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
   // Note: Cylinder light type (3) + ignoreViewModel flag
-  uint32_t flags = lightTypeCylinder << 29;
-  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  uint32_t flags = lightTypeCylinder << 29; // Light Type at bits 29,30,31.
+  if (ignoreViewModel) {
+    flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  }
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -885,8 +891,10 @@ void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool
 
   // Note: Distant light type (4) + ignoreViewModel flag
   // Todo: Ideally match this with GPU light type constants
-  uint32_t flags = lightTypeDistant << 29;
-  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  uint32_t flags = lightTypeDistant << 29; // Light Type at bits 29,30,31.
+  if (ignoreViewModel) {
+    flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  }
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);

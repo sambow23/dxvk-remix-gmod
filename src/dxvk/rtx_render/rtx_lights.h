@@ -131,7 +131,6 @@ struct RtSphereLight {
     const XXH64_hash_t forceHash = kForceHashDefaultValue);
 
   void applyTransform(const Matrix4& lightToWorld);
-
   void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtSphereLight& rhs) const = delete;
@@ -195,7 +194,6 @@ struct RtRectLight {
     float volumetricRadianceScale = kVolumetricRadianceScaleDefaultValue);
 
   void applyTransform(const Matrix4& lightToWorld);
-
   void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtRectLight& rhs) const = delete;
@@ -273,7 +271,6 @@ struct RtDiskLight {
     float volumetricRadianceScale = kVolumetricRadianceScaleDefaultValue);
 
   void applyTransform(const Matrix4& lightToWorld);
-
   void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtDiskLight& rhs) const = delete;
@@ -348,7 +345,6 @@ struct RtCylinderLight {
     const Vector3& radiance, float volumetricRadianceScale = kVolumetricRadianceScaleDefaultValue);
 
   void applyTransform(const Matrix4& lightToWorld);
-
   void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtCylinderLight& rhs) const = delete;
@@ -410,7 +406,6 @@ struct RtDistantLight {
     const XXH64_hash_t forceHash = kForceHashDefaultValue);
 
   void applyTransform(const Matrix4& lightToWorld);
-
   void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtDistantLight& rhs) const = delete;

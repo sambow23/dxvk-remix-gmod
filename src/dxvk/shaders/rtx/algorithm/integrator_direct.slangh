@@ -602,7 +602,6 @@ void integrateDirectPath(
     uint16_t lightIdx = kInvalidLightIdx;
     // Create synthetic customIndex based on geometry flags to forward view model status to light sampling.
     uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
-
     if (
       cb.enableRtxdi &&
       geometryFlags.primarySelectedIntegrationSurface)

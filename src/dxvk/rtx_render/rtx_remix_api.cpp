@@ -1497,7 +1497,6 @@ namespace {
 
       // Set the ignoreViewModel flag from the LightInfo
       rtLight->ignoreViewModel = info->ignoreViewModel;
-
       auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
         auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
@@ -2422,7 +2421,6 @@ extern "C"
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
-
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLightDefinition(
     remixapi_LightHandle handle,
     const remixapi_LightInfo* info) {
@@ -2456,7 +2454,6 @@ extern "C"
 
     // Set the isDynamic flag from the LightInfo
     rt->isDynamic = info->isDynamic;
-
     // Set the ignoreViewModel flag from the LightInfo
     rt->ignoreViewModel = info->ignoreViewModel;
 
@@ -2466,7 +2463,6 @@ extern "C"
     }
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
-
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterCallbacks(
     PFN_remixapi_BridgeCallback beginSceneCallback,
     PFN_remixapi_BridgeCallback endSceneCallback,
@@ -2496,7 +2492,6 @@ extern "C"
     std::lock_guard lock { s_mutex };
     return dxvk::fork_hooks::drawScreenOverlay(remixDevice, pPixelData, width, height, format, opacity);
   }
-
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,
                                                                        remixapi_Interface* out_result) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO) {

@@ -59,6 +59,8 @@ DecodedPolymorphicLight decodePolymorphicLight(MemoryPolymorphicLight memoryPoly
   decodedPolymorphicLight.shaping = lightShapingCreate(
     (flagData & (1u << 0)) != 0u,
     data11, data12, data13);
+  
+  decodedPolymorphicLight.ignoreViewModel = (flagData & (1u << 1)) != 0u;
 
   decodedPolymorphicLight.ignoreViewModel = (flagData & (1u << 1)) != 0u;
 
