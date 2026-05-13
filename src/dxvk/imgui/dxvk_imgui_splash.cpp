@@ -37,7 +37,7 @@ namespace dxvk {
            "When set to true this message will be hidden, otherwise it will be displayed on every launch.");
     // Note: 20 chosen as a default here to allow the message to persist long enough to read in case the user focuses on other information on the screen first (e.g.
     // shader compilation messages, text from the application itself in its startup sequence, etc).
-    RTX_OPTION("rtx", std::uint32_t, splashMessageDisplayTimeSeconds, 20, "The amount of time in seconds to display the Remix splash message for.");
+    RTX_OPTION("rtx", std::uint32_t, splashMessageDisplayTimeSeconds, 12, "The amount of time in seconds to display the Remix splash message for.");
     RTX_OPTION("rtx", std::string, welcomeMessage, "", "Display a message to the user on startup, leave empty if no message is to be displayed.");
   };
 

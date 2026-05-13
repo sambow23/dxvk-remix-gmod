@@ -388,7 +388,6 @@ extern "C" {
 
   REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void);
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state);
-
   typedef struct remixapi_CameraInfoParameterizedEXT {
     remixapi_StructType sType;
     void*               pNext;
