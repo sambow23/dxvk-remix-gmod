@@ -1263,6 +1263,19 @@ namespace dxvk {
     });
   }
 
+  void D3D9Rtx::FlushCompositing(const Rc<DxvkImage>& targetImage) {
+    if (m_rtxInjectTriggered)
+      return;
+
+    m_parent->Flush();
+
+    m_parent->EmitCs([cReflexFrameId = GetReflexFrameId(), targetImage](DxvkContext* ctx) {
+      static_cast<RtxContext*>(ctx)->injectRTX(cReflexFrameId, targetImage);
+    });
+
+    m_rtxInjectTriggered = true;
+  }
+
   void D3D9Rtx::EndFrame(const Rc<DxvkImage>& targetImage, bool callInjectRtx) {
     const auto currentReflexFrameId = GetReflexFrameId();
     
