@@ -22,6 +22,8 @@
 #pragma once
 
 #include "../../lssusd/mdl_helpers.h"
+#include "../../util/log/log.h"
+#include "../../util/util_string.h"
 
 #include "../../lssusd/usd_include_begin.h"
 #include <pxr/base/vt/value.h>
@@ -184,8 +186,13 @@
         target.m_dirty.set(DirtyFlags::k_##name); \
         pxr::VtValue val; \
         shader.GetAttribute(get##name##Token()).Get(&val); \
-        if(!val.IsEmpty()) \
-          target.m_##name = val.UncheckedGet<type>(); \
+        if(!val.IsEmpty()) { \
+          if(val.IsHolding<type>()) { \
+            target.m_##name = val.UncheckedGet<type>(); \
+          } else { \
+            Logger::warn(str::format("Material attribute ", #usd_attr, " has unexpected type, using default value")); \
+          } \
+        } \
       }
 
 #define WRITE_TEXTURE_DESERIALIZER(name, usd_attr, type, minVal, maxVal, defaultVal) \
