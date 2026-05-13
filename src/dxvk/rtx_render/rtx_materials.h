@@ -545,8 +545,8 @@ struct RtOpaqueSurfaceMaterial {
     float anisotropy, float emissiveIntensity,
     const Vector4& albedoOpacityConstant,
     float roughnessConstant, float metallicConstant,
-    const Vector3& emissiveColorConstant, bool enableEmission,
-    bool ignoreAlphaChannel, bool enableThinFilm, bool alphaIsThinFilmThickness, float thinFilmThicknessConstant,
+    const Vector3& emissiveColorConstant, bool enableEmission, bool emissiveAlphaMask, bool emissiveAlphaInvert,
+    const Vector3& emissiveColorTint, bool ignoreAlphaChannel, bool enableThinFilm, bool alphaIsThinFilmThickness, float thinFilmThicknessConstant,
     uint32_t samplerIndex, float displaceIn, float displaceOut,
     uint32_t subsurfaceMaterialIndex, bool isRaytracedRenderTarget,
     uint16_t samplerFeedbackStamp,
@@ -558,12 +558,13 @@ struct RtOpaqueSurfaceMaterial {
     m_anisotropy{ anisotropy }, m_emissiveIntensity{ emissiveIntensity },
     m_albedoOpacityConstant{ albedoOpacityConstant },
     m_roughnessConstant{ roughnessConstant }, m_metallicConstant{ metallicConstant },
-    m_emissiveColorConstant{ emissiveColorConstant }, m_enableEmission{ enableEmission },
-    m_ignoreAlphaChannel { ignoreAlphaChannel }, m_enableThinFilm { enableThinFilm }, m_alphaIsThinFilmThickness { alphaIsThinFilmThickness },
+    m_emissiveColorConstant{ emissiveColorConstant }, m_enableEmission{ enableEmission }, m_emissiveAlphaMask{ emissiveAlphaMask }, m_emissiveAlphaInvert{ emissiveAlphaInvert },
+    m_emissiveColorTint{ emissiveColorTint }, m_ignoreAlphaChannel { ignoreAlphaChannel }, m_enableThinFilm { enableThinFilm }, m_alphaIsThinFilmThickness { alphaIsThinFilmThickness },
     m_thinFilmThicknessConstant { thinFilmThicknessConstant }, m_samplerIndex{ samplerIndex }, m_displaceIn{ displaceIn },
     m_displaceOut{ displaceOut }, m_subsurfaceMaterialIndex(subsurfaceMaterialIndex), m_isRaytracedRenderTarget(isRaytracedRenderTarget),
     m_samplerFeedbackStamp{ samplerFeedbackStamp }
   {
+
     updateCachedData();
     updateCachedHash();
   }
@@ -593,6 +594,14 @@ struct RtOpaqueSurfaceMaterial {
 
     if (m_isRaytracedRenderTarget) {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_IS_RAYTRACED_RENDER_TARGET;
+    }
+
+    if (m_emissiveAlphaMask) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_ALPHA_MASK;
+    }
+
+    if (m_emissiveAlphaInvert) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_ALPHA_INVERT;
     }
 
     float displaceIn = m_displaceIn * getDisplacementInFactor();
@@ -648,13 +657,19 @@ struct RtOpaqueSurfaceMaterial {
     writeGPUHelper(data, offset, glm::packHalf1x16(m_anisotropy));
     writeGPUHelperExplicit<2>(data, offset, m_tangentTextureIndex);
 
-    // data[24-25]
+    // data[24 - 26]
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorTint.x));
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorTint.y));
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorTint.z));
+    writeGPUPadding<2>(data, offset);  // Padding for tint alignment
+
+    // data[28 - 29]
     writeGPUHelper(data, offset, m_subsurfaceMaterialIndex);
 
-    // data[26]
+    // data[30]
     writeGPUHelperExplicit<2>(data, offset, m_samplerFeedbackStamp);
 
-    writeGPUPadding<10>(data, offset);
+    writeGPUPadding<2>(data, offset);
     assert(offset - oldOffset == kSurfaceMaterialGPUSize);
   }
 
@@ -764,67 +779,38 @@ struct RtOpaqueSurfaceMaterial {
 
 private:
   void updateCachedHash() {
-    static_assert(
-      sizeof(*this) == 120,
-      "add new member for hashing if needed: add a MEMBER into the struct + add a VALUE into the list-init"
-    );
-    struct HashStruct {
-      uint32_t albedoOpacityTextureIndex;
-      uint32_t normalTextureIndex;
-      uint32_t tangentTextureIndex;
-      uint32_t heightTextureIndex;
-      uint32_t roughnessTextureIndex;
-      uint32_t metallicTextureIndex;
-      uint32_t emissiveColorTextureIndex;
-      float anisotropy;
-      float emissiveIntensity;
-      Vector4 albedoOpacityConstant;
-      float roughnessConstant;
-      float metallicConstant;
-      Vector3 emissiveColorConstant;
-      uint32_t enableEmission;            // NOTE: uint32_t to avoid padding
-      uint32_t ignoreAlphaChannel;        // NOTE: uint32_t to avoid padding
-      uint32_t enableThinFilm;            // NOTE: uint32_t to avoid padding
-      uint32_t alphaIsThinFilmThickness;  // NOTE: uint32_t to avoid padding
-      float thinFilmThicknessConstant;
-      uint32_t samplerIndex;
-      float displaceIn;
-      float displaceOut;
-      uint32_t subsurfaceMaterialIndex;
-      uint32_t isRaytracedRenderTarget;   // NOTE: uint32_t to avoid padding
-      uint32_t samplerFeedbackStamp;      // NOTE: uint32_t to avoid padding
-      uint32_t secondaryTextureIndex;
-      // NOTE: There must be NO padding between members, as the struct is used for hashing
-    };
-    static_assert(alignof(HashStruct) == 4 && sizeof(HashStruct) % 4 == 0);
-    HashStruct hashData = HashStruct{
-      m_albedoOpacityTextureIndex,
-      m_normalTextureIndex,
-      m_tangentTextureIndex,
-      m_heightTextureIndex,
-      m_roughnessTextureIndex,
-      m_metallicTextureIndex,
-      m_emissiveColorTextureIndex,
-      m_anisotropy,
-      m_emissiveIntensity,
-      m_albedoOpacityConstant,
-      m_roughnessConstant,
-      m_metallicConstant,
-      m_emissiveColorConstant,
-      m_enableEmission,
-      m_ignoreAlphaChannel,
-      m_enableThinFilm,
-      m_alphaIsThinFilmThickness,
-      m_thinFilmThicknessConstant,
-      m_samplerIndex,
-      m_displaceIn,
-      m_displaceOut,
-      m_subsurfaceMaterialIndex,
-      m_isRaytracedRenderTarget,
-      m_samplerFeedbackStamp,
-      m_secondaryTextureIndex,
-    };
-    m_cachedHash = XXH3_64bits(&hashData, sizeof(hashData));
+    XXH64_hash_t h = 0;
+
+    h = XXH64(&m_albedoOpacityTextureIndex, sizeof(m_albedoOpacityTextureIndex), h);
+    h = XXH64(&m_normalTextureIndex, sizeof(m_normalTextureIndex), h);
+    h = XXH64(&m_tangentTextureIndex, sizeof(m_tangentTextureIndex), h);
+    h = XXH64(&m_heightTextureIndex, sizeof(m_heightTextureIndex), h);
+    h = XXH64(&m_roughnessTextureIndex, sizeof(m_roughnessTextureIndex), h);
+    h = XXH64(&m_metallicTextureIndex, sizeof(m_metallicTextureIndex), h);
+    h = XXH64(&m_emissiveColorTextureIndex, sizeof(m_emissiveColorTextureIndex), h);
+    h = XXH64(&m_anisotropy, sizeof(m_anisotropy), h);
+    h = XXH64(&m_emissiveIntensity, sizeof(m_emissiveIntensity), h);
+    h = XXH64(&m_albedoOpacityConstant, sizeof(m_albedoOpacityConstant), h);
+    h = XXH64(&m_roughnessConstant, sizeof(m_roughnessConstant), h);
+    h = XXH64(&m_metallicConstant, sizeof(m_metallicConstant), h);
+    h = XXH64(&m_emissiveColorConstant, sizeof(m_emissiveColorConstant), h);
+    h = XXH64(&m_enableEmission, sizeof(m_enableEmission), h);
+    h = XXH64(&m_emissiveAlphaMask, sizeof(m_emissiveAlphaMask), h);
+    h = XXH64(&m_emissiveAlphaInvert, sizeof(m_emissiveAlphaInvert), h);
+    h = XXH64(&m_emissiveColorTint, sizeof(m_emissiveColorTint), h);
+    h = XXH64(&m_ignoreAlphaChannel, sizeof(m_ignoreAlphaChannel), h);
+    h = XXH64(&m_enableThinFilm, sizeof(m_enableThinFilm), h);
+    h = XXH64(&m_alphaIsThinFilmThickness, sizeof(m_alphaIsThinFilmThickness), h);
+    h = XXH64(&m_thinFilmThicknessConstant, sizeof(m_thinFilmThicknessConstant), h);
+    h = XXH64(&m_samplerIndex, sizeof(m_samplerIndex), h);
+    h = XXH64(&m_displaceIn, sizeof(m_displaceIn), h);
+    h = XXH64(&m_displaceOut, sizeof(m_displaceOut), h);
+    h = XXH64(&m_subsurfaceMaterialIndex, sizeof(m_subsurfaceMaterialIndex), h);
+    h = XXH64(&m_isRaytracedRenderTarget, sizeof(m_isRaytracedRenderTarget), h);
+    h = XXH64(&m_samplerFeedbackStamp, sizeof(m_samplerFeedbackStamp), h);
+    h = XXH64(&m_secondaryTextureIndex, sizeof(m_secondaryTextureIndex), h);
+
+    m_cachedHash = h;
   }
 
   void updateCachedData() {
@@ -857,6 +843,9 @@ private:
   Vector3 m_emissiveColorConstant;
 
   bool m_enableEmission;
+  bool m_emissiveAlphaMask;
+  bool m_emissiveAlphaInvert;
+  Vector3 m_emissiveColorTint;
 
   bool m_ignoreAlphaChannel;
   bool m_enableThinFilm;
