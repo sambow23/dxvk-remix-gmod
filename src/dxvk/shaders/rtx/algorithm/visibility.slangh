@@ -39,8 +39,13 @@ static const uint visibilityModeOpaqueOnly = (1 << 5);                 // Only q
 // Visibility Helper Functions
 
 // Returns the attenuation factor for the surface, i.e. (1.0 - opacity)
-vec3 handleVisibilityVertex<let VisibilityMode : uint>(Ray ray, RayHitInfo rayHitInfo, const bool usePreviousTLAS)
+vec3 handleVisibilityVertex<let VisibilityMode : uint>(Ray ray, RayHitInfo rayHitInfo, const bool usePreviousTLAS, inout bool passedThroughOccluder)
 {
+  if (passedThroughOccluder)
+  {
+    return vec3(1.0f);
+  }
+
   RayInteraction rayInteraction = rayInteractionCreate(ray, rayHitInfo);
   
   if (usePreviousTLAS)
@@ -62,7 +67,13 @@ vec3 handleVisibilityVertex<let VisibilityMode : uint>(Ray ray, RayHitInfo rayHi
     }
   }
 
-  Surface surface = surfaces[uint(rayInteraction.surfaceIndex)]; 
+  Surface surface = surfaces[uint(rayInteraction.surfaceIndex)];
+
+  if (surface.isOccluder)
+  {
+    passedThroughOccluder = true;
+    return vec3(1.0f);
+  }
 
   // Since during visibility testing, we dont need all the data, we can just explicitly
   //   initialize these values and  help the compiler generate more optimal code paths.
@@ -312,6 +323,8 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
   result.hasOpaqueHit = false;
   result.hasPOMHit = false;
 
+  bool passedThroughOccluder = false;
+
   uint rayFlags = (VisibilityMode & visibilityModeAccurateHitDistance)
     ? RAY_FLAG_NONE
     : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
@@ -353,7 +366,7 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
         RayHitInfo rayHitInfo;
         RAY_HIT_INFO_CREATE_RAY_QUERY_CANDIDATE(rayHitInfo, rayQuery)
 
-        vec3 surfaceAttenuation = handleVisibilityVertex<VisibilityMode>(visibilityRay, rayHitInfo, usePreviousTLAS);
+        vec3 surfaceAttenuation = handleVisibilityVertex<VisibilityMode>(visibilityRay, rayHitInfo, usePreviousTLAS, passedThroughOccluder);
 
         vec3 prevAttenuation = result.attenuation;
         result.attenuation *= surfaceAttenuation;
@@ -374,6 +387,13 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
 
     if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
+      if (passedThroughOccluder)
+      {
+        result.attenuation = vec3(1.0f);
+        result.hasOpaqueHit = false;
+        break;
+      }
+
       if (clearOpaqueHitAttenuation)
       {
         result.attenuation = vec3(0.0f);
@@ -413,6 +433,12 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
       // No ray portals left
       break;
     }
+  }
+
+  if (passedThroughOccluder)
+  {
+    result.attenuation = vec3(1.0f);
+    result.hasOpaqueHit = false;
   }
   
   return result;

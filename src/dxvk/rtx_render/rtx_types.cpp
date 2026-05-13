@@ -400,6 +400,7 @@ namespace dxvk {
     setCategory(InstanceCategories::Sky, lookupHash(RtxOptions::skyBoxTextures(), textureHash));
 
     setCategory(InstanceCategories::ParticleEmitter, lookupHash(RtxOptions::particleEmitterTextures(), textureHash));
+    setCategory(InstanceCategories::Occluder, lookupHash(RtxOptions::occluderTextures(), textureHash));
 
     // Set baked lighting category - automatically allow baked lighting for decal textures
     // since they need proper vertex color/weighting to blend correctly

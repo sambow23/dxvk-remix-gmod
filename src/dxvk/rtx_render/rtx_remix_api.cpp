@@ -755,7 +755,7 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE_EMITTER)         { result.set(InstanceCategories::ParticleEmitter); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE)           { result.set(InstanceCategories::SmoothNormals); }
       
-      static_assert((int)InstanceCategories::Count == 25, "Instance categories changed, please update Remix SDK");
+      static_assert((int)InstanceCategories::Count == 26, "Instance categories changed, please update Remix SDK");
       return result;
     }
 

@@ -610,6 +610,7 @@ enum class InstanceCategories : uint32_t {
   IgnoreTransparencyLayer,
   ParticleEmitter,
   SmoothNormals,
+  Occluder,
 
   Count,
 };

@@ -1929,6 +1929,49 @@ void geometryResolverVertex(
     return;
   }
 
+  if (surface.isOccluder)
+  {
+    vec3 skyRadiance;
+    if (cb.domeLightArgs.active)
+    {
+      skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      const vec2 cloudMotion = calcMotionVectorForRayMiss(geometryResolverState.pixelCoordinate);
+      const uint2 cloudHistoryRes = cb.camera.resolution;
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                     geometryResolverState.pixelCoordinate, cb.frameIdx,
+                                     cb.isZUp != 0,
+                                     /*enableCloudTemporalSmoothing=*/ true,
+                                     cloudMotion,
+                                     cloudHistoryRes);
+    }
+#endif
+    else
+    {
+      skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
+    }
+
+    geometryResolverState.radiance += skyRadiance * vec3(geometryResolverState.attenuation);
+
+    updateNrcOnGBufferMiss(geometryResolverState.pixelCoordinate);
+
+    PrimaryAttenuation[geometryResolverState.pixelCoordinate] = colorToR11G11B10(geometryResolverState.attenuation);
+    geometryResolverOutputMiss<true, true>(geometryResolverState.pixelCoordinate);
+
+    SharedRadianceRG[geometryResolverState.pixelCoordinate] = geometryResolverState.radiance.rg;
+    SharedRadianceB[geometryResolverState.pixelCoordinate] = geometryResolverState.radiance.b;
+    if (GBUFFER_FEATURE_DLSSRR && cb.enableDLSSRR)
+    {
+      PrimaryScreenSpaceMotionVectorDLSSRR[geometryResolverState.pixelCoordinate] = calcMotionVectorForRayMiss(geometryResolverState.pixelCoordinate);
+      PrimaryDepthDLSSRR[geometryResolverState.pixelCoordinate] = cb.clearColorDepth;
+    }
+
+    return;
+  }
+
   // Construct RNG
   RNG randomState = createRNG(geometryResolverState.pixelCoordinate, cb.frameIdx);
 
@@ -2599,49 +2642,42 @@ void geometryPSRResolverVertex(
     return;
   }
 
-  // NOTE: Deprecated feature - isOccluder property was removed from Surface struct
-  // Handle occluder surfaces in PSR path - they block geometry behind them but show the sky
-  // if (surface.isOccluder)
-  // {
-  //   // Get sky radiance
-  //   vec3 skyRadiance;
-  //   if (cb.domeLightArgs.active)
-  //   {
-  //     skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
-  //   }
-  // #ifdef ATMOSPHERE_AVAILABLE
-  //   else if (cb.skyMode == 1)
-  //   {
-  //     // Physical atmosphere mode
-  //     skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
-  //                                    cb.isZUp != 0);
-  //   }
-  // #endif
-  //   else
-  //   {
-  //     // Skybox rasterization mode
-  //     skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
-  //   }
-  //   
-  //   // Apply sky radiance with accumulated attenuation
-  //   geometryPSRResolverState.radiance += skyRadiance * vec3(geometryPSRResolverState.attenuation);
-  //   
-  //   // NRC is only used for paths that are fully integrated
-  //   if (geometryPSRResolverState.selectedIntegrationSurface)
-  //   {
-  //     updateNrcOnGBufferMiss(geometryPSRResolverState.pixelCoordinate, cb.nrcArgs);
-  //   }
-  //   
-  //   // Output Miss
-  //   SharedRadianceRG[geometryPSRResolverState.pixelCoordinate] += geometryPSRResolverState.radiance.rg;
-  //   SharedRadianceB[geometryPSRResolverState.pixelCoordinate] += geometryPSRResolverState.radiance.b;
-  // 
-  //   geometryResolverOutputMiss(
-  //     geometryPSRResolverState.primarySurface, geometryPSRResolverState.selectedIntegrationSurface,
-  //     geometryPSRResolverState.pixelCoordinate);
-  // 
-  //   return;
-  // }
+  if (surface.isOccluder)
+  {
+    vec3 skyRadiance;
+    if (cb.domeLightArgs.active)
+    {
+      skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                     geometryPSRResolverState.pixelCoordinate, cb.frameIdx,
+                                     cb.isZUp != 0);
+    }
+#endif
+    else
+    {
+      skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
+    }
+
+    geometryPSRResolverState.radiance += skyRadiance * vec3(geometryPSRResolverState.attenuation);
+
+    if (geometryPSRResolverState.selectedIntegrationSurface)
+    {
+      updateNrcOnGBufferMiss(geometryPSRResolverState.pixelCoordinate);
+    }
+
+    SharedRadianceRG[geometryPSRResolverState.pixelCoordinate] += geometryPSRResolverState.radiance.rg;
+    SharedRadianceB[geometryPSRResolverState.pixelCoordinate] += geometryPSRResolverState.radiance.b;
+
+    geometryResolverOutputMissDynamic(
+      geometryPSRResolverState.primarySurface, geometryPSRResolverState.selectedIntegrationSurface,
+      geometryPSRResolverState.pixelCoordinate);
+
+    return;
+  }
 
   // Now apply attenuation after dealing with the miss case (where attenuation is 0)
   geometryPSRResolverState.attenuation *= radianceAttenuation;

@@ -988,6 +988,7 @@ namespace dxvk {
         currentInstance.surface.associatedGeometryHash = drawCall.getHash(RtxOptions::geometryAssetHashRule());
         currentInstance.surface.isTextureFactorBlend = drawCall.getMaterialData().isTextureFactorBlend;
         currentInstance.surface.isVertexColorBakedLighting = drawCall.getMaterialData().isVertexColorBakedLighting;
+        currentInstance.surface.isOccluder = currentInstance.testCategoryFlags(InstanceCategories::Occluder);
         currentInstance.surface.isMotionBlurMaskOut = currentInstance.testCategoryFlags(InstanceCategories::IgnoreMotionBlur);
         currentInstance.surface.ignoreTransparencyLayer = currentInstance.testCategoryFlags(InstanceCategories::IgnoreTransparencyLayer);
 
@@ -1173,6 +1174,10 @@ namespace dxvk {
     // Enable backface culling for Portals to avoid additional hits to the back of Portals
     if (currentInstance.m_materialType == MaterialDataType::RayPortal) {
       currentInstance.m_vkInstance.flags &= ~VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    }
+
+    if (currentInstance.testCategoryFlags(InstanceCategories::Occluder)) {
+      currentInstance.m_vkInstance.flags |= VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;
     }
 
     // Update mask

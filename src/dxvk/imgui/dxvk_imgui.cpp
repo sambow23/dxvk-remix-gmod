@@ -181,6 +181,7 @@ namespace dxvk {
     {"skytextures", "Sky Texture", &RtxOptions::skyBoxTexturesObject()},
     {"ignoretextures", "Ignore Texture (optional)", &RtxOptions::ignoreTexturesObject()},
     {"hidetextures", "Hide Texture Instance (optional)", &RtxOptions::hideInstanceTexturesObject()},
+    {"occludertextures", "Occluder Texture (optional)", &RtxOptions::occluderTexturesObject()},
     {"lightmaptextures","Lightmap Textures (optional)", &RtxOptions::lightmapTexturesObject()},
     {"ignorelights", "Ignore Lights (optional)", &RtxOptions::ignoreLightsObject()},
     {"particletextures", "Particle Texture (optional)", &RtxOptions::particleTexturesObject()},
