@@ -1693,7 +1693,6 @@ namespace {
   // fork_hooks::mutateTextureHashOption (add flag replaces the local
   // TextureHashMutation enum). Both call sites hold s_mutex across the call
   // per the lock-ordering rule documented alongside s_mutex.
-
   remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
     const char* textureCategory,
     const char* textureHash) {
@@ -2522,6 +2521,8 @@ extern "C"
       interf.DestroyLight = remixapi_DestroyLight;
       interf.DrawLightInstance = remixapi_DrawLightInstance;
       interf.SetConfigVariable = remixapi_SetConfigVariable;
+      interf.AddTextureHash = remixapi_AddTextureHash;
+      interf.RemoveTextureHash = remixapi_RemoveTextureHash;
       interf.dxvk_CreateD3D9 = remixapi_dxvk_CreateD3D9_legacy;
       interf.dxvk_RegisterD3D9Device = remixapi_dxvk_RegisterD3D9Device;
       interf.dxvk_GetExternalSwapchain = remixapi_dxvk_GetExternalSwapchain;
