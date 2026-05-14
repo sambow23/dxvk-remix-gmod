@@ -187,6 +187,15 @@ check will enforce it if discipline slips.
 
 ---
 
+## src/dxvk/dxvk_limits.h
+
+**Category:** index-only
+
+- **Inline tweak** at the `MaxPushConstantSize` enum value (~line 21) — 1-LOC value change + multi-line rationale comment.
+  *Bumps `MaxPushConstantSize` from 128 to 256. The fork-side tonemap apply args struct (`ToneMappingApplyToneMappingArgs` in `src/dxvk/shaders/rtx/pass/tonemap/tonemapping.h`) grew to 144 bytes across Workstream 2 commits 3–4 (Hable + AgX operator params). With the old cap, `DxvkContext::pushConstants()` silently overflowed the per-bank storage by 16 bytes on every Global / Direct tonemap dispatch, corrupting adjacent bank state and crashing the NVIDIA driver later. Every RTX-class GPU reports `maxPushConstantsSize >= 256`; pipeline layouts derive per-shader push-constant ranges from shader reflection, so the larger cap is harmless to existing shaders.*
+
+---
+
 ## src/dxvk/imgui/dxvk_imgui.cpp
 
 **Pre-refactor fork footprint:** +236 / -71 LOC (audit 2026-04-18)
@@ -799,7 +808,7 @@ initializer list and can't be lifted into a separate TU.
 **Category:** migrate
 
 - **Block** at `geometryResolverVertex` (miss handler — sky radiance branch) — ~30 LOC (active) + ~60 LOC (commented-out deprecated decals-on-sky block), planned target `fork_hooks::geoResolverAtmosphereMiss` in `rtx_fork_atmosphere.slangh`.
-  *Adds a conditional atmosphere sky-radiance evaluation (`evalSkyRadiance`) in the geometry-resolver miss path when `cb.skyMode == 1`, selecting between dome light, physical atmosphere, and skybox rasterization. The commented-out block documents the deprecated `enableDecalsOnSky` feature.*
+  *Adds a conditional atmosphere sky-radiance evaluation (`evalSkyRadiance`) in the geometry-resolver miss path when `cb.skyMode == 1`, selecting between dome light, physical atmosphere, and skybox rasterization. The commented-out block documents the deprecated `enableDecalsOnSky` feature. Cloud temporal smoothing (2026-05-09): the primary view ray's evalSkyRadiance call now passes `enableCloudTemporalSmoothing=true` plus the motion-vector + screen-extent args needed to reproject and EMA-blend the cloud layer against the previous frame's history at slots 206/207. PSR and indirect callers continue to pass false (their pixelCoord refers to a non-primary direction; reusing primary screen-space cloud history would smear).*
 
 - **Block** at `geometryResolverVertex` (hit path — occluder comment block) — ~42 LOC (fully commented out), planned target `fork_hooks::geoResolverOccluder` in `rtx_fork_atmosphere.slangh`.
   *Preserves the design for the deprecated `isOccluder` surface property that would have shown sky behind occluder surfaces; kept commented for future reference.*
@@ -947,6 +956,15 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `(file scope)` (atmosphere binding index defines, ~line 57) and `COMMON_RAYTRACING_BINDINGS` macro (~line 104) — Stage C Task 8a addition.
   *Adds `BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER = 204` and a corresponding `SAMPLER` entry in the macro list. The linear/REPEAT sampler is bound alongside the cloud noise SRV in `bindAtmosphereLuts` and consumed by `sampleCloudDensityTextured` at call sites (Task 8b).*
 
+- **Inline tweak** at `(file scope)` (atmosphere binding index defines, ~line 58) and `COMMON_RAYTRACING_BINDINGS` macro (~line 108) — FAST-noise jitter (2026-05-09).
+  *Adds `BINDING_ATMOSPHERE_FAST_NOISE = 205` and a corresponding `TEXTURE2DARRAY` entry in the macro list. Resource is the EA Importance-Sampled FAST noise (128×128×32 RG8) uploaded once by `RtxFastNoise` and bound in `bindAtmosphereLuts`. Consumed by the `fastJitter()` helper in `atmosphere_common.slangh` for cloud view-march jitter (channel x) and sun-shadow tap jitter (channel y).*
+
+- **Inline tweak** at `(file scope)` (atmosphere binding index defines) and `COMMON_RAYTRACING_BINDINGS` macro — cloud history temporal smoothing (2026-05-09, age channel added 2026-05-13).
+  *Adds `BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV = 206` (`TEXTURE2D`) and `BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR = 207` (`RW_TEXTURE2D`). RGBA16F screen-space ping-pong owned by `RtxAtmosphere` and bound in `bindAtmosphereLuts`. Consumed by `evalSkyRadiance` in `atmosphere_sky.slangh` when called with `enableCloudTemporalSmoothing=true` (currently only the primary view ray in `geometry_resolver.slangh` miss path). Smooths per-frame FAST-noise jitter variance to give DLSS a stable signal. The age-channel companion `BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV = 212` (`TEXTURE2D`) and `BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_CURR = 213` (`RW_TEXTURE2D`) carries the frame index at which each pixel was last refreshed by the sky-miss path; R16_UINT, cleared to 0xFFFF "never written" sentinel at allocation. The shader rejects history whose stored frame-id != `(frameIdx - 1) & 0xFFFFu`, which fixes the multi-frame bright-trail ghosting that the alpha-only disocclusion guard previously left exposed once the 2026-05-13 Nubis Cubed rewrite drove cloud radiance higher.*
+
+- **Inline tweak** at `(file scope)` (atmosphere binding index defines) and `COMMON_RAYTRACING_BINDINGS` macro — cloud voxel grids (Nubis Cubed 2023, 2026-05-12).
+  *Adds `BINDING_ATMOSPHERE_CLOUD_D_SUN = 210` and `BINDING_ATMOSPHERE_CLOUD_D_AMBIENT = 211`, both `TEXTURE3D`. 256x256x32 R16F camera-centered tile-wrapped voxel grids storing summed optical depth along the sun direction (D_sun) and zenith (D_ambient). Round-robin baked every 8 frames by `cloud_sun_density_grid.comp.slang` / `cloud_ambient_density_grid.comp.slang` dispatched from `RtxAtmosphere::computeLuts`; bound via `fork_hooks::bindAtmosphereLuts`. Sampled at shade time via `sampleDSun` / `sampleDAmbient` helpers in `atmosphere_common.slangh`. No consumer in this commit — the Nubis Cubed cloud-lighting rewrite (C4-C6 of the 2026-05-12 workstream) reads them.*
+
 - **Inline tweak** at `COMMON_BINDING_DEFINITION_LIST` macro (~line 91) — 1-line addition for sampler readback buffer.
   *Adds `RW_STRUCTURED_BUFFER(BINDING_SAMPLER_READBACK_BUFFER)` to the common binding list (upstream omission fixed).*
 
@@ -960,6 +978,9 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `(file scope)` (atmosphere LUT texture declarations) (~line 118) — 7-line addition.
   *Declares `AtmosphereTransmittanceLut`, `AtmosphereMultiscatteringLut`, and `AtmosphereSkyViewLut` as `Texture2D` resources bound at the three atmosphere binding slots.*
+
+- **Inline tweak** at `(file scope)` (atmosphere FAST-noise texture declaration) (~line 138) — 2-line addition (2026-05-09).
+  *Declares `AtmosphereFastNoise` as a `Texture2DArray<float2>` resource bound at `BINDING_ATMOSPHERE_FAST_NOISE` (slot 205). Used by the `fastJitter()` helper in `atmosphere_common.slangh` for cloud ray-march sample-distribution jitter.*
 
 ---
 
@@ -993,6 +1014,33 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `(file scope)` (~line 44) — 1-line addition.
   *Adds `#define ATMOSPHERE_AVAILABLE` so the gbuffer PSR miss shader can reference atmosphere evaluation functions.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_direct.slang
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (~line 36) — 1-line addition.
+  *Adds `#define ATMOSPHERE_AVAILABLE` so the direct-integration pass compiles against the real `evalCloudGroundShadow` body. The macro gates a binding-free fallback intended for atmosphere LUT compute shaders that lack the cloud-noise SRV; this pass already includes `common_bindings.slangh` (which declares `AtmosphereCloudNoise3D` + sampler), so the fallback over-suppresses cloud shadow on terrain surface NEE. Without this define, `evalAtmosphereSunNEE → sampleAtmosphereSunLight → getTransmittanceToSun → evalCloudGroundShadow` short-circuits to `1.0` and terrain never darkens under clouds regardless of `cloudShadowStrength`.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect.slang
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (~line 233) — 1-line addition.
+  *Adds `#define ATMOSPHERE_AVAILABLE` so the indirect-integration pass evaluates the real `evalCloudGroundShadow` for secondary-bounce surface NEE (`evalAtmosphereSunNEESecondary`). Same rationale as `integrate_direct.slang`: the cloud-noise SRV is bound via `common_bindings.slangh` here, so the binding-free fallback is unnecessary.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect_closesthit.rchit.slang
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (~line 241) — 1-line addition.
+  *Adds `#define ATMOSPHERE_AVAILABLE` so the closest-hit variant of indirect integration evaluates the real `evalCloudGroundShadow`. Same rationale as the sibling `integrate_indirect.slang` entry — `common_bindings.slangh` provides the cloud-noise SRV.*
 
 ---
 
@@ -1112,5 +1160,159 @@ namespace block.
 
 - **Inline tweak** at `fork_hooks` namespace block (forward declarations) — ~2 LOC.
   *Adds `void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds)` and `void showWeatherUI()` forward declarations. These allow `rtx_context.cpp` and `rtx_fork_atmosphere.cpp` to call the weather hook without including the full `rtx_fork_weather.h` header at those call sites.*
+
+---
+
+## submodules/rtxdi/rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_integrator.slangh
+
+**Category:** submodule (fork-controlled — `RemixProjGroup/RTXDI` branch `remix`)
+
+**Note:** This file lives in the fork-controlled RTXDI submodule. Edits land
+via PR/commit to `RemixProjGroup/RTXDI` branch `remix` and then a sibling
+`dxvk-remix` commit bumps the submodule pointer (mirror of `96c56d5`). The
+audit script `scripts/audit-fork-touchpoints.sh` does NOT inspect submodule
+files; this entry exists for rebase-safety / human discoverability.
+
+- **Inline tweak** at the top of the file (atmosphere helper include) — 1-line addition.
+  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"` so the per-froxel atmosphere-sun NEE block and the sky-ambient hemisphere integration block can call atmosphere helpers (`sampleAtmosphereSunLightVolume`, `sampleSkyAmbientForVolume`, `hgPhase`).*
+
+- **Inline tweak** at the end of `integrateVolume` (atmosphere sun NEE block, `cb.skyMode == 1`) — ~35 LOC. *(Authored by CattaRappa as RTXDI commit `2ff8c57`, pre-existing.)*
+  *Per-froxel direct sun NEE through the atmosphere: builds `AtmosphereVolumeSunSample` via `sampleAtmosphereSunLightVolume`, traces a separate visibility ray to the sun, applies firefly filtering, and adds the result to `radianceSH` before the temporal mix. Bypasses ReSTIR's light pool entirely.*
+
+- **Inline tweak** at the end of `integrateVolume` (sky-ambient hemisphere integration block, `cb.skyMode == 1 && cloudSkyAmbientStrength > 0`) — ~50 LOC. *(Workstream 2026-05-12.)*
+  *Fixed 6-direction upper-hemisphere integration (zenith + 5 mid-elevation at 30° elevation, 72° azimuth spacing) of `sampleSkyAmbientForVolume(dir, args, AtmosphereSkyViewLut, AtmosphereCloudSkyTransmittanceLut, sampler)` weighted by HG phase against the volumetric anisotropy (0.3). Results scaled by `cloudSkyAmbientStrength`, firefly-filtered, and stored as a single SH entry with zenith as the dominant direction. Gated on `cb.skyMode == 1` and on the strength knob being > 0 so the baseline ships with zero behavior change (`cloudSkyAmbientStrength` default = 0). Consumes the sky-view LUT (slot 202), cloud-sky-transmittance LUT (slot 208), and the cloud-noise sampler (slot 204 — REPEAT, correct on azimuth, never sampled below-horizon). See `docs/superpowers/specs/2026-05-12-volumetric-sky-ambient-design.md`.*
+
+---
+
+## Commit C4 — Cloud render compute pass + Nubis Cubed equations (fork — 2026-05-12)
+
+The C4 commit of the 2026-05-12 cloud-lighting workstream lands the per-
+pixel screen-space cloud raymarch with the Nubis Cubed 2023 lighting
+equations (paper pp. 137, 142) and a debug view (enum 876) for standalone
+A/B against the existing analytical `evalClouds` rendering. No production
+consumer yet — the sky-miss composite still calls analytical clouds; the
+composite gate lands in C5.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** — new file (fork-owned).
+  *Per-pixel view-direction raymarch through the cloud slab using the Nubis Cubed lighting equations. Reconstructs viewDir from CPU-pushed Y-up basis vectors (`cloudRenderForwardYUp` / `RightYUp` / `UpYUp` in `AtmosphereArgs`, pre-scaled by tan(halfFovX/Y) and aspect). Intersects the curvature-adjusted base/top cloud shells (`intersectSphere`) to get [tEntry, tExit]; marches with per-pixel FAST-noise jitter. At each density-passing sample calls `evalNubisCubedSample` for the page-137 two-HG-lobe direct term + page-142 ambient exp(-D_ambient). Writes premultiplied rgb + view-ray transmittance alpha to AtmosphereCloudRender at slot 209.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned additions.
+  *Adds 8 floats of Nubis Cubed lighting params (`cloudPhaseG1/G2`, `cloudMsSunDotMax`, `cloudMsSigmaShallow/Deep`, `cloudMsSdfDepth`) + `cloudRenderFrameIdx` + pad; plus 3 × (vec3 + pad) for the cloud-render camera basis (`cloudRenderForwardYUp`, `cloudRenderRightYUp`, `cloudRenderUpYUp`). All consumed exclusively by `cloud_render.comp.slang`; the basis is pushed CPU-side from `updateAtmosphereConstants` before `computeLuts` runs so the values land in m_constantsBuffer in time.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *Adds five Nubis Cubed lighting helpers (~120 LOC) right after `sampleDAmbient`: `sampleDimProfile` (proxy on `cloudTypeProfile`), `sampleCloudSdf` (slab-distance + density-weighted-depth proxy, returns negative-inside meters clamped to [-cloudMsSdfDepth*4, 0]), `hgPhaseNubis` (paper-flavored HG with denom guard — distinct from the existing `hgPhase` to avoid perturbing non-Nubis callers), `NubisCubedLighting` struct, and `evalNubisCubedSample` (the paper-page-137 two-HG-lobe direct term + page-142 ambient exp(-D_ambient)). Calls `sampleDSun` / `sampleDAmbient` from C1.*
+
+- **`src/dxvk/shaders/rtx/pass/common_binding_indices.h`** — index-only, fork.
+  *Adds `BINDING_ATMOSPHERE_CLOUD_RENDER_RT = 209` and a `TEXTURE2D` entry in `COMMON_RAYTRACING_BINDINGS`. Slot 209 was reserved between 208 (cloud-sky-transmittance LUT) and 210 (cloud D_sun); fills the gap.*
+
+- **`src/dxvk/shaders/rtx/pass/common_bindings.slangh`** — index-only, fork.
+  *Declares `Texture2D<float4> AtmosphereCloudRender` at slot 209 with a 6-line comment block. Consumed by the cloud render RT debug view (enum 876) and — in C5 — by the sky-miss composite path.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h`** — fork-owned additions.
+  *Adds `m_cloudRenderRT` (Resources::Resource), `m_cloudRenderExtent` (VkExtent2D), `m_cloudRenderForwardYUp` / `RightYUp` / `UpYUp` (Vector3), `m_cloudRenderFrameIdx` (uint32_t); plus public methods `getCloudRenderRT()`, `ensureCloudRenderRT(ctx, downscaleExtent)`, `setCloudRenderCameraBasis(forward, right, up, frameIdx)`; plus private `dispatchCloudRender(ctx)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned additions.
+  *Adds `#include <rtx_shaders/cloud_render.h>`, the `CloudRenderShader` ManagedShader class (7-slot binding parameter list), `ensureCloudRenderRT` (resize-aware alloc of RGBA16F at downscale extent), `setCloudRenderCameraBasis` (member-state setter), `dispatchCloudRender` (rebuilds the args buffer, binds the 7 slots, dispatches 8×8 thread groups), populates the 6 Nubis Cubed lighting fields + 3-basis-vector camera fields + frameIdx into `AtmosphereArgs` in `getAtmosphereArgs()`, calls `dispatchCloudRender(ctx)` from `computeLuts` after the voxel grid bakes, and binds slot 209 (`BINDING_ATMOSPHERE_CLOUD_RENDER_RT`) in `bindResources` (which mirrors the active `bindAtmosphereLuts` site).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *Adds 6 `RTX_OPTION` declarations in the `rtx.atmosphere` cluster: `cloudPhaseG1` (default 0.8), `cloudPhaseG2` (0.3), `cloudMsSunDotMax` (0.9), `cloudMsSigmaShallow` (0.25), `cloudMsSigmaDeep` (0.05), `cloudMsSdfDepth` (128.0 meters). All surface as ImGui sliders in the Nubis Cubed Lighting collapsing block.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *In `updateAtmosphereConstants`: reads RtCamera basis (forward/right/up + position) + fov + aspect, applies isZUp swap, pre-scales right/up by tan(halfFovX/Y) and aspect ratio, and pushes via `setCloudRenderCameraBasis` before `computeLuts`. Also calls `ensureCloudRenderRT` with the current downscale extent. In `bindAtmosphereLuts`: adds the cloud render RT bind at slot 209. Adds new `getCloudRenderRT(ctx)` accessor for the debug view. Adds a "Nubis Cubed Lighting (fork — 2026-05-12)" ImGui collapsing header inside the Clouds tree with 6 sliders mapping to the 6 new RTX_OPTIONs.*
+
+- **`src/dxvk/rtx_render/rtx_context.h`** — fork-touchpoint inline tweak.
+  *Adds forward declaration `Resources::Resource fork_hooks::getCloudRenderRT(RtxContext&)` and a matching `friend` line inside `class RtxContext`. Mirrors the existing getCloudDSun / getCloudDAmbient pattern.*
+
+- **`src/dxvk/shaders/rtx/utility/debug_view_indices.h`** — index-only, fork.
+  *Adds `DEBUG_VIEW_CLOUD_RENDER_RT = 876` with a 4-line comment block.*
+
+- **`src/dxvk/shaders/rtx/pass/debug_view/debug_view.comp.slang`** — fork-owned addition.
+  *Adds a `[[vk::binding]]`-decorated `Texture2D<float4> DebugViewCloudRenderRT` declaration and a `case DEBUG_VIEW_CLOUD_RENDER_RT` arm in the main switch that samples the RT via Load and returns its rgb (alpha is the view-ray transmittance, not relevant to the standalone debug view).*
+
+- **`src/dxvk/shaders/rtx/pass/debug_view/debug_view_binding_indices.h`** — index-only, fork. (Inventory substitution: not listed in the Task 4 spec, but structurally required for the debug view case to access the cloud render RT — mirrors the D_sun/D_ambient pattern at slots 35/36.)
+  *Adds `DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT = 37`.*
+
+- **`src/dxvk/rtx_render/rtx_debug_view.cpp`** — fork-owned addition.
+  *Adds a `TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)` line in the debug-view shader's BEGIN_PARAMETER block, binds the cloud render RT each dispatch via `fork_hooks::getCloudRenderRT`, and adds a label + multi-line description block to the debug-view selector list ("Atmosphere: Cloud Render RT (Nubis Cubed)").*
+
+---
+
+## Commit C5 — Sky-miss composite of cloud RT (gated, default-off) (fork — 2026-05-12)
+
+The C5 commit wires the Nubis Cubed cloud render RT (from C4) as the
+primary-ray sky-miss cloud source, gated by a default-off RTX_OPTION
+(`cloudRenderRTEnable`). With the gate off, rendering is bit-identical
+to pre-C5 — analytical `evalClouds` continues to run at every site.
+With the gate on, primary-ray sky-miss reads from the prerendered RT
+while indirect, PSR, and reflection rays continue to use analytical
+clouds (the RT is at primary-ray pixel coordinates, sampling it for a
+non-primary ray direction would return the wrong cloud).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", bool, cloudRenderRTEnable, false, …)` in the `rtx.atmosphere` cluster directly after the C4 Nubis Cubed lighting options. Default false; flipped on in C7 after visual gate.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Adds `uint cloudRenderRTEnable` plus three `uint` pads at the end of `AtmosphereArgs` for 16-byte alignment. Sits after the C4 cloud-render camera basis block; no existing field offsets change.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned addition.
+  *In `evalSkyRadiance`: adds a trailing default-false `bool isPrimaryRay` parameter, and a primary-ray-only branch that reads `AtmosphereCloudRender.Load(int3(pixelCoord, 0))` and inverts its transmittance alpha into opacity (`vec4(rgb, 1 - cloudRT.a)`) so the downstream temporal-smoothing / mix composite operates uniformly on either source. Gate is `args.cloudRenderRTEnable != 0u && isPrimaryRay`. Falls through to analytical `evalClouds` when the gate is off OR the caller is non-primary.*
+
+- **`src/dxvk/shaders/rtx/algorithm/geometry_resolver.slangh`** — fork-touchpoint inline tweak.
+  *Primary sky-miss call site (`cb.skyMode == 1` block, formerly ending at the `historyResolution` argument) now passes `/*isPrimaryRay=*/ true` as the trailing argument to `evalSkyRadiance`. The PSR call site (line ~2553) keeps its 5-argument call shape and gets `isPrimaryRay=false` via default. ~1 LOC.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned addition.
+  *In `getAtmosphereArgs()` (right after the C4 camera-basis populate block): sets `args.cloudRenderRTEnable` from `RtxOptions::cloudRenderRTEnable()` and zeros the three pad slots. ~5 LOC.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds a "Master gate (C5)" separator + `RemixGui::Checkbox("Composite cloud RT at sky-miss", …)` widget at the end of the "Nubis Cubed Lighting" ImGui collapsing header (just below the MS SDF Depth slider). Wired to `RtxOptions::cloudRenderRTEnableObject()`; tooltip explains the primary-ray-only behavior. ~8 LOC.*
+
+---
+
+## Commit C6 — Voxel-grid cloud-on-terrain shadows at NEE (gated) (fork — 2026-05-12)
+
+The C6 commit wires the C3 helper `sampleCloudGroundShadow_OptionB` into the
+production surface and volumetric NEE entry points via a multiplicative
+ratio correction that replaces the legacy `evalCloudGroundShadow`
+uniform-dimmer with the rich 3D `D_sun` voxel-grid lookup. Terrain
+gains cumulus-shaped drifting shadow patches that match the cloud
+positions overhead. Gated on a default-off RTX_OPTION
+(`cloudVoxelShadowsEnable`).
+
+This commit also fixes two pre-existing concerns in the C3 helper that
+the diagnostic surfaced: (1) units mismatch — the helper assumed
+`worldPos` was in km, but the G-buffer feeds it in engine game units; the
+helper now converts via the new `worldUnitsPerKm` field. (2)
+camera-relative-vs-world-absolute frame — the voxel grid is
+camera-centered, so the helper now subtracts the camera position (pushed
+CPU-side via the new `setCloudShadowCameraPosition` setter) before the
+`cloudVoxelWorldToUVW` call. The wire-in is intentionally at the NEE
+entry points (NOT at `getTransmittanceToSun`) so the sentinel-position
+`getTransmittanceToSun` call from `computeGroundReflectionAnalytical`
+continues to consume the legacy uniform-dimmer shadow — preserving the
+cloud-shadow-map post-mortem's hard-won correctness invariant.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds two `RTX_OPTION` declarations in the `rtx.atmosphere` cluster directly after the C5 `cloudRenderRTEnable`: `cloudVoxelShadowsEnable` (default false) and `cloudShadowMarchStrength` (default 1.0). The strength knob is the Beer-Lambert exponent multiplier inside `sampleCloudGroundShadow_OptionB`; the C3 commit had to substitute a literal because the field didn't exist on main.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Adds two 16-byte rows at the end of `AtmosphereArgs` after the C5 block: `(cloudVoxelShadowsEnable, cloudShadowMarchStrength, worldUnitsPerKm, pad_c6_0)` and `(cameraWorldPosYUpKm.xyz, pad_c6_1)`. All consumed exclusively by `sampleCloudGroundShadow_OptionB`; the camera world position is pushed CPU-side from `updateAtmosphereConstants` mirroring the existing `setCloudRenderCameraBasis` pattern.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *Two changes. (1) Inside `sampleCloudGroundShadow_OptionB_impl`: replaces the C3 unit-naive math with a `worldPos * (1 / worldUnitsPerKm)` game-units → km conversion, a `cloudEntryPosKm - args.cameraWorldPosYUpKm` camera-relative reframe before `cloudVoxelWorldToUVW`, and folds `args.cloudShadowMarchStrength` into the Beer-Lambert exponent (replacing the C3 literal). The legacy `cloudShadowStrength` mix at the end is preserved. (2) Adds an `#ifdef ATMOSPHERE_AVAILABLE`-gated ratio correction block inside both `sampleAtmosphereSunLight` (surface NEE, after `result.radiance` is set) and `sampleAtmosphereSunLightVolume` (volumetric NEE, after `result.radiance` is set) that — when `args.cloudVoxelShadowsEnable != 0u` — divides out the `evalCloudGroundShadow` contribution baked into the analytical path and multiplies in the `sampleCloudGroundShadow_OptionB` result. Skips the correction when the old shadow is below 0.001 to guard against divide-by-zero.*
+
+- **`src/dxvk/shaders/rtx/pass/volumetrics/volume_integrate.comp.slang`** — fork-owned addition.
+  *Adds `#define ATMOSPHERE_AVAILABLE` before the `common_bindings.slangh` include so the atmosphere helpers consumed by the volumetric pass (`sampleAtmosphereSunLightVolume → sampleCloudGroundShadow_OptionB`, plus the existing `sampleSkyAmbientForVolume`, `sampleDSun`, `fastJitter`) resolve to bound globals. Matches the `#define` already present in `integrate_direct.slang` and `integrate_indirect.slang`.*
+
+- **`src/dxvk/shaders/rtx/pass/volumetrics/volume_restir.comp.slang`** — fork-owned addition.
+  *Same `#define ATMOSPHERE_AVAILABLE` addition as `volume_integrate.comp.slang`; the four ReSTIR-stage variants (INITIAL / VISIBILITY / TEMPORAL / SPATIAL_REUSE) all need the cloud voxel-grid bindings available for the per-froxel atmosphere-sun NEE path.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h`** — fork-owned additions.
+  *Adds `Vector3 m_cameraWorldPosYUpKm` (default zero) member and public `setCloudShadowCameraPosition(Vector3)` setter to support the per-frame push of the camera world position from `fork_hooks::updateAtmosphereConstants` ahead of `computeLuts`. Mirrors the existing `setCloudRenderCameraBasis` plumbing.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned additions.
+  *Implements `setCloudShadowCameraPosition` (member-state setter). In `getAtmosphereArgs()` (right after the C5 sky-miss-composite block): populates the four new C6 fields — gate + strength from RTX_OPTIONs, `worldUnitsPerKm = 100000 * sceneScale` (canonical conversion), and `cameraWorldPosYUpKm` from the cached member.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *In `updateAtmosphereConstants` (immediately after `setCloudRenderCameraBasis`): reads the camera world position in game units, applies the same `toYUp` swap used for the basis vectors, converts to km via `kmPerWorldUnit = 1 / (100000 * sceneScale)`, and pushes via `setCloudShadowCameraPosition`. In the "Nubis Cubed Lighting" ImGui collapsing block (after the Master gate (C5) section): adds a "Cloud-on-terrain shadows (C6)" separator + checkbox bound to `cloudVoxelShadowsEnableObject()` + a `DragFloat` slider bound to `cloudShadowMarchStrengthObject()` with tooltips for both. ~25 LOC total.*
 
 ---

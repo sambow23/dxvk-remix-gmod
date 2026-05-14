@@ -426,7 +426,7 @@ namespace {
           src.getWrapModeV()
         } };
       }
-      case MaterialDataType::Translucent: 
+      case MaterialDataType::Translucent:
       {
         const auto& src = materialWithoutPreload.getTranslucentMaterialData();
         return MaterialData { TranslucentMaterialData {
@@ -759,7 +759,7 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE)          { result.set(InstanceCategories::LegacyEmissive); }
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_FIRST_PERSON_PLAYER_SHADOW){ result.set(InstanceCategories::FirstPersonPlayerShadow); }
       // Note: Occluder category is not exposed through the Remix API as it's primarily for Source engine NODRAW materials
-      
+
       static_assert((int)InstanceCategories::Count == 28, "Instance categories changed, please update Remix SDK");
       return result;
     }
@@ -771,7 +771,7 @@ namespace {
       desc.minTimeToLive = info.minTimeToLive;
       desc.maxTimeToLive = info.maxTimeToLive;
 
-      // Initial 
+      // Initial
       desc.spawnRatePerSecond = info.spawnRatePerSecond;
       desc.initialVelocityFromMotion = info.initialVelocityFromMotion;
       desc.initialVelocityFromNormal = info.initialVelocityFromNormal;
@@ -785,9 +785,9 @@ namespace {
 
       // Convert spawn/target pairs to 2-element animated vectors
       // Color: spawn at index 0, target at index 1
-      desc.minColor = { vec4(info.minSpawnColor.x, info.minSpawnColor.y, info.minSpawnColor.z, info.minSpawnColor.w), 
+      desc.minColor = { vec4(info.minSpawnColor.x, info.minSpawnColor.y, info.minSpawnColor.z, info.minSpawnColor.w),
                         vec4(info.minTargetColor.x, info.minTargetColor.y, info.minTargetColor.z, info.minTargetColor.w) };
-      desc.maxColor = { vec4(info.maxSpawnColor.x, info.maxSpawnColor.y, info.maxSpawnColor.z, info.maxSpawnColor.w), 
+      desc.maxColor = { vec4(info.maxSpawnColor.x, info.maxSpawnColor.y, info.maxSpawnColor.z, info.maxSpawnColor.w),
                         vec4(info.maxTargetColor.x, info.maxTargetColor.y, info.maxTargetColor.z, info.maxTargetColor.w) };
 
       // Size: spawn at index 0, target at index 1
@@ -1650,6 +1650,24 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestVramCompaction() {
+    return dxvk::fork_hooks::requestVramCompaction(tryAsDxvk());
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestTextureVramFree() {
+    return dxvk::fork_hooks::requestTextureVramFree(tryAsDxvk());
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetVramStats(
+      remixapi_VramStats* out_stats) {
+    return dxvk::fork_hooks::getVramStats(tryAsDxvk(), out_stats);
+  }
+
+  // Fork-owned helper body lives in rtx_fork_api_entry.cpp as
+  // fork_hooks::mutateTextureHashOption (add flag replaces the local
+  // TextureHashMutation enum). Both call sites hold s_mutex across the call
+  // per the lock-ordering rule documented alongside s_mutex.
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
     const char* textureCategory,
     const char* textureHash) {
@@ -1970,7 +1988,7 @@ namespace {
         break;
       }
     });
-    
+
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -2242,7 +2260,7 @@ namespace {
   bool isVersionCompatible(uint64_t userVersion) {
     constexpr uint64_t compiledVersion = REMIXAPI_VERSION_MAKE(REMIXAPI_VERSION_MAJOR, REMIXAPI_VERSION_MINOR, REMIXAPI_VERSION_PATCH);
 
-    bool isDevelopment = 
+    bool isDevelopment =
       REMIXAPI_VERSION_GET_MAJOR(userVersion) == 0 &&
       REMIXAPI_VERSION_GET_MAJOR(compiledVersion) == 0;
 
@@ -2418,7 +2436,7 @@ extern "C"
 
     // Set the first-person player shadow ignore flag from the LightInfo
     rt->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
-    
+
     {
       std::lock_guard lock { s_mutex };
       s_pendingLightUpdates.push_back(PendingLightUpdate{ handle, std::move(rt) });
@@ -2450,7 +2468,7 @@ extern "C"
       float alpha) {
     return impl_SetScreenTint(colorR, colorG, colorB, alpha);
   }
-  
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
     return dxvk::fork_hooks::setUiState(tryAsDxvk(), state);
   }
@@ -2467,6 +2485,57 @@ extern "C"
     }
     std::lock_guard lock { s_mutex };
     return dxvk::fork_hooks::drawScreenOverlay(remixDevice, pPixelData, width, height, format, opacity);
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetGameValue(
+    const char* key,
+    const char* value) {
+    if (!key || key[0] == '\0' || !value) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // The game-state store owns its own mutex. s_mutex is deliberately NOT
+    // taken here: funnelling high-frequency plugin writes through the same
+    // lock as the rest of the API has no benefit and would add contention.
+    dxvk::fork_game_state::GameStateStore::get().set(
+      std::string{ key }, std::string{ value });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetGameValue(
+    const char* key,
+    char*       out_buffer,
+    uint32_t    in_buffer_size,
+    uint32_t*   out_actual_size) {
+    if (key == nullptr || key[0] == '\0') {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (out_actual_size == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (in_buffer_size > 0 && out_buffer == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Like SetGameValue, rely on GameStateStore's internal mutex.
+    // s_mutex is deliberately NOT taken here to avoid contention on
+    // high-frequency reads from plugin threads.
+    std::string value;
+    if (!dxvk::fork_game_state::GameStateStore::get().tryGet(std::string{ key }, value)) {
+      *out_actual_size = 0;
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    const uint32_t needed = static_cast<uint32_t>(value.size()) + 1u;
+    *out_actual_size = needed;
+
+    if (in_buffer_size >= needed) {
+      memcpy(out_buffer, value.data(), value.size());
+      out_buffer[value.size()] = '\0';
+    }
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,

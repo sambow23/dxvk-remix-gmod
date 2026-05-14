@@ -601,23 +601,41 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
 // cloudPlanetRadius) live in atmosphere_common.slangh so closesthit ground
 // shadow paths and getTransmittanceToSun can use them without pulling in the
 // view-direction march. evalClouds composes those helpers with
-// sampleCloudSunTransmittance (defined here, sky-only) and is composited into
+// sampleCloudSunOpticalDepth (defined here, sky-only) and is composited into
 // evalSkyRadiance at the bottom of this file.
 
-// Sample cloud density along the sun direction from a cloud hit point.
-// Used to self-shadow the clouds. Reuses the main-sample's typeLocal /
-// coverageLocal across all 2 sun-shadow taps — spec rationale: noise
-// wavelength (~2km at default scale) is large compared to the 1.6km tap
-// span, so the approximation is visually adequate.
-float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
+// Sample raw cloud optical-depth integral along a light direction from a cloud
+// sample point. Returns the path integral of density × distance (units: km ×
+// dimensionless density), NOT the exponentiated transmittance — callers
+// compute exp(-opticalDepth × σ_n) per octave for the Wrenninge multi-scatter
+// sum, or `exp(-opticalDepth × 2 × cloudDensity)` for single-octave Beer-Lambert
+// (the moon path).
+//
+// Reuses the main-sample's typeLocal / coverageLocal across all 2 shadow taps
+// — spec rationale: noise wavelength (~2km at default scale) is large compared
+// to the 1.6km tap span, so the approximation is visually adequate.
+float sampleCloudSunOpticalDepth(vec3 cloudHitPos, vec3 sunDir,
                                   float typeLocal, float coverageLocal,
-                                  AtmosphereArgs args) {
-  if (sunDir.y <= 0.01f) return 1.0f;  // Sun near/below horizon: no meaningful shadow
+                                  AtmosphereArgs args,
+                                  uint2 pixelCoord, uint frameIdx) {
+  if (sunDir.y <= 0.01f) return 0.0f;  // Near/below horizon: no meaningful shadow → zero optical depth
 
   const int kTaps = 2;
   const float kStepKm = 0.8f;
   float opticalDepth = 0.0f;
 
+  // Shadow march intentionally deterministic. Earlier commits jittered the
+  // tap positions via fastJitter().y, but with only 2 taps the per-pixel
+  // variance in optical depth feeds Beer-Lambert's exp(-x) — a convex
+  // function — and Jensen's inequality (E[exp(-X)] > exp(-E[X])) biases the
+  // shadow estimate brighter than deterministic by an amount that scales
+  // with cloudDensity. At cloudDensity = 1 the bias is small; at the user's
+  // preferred cloudDensity = 2 it's large enough to wash out lit cumulus.
+  // The view-march jitter (channel x of the same fastJitter call) is fine
+  // because it accumulates linearly across many samples; only the shadow
+  // estimator's exponential nonlinearity creates this trap. The pixelCoord
+  // and frameIdx params are retained on the function signature for callers'
+  // convenience even though they go unused here.
   for (int i = 0; i < kTaps; ++i) {
     vec3 p = cloudHitPos + sunDir * (kStepKm * float(i + 1));
     // Project to horizontal plane and compute heightFraction at the tap.
@@ -629,9 +647,9 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
     opticalDepth += d;
   }
 
-  // Beer-Lambert with a moderate extinction coefficient scaled by density setting
-  float sigma = 2.0f * args.cloudDensity;
-  return exp(-opticalDepth * kStepKm * sigma);
+  // Return path integral (km × density). Direct-extinction sigma = 2 × cloudDensity;
+  // higher octaves attenuate it via extinctionScale^n in the multi-scatter sum.
+  return opticalDepth * kStepKm;
 }
 
 // Evaluate cloud contribution for a view direction via limited ray-march
@@ -650,7 +668,7 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
 //  4. Early-exit when transmittance drops below 0.01.
 //  5. Night moonlight contribution is constant per ray (computed outside
 //     the sample loop, applied at each step).
-vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
+vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameIdx) {
   if (args.cloudEnabled < 0.5f || args.cloudCoverageMean < 0.01f || args.cloudViewSamples == 0u) {
     return vec4(0.0f);
   }
@@ -681,14 +699,31 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   // style). The crude "variance" mechanism that lived here previously is
   // subsumed by cloudCoverageSpread.
 
-  // Pre-compute lighting terms invariant per sample
+  // Pre-compute lighting terms invariant per sample.
   vec3 sunDir = normalize(args.sunDirection);
   float cosTheta = dot(viewDir, sunDir);
-  float phase = hgPhase(cosTheta, args.cloudAnisotropy);
-  float lambert = saturate(sunDir.y * 0.8f + 0.2f);
-  const float kDiffuseGain = 0.35f;
-  const float kPhaseGain   = 0.20f;
-  float lightResponse = kDiffuseGain * lambert + kPhaseGain * phase;
+
+  // Wrenninge multi-scatter coefficients (Hillaire/Frostbite 2016, Schneider/Decima 2015).
+  // Each octave represents a higher-order scattering event with reduced energy
+  // (a^n), reduced effective extinction (b^n), and reduced phase asymmetry
+  // (c^n) so multi-scattered light becomes progressively more isotropic.
+  // Replaces the prior `kDiffuseGain × lambert + kPhaseGain × phase` single-
+  // scatter approximation that capped lit-side response at ~0.5 × sunIrradiance
+  // and produced uniformly muted cumulus regardless of view direction.
+  //
+  // The isotropic "deep-scatter floor" sits in for the diffusion-limit
+  // well-mixed glow inside dense cloud bodies — `kMsIsoStrength ≈ albedo/π`
+  // matches the Lambertian peak for a water-droplet cumulus (albedo ≈ 0.9),
+  // and shallow `kMsIsoExtinction` lets it penetrate cumulus interiors so
+  // bottoms read as bright milky white rather than the flat 4% ambient hack
+  // it replaces.
+  const float kMsA = 0.5f;                // energy reduction per octave
+  const float kMsB = 0.5f;                // extinction reduction per octave
+  const float kMsC = 0.5f;                // phase asymmetry reduction per octave
+  const float kMsIsoStrength   = 0.286f;  // ≈ albedo/π for water-droplet cumulus
+  const float kMsIsoExtinction = 0.25f;   // iso-floor extinction relative to direct sigma
+  uint msOctaveCount = clamp(args.cloudMultiScatterOctaves, 1u, 4u);
+  float baseSigma = 2.0f * args.cloudDensity;  // direct-extinction coefficient (matches shadow march)
 
   // Atmospheric transmittance to the sun. Purely a function of sun direction
   // (the simplified ground-level model has no altitude/position dependence),
@@ -724,23 +759,31 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   //   - nightLight (ambient, per-ray): per-moon zenith-cosine fill +
   //     nightSkyColor airglow. Uniform across the cloud volume —
   //     represents moon-bounce and skybounce light from all directions.
-  //   - moonCoeff[mi] (directional, per-ray): per-moon Lambert+HG
-  //     response gated by phaseGlow and cloudMoonBrightness. Same shape
-  //     as the sun's per-ray lightResponse * sunIlluminance product.
+  //   - moonDiffuseCoeff[mi] / moonPhaseAmt[mi] (directional, per-ray):
+  //     per-moon Lambert and HG-phase-gain response gated by phaseGlow and
+  //     cloudMoonBrightness. Split into separate diffuse + phase amounts so
+  //     the phase term can be Wrenninge-smoothed across octaves in the
+  //     per-sample loop (parallels the sun's msAniso octave sum at line
+  //     950 below). Without smoothing, kMoonAnisotropy = 0.85 produces a
+  //     visible discrete ring around the moon when the view ray grazes
+  //     thin uniform cloud cover.
   //   - moonShadow (per-sample, computed in the march loop below):
   //     ONE 2-tap density march along the brightness-weighted combined
   //     moon direction (combinedMoonDir, computed below) via the same
-  //     sampleCloudSunTransmittance helper the sun uses. Multiplies
-  //     combinedMoonCoeff per sample so the cumulus moon-facing side reads
-  //     bright while the far side darkens — mirrors sun behavior. The
-  //     combined-direction approximation replaces N independent per-moon
-  //     shadow marches; see Lever 4 rationale near the precompute below.
+  //     sampleCloudSunOpticalDepth helper the sun uses. Multiplies the
+  //     combined moon coefficients per sample so the cumulus moon-facing
+  //     side reads bright while the far side darkens — mirrors sun
+  //     behavior. The combined-direction approximation replaces N
+  //     independent per-moon shadow marches; see Lever 4 rationale near
+  //     the precompute below.
   vec3 nightLight = vec3(0.0f);
-  vec3 moonCoeff[MAX_MOONS];
+  vec3 moonDiffuseCoeff[MAX_MOONS];
+  vec3 moonPhaseAmt[MAX_MOONS];
   vec3 moonDirNorm[MAX_MOONS];
   [unroll] for (uint mInit = 0u; mInit < MAX_MOONS; ++mInit) {
-    moonCoeff[mInit]   = vec3(0.0f);
-    moonDirNorm[mInit] = vec3(0.0f, 1.0f, 0.0f);
+    moonDiffuseCoeff[mInit] = vec3(0.0f);
+    moonPhaseAmt[mInit]     = vec3(0.0f);
+    moonDirNorm[mInit]      = vec3(0.0f, 1.0f, 0.0f);
   }
   {
     float sunElev = sunDir.y;
@@ -784,13 +827,14 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
           // off-axis (60deg from moon) at ~0.09 -- a ~13x contrast.
           // Phase 3 Task 2 (2026-05-08): exposed as RTX_OPTIONs for in-game
           // tuning of silver-lining shape. Defaults preserved.
+          // Silver-lining response decomposed into diffuse + phase amounts.
+          // Diffuse (Lambert) is direction-independent at the cloud volume
+          // scale; phase (HG) needs per-sample, per-octave evaluation in the
+          // march loop below, so we precompute only the magnitude scaling
+          // here and defer hgPhase() to the loop.
           const float kMoonDiffuseGain = args.moonCloudDiffuseGain;
           const float kMoonPhaseGain   = args.moonCloudPhaseGain;
-          const float kMoonAnisotropy  = args.moonCloudAnisotropy;
-          float moonLambert  = saturate(moonDir.y * 0.8f + 0.2f);
-          float moonCosTheta = dot(viewDir, moonDir);
-          float moonPhase    = hgPhase(moonCosTheta, kMoonAnisotropy);
-          float moonResponse = kMoonDiffuseGain * moonLambert + kMoonPhaseGain * moonPhase;
+          float moonLambert = saturate(moonDir.y * 0.8f + 0.2f);
           // Phase 2 (2026-05-08): physical irradiance scaffold.
           // Replaces the prior kMoonIllumScale = 0.05 × cloudMoonBrightness magic-
           // number magnitude (which lacked args.sunIlluminance entirely -- cloud
@@ -802,12 +846,6 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
           // × m.brightness / π. moonNeeStrength now scales cloud illumination
           // (in addition to surface NEE) since clouds are part of "the world
           // the moon lights." cloudMoonBrightness slider retires in Task 7.
-          //
-          // Magnitude at FNV defaults (full moon, zenith): peak ~2.45e-3,
-          // off-axis ~1.95e-4 -- a 24× drop vs prior magic-number magnitude
-          // (peak 0.058, off-axis 4.6e-3). Same 13× peak/off-axis contrast,
-          // but absolute off-axis falls below visibility threshold while
-          // peak stays visible. Silver lining reads correctly.
           vec3 sharedFactor = computeMoonSharedFactor(m, args, m.color);
           float moonSolidAngleSr = 2.0f * kPi * (1.0f - cos(m.angularRadius));
           // Phase 3 (2026-05-08): args.cloudMoonBrightness is the per-path stylistic
@@ -816,8 +854,9 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
           vec3 moonIrradiance = sharedFactor * phaseGlow * moonSolidAngleSr
                               * args.moonNeeStrength * args.cloudMoonBrightness
                               * nightFactor;
-          moonCoeff[mi]   = moonIrradiance * moonResponse;
-          moonDirNorm[mi] = moonDir;
+          moonDiffuseCoeff[mi] = moonIrradiance * kMoonDiffuseGain * moonLambert;
+          moonPhaseAmt[mi]     = moonIrradiance * kMoonPhaseGain;
+          moonDirNorm[mi]      = moonDir;
         }
       }
       nightLight += args.nightSkyColor * args.nightSkyBrightness * nightFactor * 0.5f;
@@ -830,17 +869,23 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   // Visual delta is near-zero -- with multiple moons you cannot resolve
   // independent cast shadows on the same cloud cell; shadow direction is a
   // perceptual cue, not a per-moon feature.
-  vec3 combinedMoonDir   = vec3(0.0f, 1.0f, 0.0f);
-  vec3 combinedMoonCoeff = vec3(0.0f);
+  vec3 combinedMoonDir          = vec3(0.0f, 1.0f, 0.0f);
+  vec3 combinedMoonDiffuseCoeff = vec3(0.0f);
+  vec3 combinedMoonPhaseAmt     = vec3(0.0f);
   {
     vec3 sumWeightedDir = vec3(0.0f);
     float sumWeight = 0.0f;
     [unroll] for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
-      float w = max(max(moonCoeff[mi].r, moonCoeff[mi].g), moonCoeff[mi].b);
+      // Weight by max-channel of total (diffuse + phase amplitude) — both
+      // share moonIrradiance so this stays proportional to per-moon
+      // brightness, independent of view direction.
+      vec3 moonTotal = moonDiffuseCoeff[mi] + moonPhaseAmt[mi];
+      float w = max(max(moonTotal.r, moonTotal.g), moonTotal.b);
       if (w > 0.001f) {
-        sumWeightedDir += moonDirNorm[mi] * w;
-        sumWeight += w;
-        combinedMoonCoeff += moonCoeff[mi];
+        sumWeightedDir           += moonDirNorm[mi] * w;
+        sumWeight                += w;
+        combinedMoonDiffuseCoeff += moonDiffuseCoeff[mi];
+        combinedMoonPhaseAmt     += moonPhaseAmt[mi];
       }
     }
     if (sumWeight > 0.0f && length(sumWeightedDir) > 0.001f) {
@@ -848,24 +893,24 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     }
   }
 
-  // Horizon fade applied uniformly per ray
-  float horizonFade = smoothstep(0.02f, 0.15f, viewDir.y);
-
-  // Ray-march. Per-pixel hash jitter on the fractional step offset breaks
-  // the visible band-rings at low sample counts into noise that DLSS / temporal
-  // averaging blurs out — much cheaper than bumping cloudViewSamples.
+  // Ray-march. Per-pixel FAST-noise jitter on the fractional step offset breaks
+  // the visible band-rings into a blue-noise pattern that DLSS / temporal
+  // averaging converges cleanly. Channel x is the view march; channel y is
+  // reserved for sun-shadow tap jitter inside sampleCloudSunOpticalDepth.
   float stepLen = (tExit - tEntry) / float(args.cloudViewSamples);
-  float jitter = hash31(viewDir);  // [0, 1) per pixel
+  float jitter = fastJitter(pixelCoord, frameIdx).x;  // [0, 1) per pixel, FAST-noise stratified
   vec3 accumRadiance = vec3(0.0f);
   float transmittance = 1.0f;
 
   // Shadow cadence cache (Lever 3). Sun and combined-moon shadow march only
   // every other density-passing sample; reuse cached value on the alternate.
   // Cache is invalidated whenever the density gate fires so we never reuse
-  // a stale shadow across an empty interval.
-  float cachedSunShadow  = 1.0f;
-  float cachedMoonShadow = 1.0f;
-  bool  cacheValid       = false;
+  // a stale shadow across an empty interval. Caches the raw optical-depth
+  // integral (km × density) — the sun side feeds it into the Wrenninge sum
+  // per octave, the moon side exponentiates once for single-octave Beer-Lambert.
+  float cachedSunOpticalDepth  = 0.0f;
+  float cachedMoonOpticalDepth = 0.0f;
+  bool  cacheValid             = false;
 
   for (uint i = 0u; i < args.cloudViewSamples; ++i) {
     if (transmittance < 0.01f) break;  // early-exit (free perf win)
@@ -884,7 +929,6 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal, args,
                                                 AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
-    density *= horizonFade;
     if (density < 0.001f) {
       cacheValid = false;
       continue;
@@ -894,15 +938,43 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     // moon shadow share a single parity decision so they march together.
     bool reuse = cacheValid && ((i & 1u) == 1u);
 
-    float sunTransmittance;
+    float sunOpticalDepth;
     if (reuse) {
-      sunTransmittance = cachedSunShadow;
+      sunOpticalDepth = cachedSunOpticalDepth;
     } else {
-      sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, typeLocal, coverageLocal, args);
-      cachedSunShadow = sunTransmittance;
+      sunOpticalDepth = sampleCloudSunOpticalDepth(samplePos, sunDir, typeLocal, coverageLocal, args, pixelCoord, frameIdx);
+      cachedSunOpticalDepth = sunOpticalDepth;
     }
-    vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance * lightResponse;
-    vec3 ambient = args.sunIlluminance * airTrans * 0.04f;
+
+    // Wrenninge multi-scatter sum: N octaves of phase × Beer-Lambert with
+    // attenuating energy, extinction, and HG anisotropy. The first octave
+    // (n=0) is the direct single-scatter; subsequent octaves approximate
+    // higher-order in-scattering that fills the cloud volume more uniformly
+    // and lifts the deep-interior radiance the prior single-scatter model
+    // crushed to ~zero. Range at default coefficients: ~0.05 (back-side, lit)
+    // to ~0.9 (silver-lining, lit).
+    float msAniso   = 0.0f;
+    float octEnergy = 1.0f;
+    float octSigma  = baseSigma;
+    float octPhaseG = args.cloudAnisotropy;
+    for (uint oct = 0u; oct < msOctaveCount; ++oct) {
+      msAniso += octEnergy * hgPhase(cosTheta, octPhaseG) * exp(-sunOpticalDepth * octSigma);
+      octEnergy *= kMsA;
+      octSigma  *= kMsB;
+      octPhaseG *= kMsC;
+    }
+
+    // Isotropic deep-scatter floor (diffusion-limit approximation). Penetrates
+    // cumulus interiors via the shallow `kMsIsoExtinction` so dense bodies
+    // stay lit — this term IS the bright milky-white cumulus bottom. Replaces
+    // the previous flat 0.04 × sunIlluminance ambient hack with a quantity
+    // that attenuates correctly inside the cloud and inherits airTrans's
+    // sunset color shift.
+    float msIso = kMsIsoStrength * exp(-sunOpticalDepth * baseSigma * kMsIsoExtinction);
+
+    vec3 directLight = args.sunIlluminance * airTrans
+                     * args.cloudMultiScatterStrength
+                     * (msAniso + msIso);
 
     // Per-sample moon direct light: ONE shadow march along the brightness-
     // weighted combined moon direction (Lever 4), participating in the same
@@ -910,35 +982,67 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     // unshadowed moon contribution gets crushed by (1 - stepTransmittance)
     // anyway, so we skip the march entirely below kMoonShadowSkipDensity
     // (Lever 5).
+    //
+    // Phase-only Wrenninge sum applied to the silver-lining HG response.
+    // Without smoothing, kMoonAnisotropy = 0.85 produces a visible discrete
+    // bright ring around the moon where the view ray grazes thin uniform
+    // cloud cover — the HG peak is too sharp against the dark night-sky
+    // background. Mirroring the sun's octave loop (line 950) spreads the
+    // phase response across progressively broader g values and the ring
+    // becomes a smooth gradient. Unlike the sun loop we deliberately do
+    // NOT reduce extinction per octave (no octSigma *= kMsB); the moon
+    // keeps single-octave Beer-Lambert via the outer moonShadow factor so
+    // cumulus interiors stay dark. Wrenninge's deep-body penetration is
+    // the sun-side feature we explicitly do not import.
     const float kMoonShadowSkipDensity = 0.05f;
     vec3 moonDirectLight = vec3(0.0f);
-    if (any(combinedMoonCoeff > vec3(0.001f))) {
-      float moonShadow;
+    if (any((combinedMoonDiffuseCoeff + combinedMoonPhaseAmt) > vec3(0.001f))) {
+      float moonOpticalDepth;
       if (density < kMoonShadowSkipDensity) {
-        moonShadow = 1.0f;  // unshadowed; visible contribution stays small via (1-T) factor
+        moonOpticalDepth = 0.0f;  // unshadowed; visible contribution stays small via (1-T) factor
       } else if (reuse) {
-        moonShadow = cachedMoonShadow;
+        moonOpticalDepth = cachedMoonOpticalDepth;
       } else {
-        moonShadow = sampleCloudSunTransmittance(samplePos, combinedMoonDir,
-                                                  typeLocal, coverageLocal, args);
-        cachedMoonShadow = moonShadow;
+        moonOpticalDepth = sampleCloudSunOpticalDepth(samplePos, combinedMoonDir,
+                                                       typeLocal, coverageLocal, args,
+                                                       pixelCoord, frameIdx);
+        cachedMoonOpticalDepth = moonOpticalDepth;
       }
-      // Approximation: (Σ moonCoeff_i) * shadow_combined replaces the original
-      // Σ(moonCoeff_i * shadow_i). Equal iff per-moon shadow values are uniform,
-      // which holds at cloud scale where direction is a perceptual cue only.
-      moonDirectLight = combinedMoonCoeff * moonShadow;
+      float moonShadow = exp(-moonOpticalDepth * baseSigma);
+      // Wrenninge phase sum: each octave attenuates energy (kMsA) and
+      // anisotropy (kMsC) but NOT extinction. octave 0 is the original
+      // sharp peak; later octaves are broader, dimmer fill that fades the
+      // ring boundary without lifting deep-body contribution.
+      float moonCosTheta = dot(viewDir, combinedMoonDir);
+      float msMoonAniso  = 0.0f;
+      float octEnergyM   = 1.0f;
+      float octPhaseGM   = args.moonCloudAnisotropy;
+      for (uint oct = 0u; oct < msOctaveCount; ++oct) {
+        msMoonAniso += octEnergyM * hgPhase(moonCosTheta, octPhaseGM);
+        octEnergyM  *= kMsA;
+        octPhaseGM  *= kMsC;
+      }
+      // Approximation: (Σ moonContrib_i) * shadow_combined replaces the
+      // original Σ(moonContrib_i * shadow_i). Equal iff per-moon shadow
+      // values are uniform, which holds at cloud scale where direction is
+      // a perceptual cue only.
+      moonDirectLight = (combinedMoonDiffuseCoeff
+                       + combinedMoonPhaseAmt * msMoonAniso) * moonShadow;
     }
 
     // Sky-bounce shadow tint: shadowed parts get faint blue contribution.
     // Multiplied by airTrans because the bounce is ultimately sun light —
     // without this gate the term carried full unattenuated sunIlluminance
     // even when the sun was below the horizon, leaving an unnatural blue
-    // glow on every cloud at night.
-    float shadowFraction = 1.0f - sunTransmittance;
+    // glow on every cloud at night. `shadowFraction` derives from the
+    // single-octave (n=0) transmittance so the tint shape matches the
+    // pre-Wrenninge behavior — only the cloud body lighting changed.
+    float sunTransmittance_n0 = exp(-sunOpticalDepth * baseSigma);
+    float shadowFraction = 1.0f - sunTransmittance_n0;
     vec3 shadowTintAdd = args.cloudShadowTint * args.cloudShadowTintStrength
                        * shadowFraction * args.sunIlluminance * airTrans * 0.05f;
 
-    vec3 sampleColor = args.cloudColor * (directLight + ambient + moonDirectLight)
+    vec3 sampleColor = args.cloudColor * (directLight + moonDirectLight)
                      + nightLight + shadowTintAdd + warmAdd;
 
     // Beer-Lambert step (analytical integration of constant emission)
@@ -959,11 +1063,50 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
 // Sky entry point
 // ============================================================================
 
-// Main evaluation function - computes atmosphere directly instead of using sky view LUT
+// Main evaluation function - computes atmosphere directly instead of using sky view LUT.
+//
+// `enableCloudTemporalSmoothing` (fork) — when true, the cloud layer alpha
+// blends against the previous frame's screen-space cloud history at the same
+// pixel coordinate before compositing. Kills the DLSS-perceived flatness that
+// the per-frame FAST-noise jitter (added in commits 148e3fa5 and d327f3d8)
+// otherwise produces. The blend uses a fixed history weight (0.92) which
+// matches the volumetric system's age-EMA settled state after ~10 frames.
+//
+// History rejection: a history sample is discarded — and the raw current
+// value used in its place — when ANY of the following hold:
+//   1. The reprojected previous coordinate falls off-screen.
+//   2. The history slot's frame-id (companion R16_UINT ping-pong) does not
+//      equal `(frameIdx - 1) & 0xFFFFu`. This catches stale history at
+//      pixels that were foreground-occluded last frame and so were not
+//      refreshed by the sky-miss path — the cause of the bright trailing
+//      ghosts addressed in the 2026-05-13 follow-up.
+//   3. Previous-alpha is near zero (no cloud history at this position).
+//
+// Pass true ONLY from the primary view ray (geometry_resolver miss path).
+// PSR / indirect / NRC paths must pass false — they call evalSkyRadiance with
+// non-primary directions, so the screen-space history at their pixelCoord
+// would be visually wrong (would smear primary cloud into reflections).
+//
+// `isPrimaryRay` (fork — 2026-05-12, C5) — when true AND
+// args.cloudRenderRTEnable != 0, the cloud layer is read from the prerendered
+// AtmosphereCloudRender RT (written each frame by cloud_render.comp.slang
+// with Nubis Cubed 2023 lighting) instead of calling analytical evalClouds.
+// The RT is at primary-ray pixel coordinates — sampling it from a PSR /
+// indirect / reflection ray would return the wrong cloud (different view
+// direction at the same pixel), so non-primary call sites pass false and
+// fall through to evalClouds. The temporal-smoothing path applies on top of
+// either source uniformly because both produce the same (rgb-pre-step,
+// opacity) shape; see the alpha-convention note at the branch.
 vec3 evalSkyRadiance(
   vec3 viewDir,
   AtmosphereArgs args,
-  bool isZUp = false
+  uint2 pixelCoord,
+  uint frameIdx,
+  bool isZUp = false,
+  bool enableCloudTemporalSmoothing = false,
+  vec2 motionVectorPixels = vec2(0.0f, 0.0f),
+  uint2 historyResolution = uint2(0u, 0u),
+  bool isPrimaryRay = false
 ) {
   // Transform view direction to Y-up space if needed
   vec3 viewDirYUp = isZUp ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
@@ -1058,8 +1201,122 @@ vec3 evalSkyRadiance(
 
   // Clouds render on top of everything (atmosphere + stars + moons). They
   // occlude whatever is behind them based on their alpha.
-  vec4 cloudLayer = evalClouds(viewDirYUp, args);
-  radiance = mix(radiance, cloudLayer.rgb, cloudLayer.a);
+  //
+  // C5 (fork — 2026-05-12): primary-ray-only branch reads the prerendered
+  // AtmosphereCloudRender RT instead of calling analytical evalClouds. The RT
+  // stores vec4(premultiplied_rgb, view_transmittance) — alpha is
+  // TRANSMITTANCE. evalClouds returns vec4(rgb, opacity) — alpha is OPACITY.
+  // We invert the RT alpha (opacity = 1 - transmittance) so the downstream
+  // temporal-smoothing / mix composite operations apply uniformly to either
+  // source: both paths are accumulated as `radiance += stepRadiance * T_so_far`,
+  // so the rgb-channel semantics match once the alpha convention is reconciled.
+  vec4 cloudLayer;
+  if (args.cloudRenderRTEnable != 0u && isPrimaryRay) {
+    vec4 cloudRT = AtmosphereCloudRender.Load(int3(pixelCoord, 0));
+    cloudLayer = vec4(cloudRT.rgb, 1.0f - cloudRT.a);
+  } else {
+    cloudLayer = evalClouds(viewDirYUp, args, pixelCoord, frameIdx);
+  }
+
+  // Temporal cloud smoothing (fork). Per-frame FAST-noise jitter on the cloud
+  // ray-march (commits 148e3fa5 / d327f3d8) creates brightness variance that
+  // DLSS sees as noise and averages out, producing visible flatness. We blend
+  // the raw current cloud against a screen-space history at the reprojected
+  // previous-frame pixel to give DLSS a stable signal while preserving the
+  // jitter's anti-banding benefits.
+  //
+  // Algorithm shape mirrors the volumetric system's age-EMA (see
+  // submodules/rtxdi/.../volume_integrator.slangh:125-142). Fixed history
+  // weight (0.92) matches the volumetric EMA's settled state after ~10
+  // frames.
+  //
+  // Storage convention: AtmosphereCloudHistory stores
+  //   (rgb = cloudLayer.rgb * cloudLayer.a, a = cloudLayer.a)
+  // — premultiplied radiance. This means an off-screen / disocclusion fallback
+  // (zero history) blends to "no clouds" cleanly, and the final composite is
+  // `radiance + smoothed.rgb - radiance * smoothed.a` which equals
+  // `mix(radiance, smoothed.rgb / max(smoothed.a, eps), smoothed.a)` for
+  // smoothed.a > 0 and `radiance` otherwise. We use the additive form to
+  // skip the divide.
+  //
+  // Age-channel disocclusion (fork — 2026-05-13). The color slot above is
+  // ONLY written from the sky-miss branch — when a pixel is occluded by
+  // foreground geometry the slot retains pre-occlusion radiance for as long
+  // as the occlusion lasts, because nothing else writes there. The legacy
+  // alpha-only disocclusion guard could not distinguish "valid sky cloud
+  // from last frame" from "stale bright cloud from N frames ago, currently
+  // occluded but uncovered this frame" — both have alpha > 0 — and so
+  // produced ~30-frame bright ghost trails when foreground moved through
+  // bright sky or near emissive surfaces. The companion R16_UINT
+  // AtmosphereCloudHistoryFrameId{Prev,Curr} pair carries the frame index
+  // at which each slot was last refreshed; the read site below rejects any
+  // history whose stored frame-id != `(frameIdx - 1) & 0xFFFFu`. Sentinel
+  // 0xFFFF is cleared into the buffer at allocation; the wrap once every
+  // 65536 frames and frame-0 startup both collide harmlessly with the
+  // sentinel for a single one-frame rejection (~18 min cadence at 60fps).
+  vec4 smoothedCloud = cloudLayer;  // default: no smoothing
+  if (enableCloudTemporalSmoothing && all(historyResolution > uint2(0u, 0u))) {
+    vec4 currentPremul = vec4(cloudLayer.rgb * cloudLayer.a, cloudLayer.a);
+
+    // Reproject: previous-frame pixel = current pixel + motion-vector (in pixels).
+    // calcMotionVectorForRayMiss returns NDC-delta * resolution, so adding it
+    // to the current pixel yields the previous frame's screen-space pixel.
+    vec2 prevPixelF = vec2(pixelCoord) + motionVectorPixels;
+    int2 prevPixel = int2(floor(prevPixelF + 0.5f));
+
+    bool reprojValid = all(prevPixel >= int2(0, 0))
+                    && all(prevPixel < int2(historyResolution));
+
+    if (reprojValid) {
+      vec4 history = AtmosphereCloudHistoryPrev[prevPixel];
+
+      // Age check (fork — 2026-05-13). Reject history whose stored frame-id
+      // doesn't match the immediately previous frame. The sentinel 0xFFFF
+      // collides with the underflow of `0u - 1u` at startup (correct: no
+      // history exists yet) and once per 16-bit wrap (~18 min at 60fps,
+      // a single rejected blend on affected pixels — imperceptible).
+      uint historyFrameId = AtmosphereCloudHistoryFrameIdPrev[prevPixel];
+      uint expectedPrevFrameId = (frameIdx - 1u) & 0xFFFFu;
+      bool ageValid = (historyFrameId == expectedPrevFrameId)
+                   && (historyFrameId != 0xFFFFu);
+
+      // Disocclusion guard: stale-age short-circuits to "use raw current
+      // sample." Past that, the legacy alpha-based gate handles the
+      // "no cloud here either way" case (both lerp terms zero, blend is
+      // zero — still valid). The 0.001 threshold matches the early-exit
+      // gate inside evalClouds itself.
+      bool historyValid = ageValid
+                       && ((history.a > 0.001f) || (currentPremul.a < 0.001f));
+      if (historyValid) {
+        // Fixed history weight. Higher = smoother but slower to respond to
+        // genuine sky changes (sun motion, weather preset changes); lower =
+        // less smoothing benefit. 0.92 was picked to settle to within 1% of
+        // a stable signal in ~30 frames at 60Hz (~0.5s) while still strongly
+        // suppressing the per-frame jitter variance DLSS sees.
+        const float kHistoryWeight = 0.92f;
+        vec4 blended = lerp(currentPremul, history, kHistoryWeight);
+        smoothedCloud = vec4(blended.rgb, blended.a);
+      } else {
+        smoothedCloud = currentPremul;
+      }
+    } else {
+      smoothedCloud = currentPremul;
+    }
+
+    // Write current frame's premultiplied accumulator + frame-id for next
+    // frame to read. The frame-id write is what makes the age check above
+    // work: any pixel that does NOT reach this write site this frame keeps
+    // its old (or sentinel) frame-id and will fail next-frame's age check.
+    AtmosphereCloudHistoryCurr[pixelCoord] = smoothedCloud;
+    AtmosphereCloudHistoryFrameIdCurr[pixelCoord] = frameIdx & 0xFFFFu;
+
+    // Composite: smoothedCloud is premultiplied, so the standard "over" op
+    // is `radiance * (1 - alpha) + premul.rgb`.
+    radiance = radiance * (1.0f - smoothedCloud.a) + smoothedCloud.rgb;
+  } else {
+    // No temporal smoothing — original composite path.
+    radiance = mix(radiance, cloudLayer.rgb, cloudLayer.a);
+  }
 
   return max(radiance, vec3(0.0f));
 }
