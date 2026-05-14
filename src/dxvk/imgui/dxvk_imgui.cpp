@@ -1655,6 +1655,8 @@ namespace dxvk {
       ImGui::Indent();
       RemixGui::Checkbox("Enable Instance Debugging", &RtxOptions::enableInstanceDebuggingToolsObject());
       RemixGui::Checkbox("Disable Draw Calls Post RTX Injection", &RtxOptions::skipDrawCallsPostRTXInjectionObject());
+      RemixGui::Checkbox("Skip Draws Without Material", &RtxOptions::skipDrawCallsWithoutMaterialObject());
+      RemixGui::SetTooltipToLastWidgetOnHover("Skips draw calls that have no D3D9 texture bound (untextured geometry with no Remix replacement material). Useful for hiding collision or debug meshes.");
       RemixGui::Checkbox("Break into Debugger On Press of Key 'B'", &RtxOptions::enableBreakIntoDebuggerOnPressingBObject());
       RemixGui::Checkbox("Block Input to Game in UI", &RtxOptions::blockInputToGameInUIObject());
       RemixGui::Checkbox("Force Camera Jitter", &RtxOptions::forceCameraJitterObject());

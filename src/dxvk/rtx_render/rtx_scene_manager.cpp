@@ -1059,6 +1059,10 @@ namespace dxvk {
       return nullptr;
     }
 
+    if (RtxOptions::skipDrawCallsWithoutMaterial() && drawCallState.getMaterialData().getHash() == kEmptyHash) {
+      return nullptr;
+    }
+
     ObjectCacheState result = ObjectCacheState::kInvalid;
     BlasEntry* pBlas = nullptr;
     if (m_drawCallCache.get(drawCallState, &pBlas) == DrawCallCache::CacheState::kExisted) {

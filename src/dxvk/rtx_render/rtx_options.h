@@ -357,6 +357,7 @@ namespace dxvk {
                     "This value must always be greater than zero.",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx", bool, skipDrawCallsPostRTXInjection, false, "Ignores all draw calls recorded after RTX Injection, the location of which varies but is currently based on when tagged UI textures begin to draw.");
+    RTX_OPTION("rtx", bool, skipDrawCallsWithoutMaterial, false, "Ignores all draw calls whose D3D9 surface has no texture bound (material hash == 0). Useful for hiding untextured collision or debug meshes that have no authored Remix replacement material.");
     RTX_OPTION_ARGS("rtx", DlssPreset, dlssPreset, DlssPreset::On, "Combined DLSS Preset for quickly controlling Upscaling, Frame Interpolation and Latency Reduction.",
                     args.environment = "RTX_DLSS_PRESET",
                     args.flags = RtxOptionFlags::UserSetting);
