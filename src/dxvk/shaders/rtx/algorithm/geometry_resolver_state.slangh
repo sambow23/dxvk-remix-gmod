@@ -48,12 +48,12 @@ struct GeometryResolverState : IBasePayloadState
   f16vec3 attenuation;
   uint8_t _rayMask;
 
-  // Property to get and set pixel coordinate
-  property u16vec2 pixelCoordinate 
+  // Property to get pixel coordinate
+  property u16vec2 pixelCoordinate
   {
-    get 
+    get
     {
-      return getDispatchRaysIndex().xy;
+      return u16vec2(getDispatchRaysIndex().xy);
     }
   }
 
@@ -65,10 +65,10 @@ struct GeometryResolverState : IBasePayloadState
     set { _origin = newValue; }
   }
 
-  property float16_t coneRadius 
+  property float coneRadius
   {
     get { return _coneRadius; }
-    set { _coneRadius = newValue; }
+    set { _coneRadius = float16_t(newValue); }
   }
 
   property float segmentHitDistance 
@@ -77,10 +77,10 @@ struct GeometryResolverState : IBasePayloadState
     set { _segmentHitDistance = newValue; }
   }
 
-  property f16vec3 direction 
+  property vec3 direction
   {
     get { return _direction; }
-    set { _direction = newValue; }
+    set { _direction = f16vec3(newValue); }
   }
 
   property uint8_t rayMask 
@@ -173,10 +173,10 @@ struct GeometryResolverState : IBasePayloadState
       set { _encodedFlags = (_encodedFlags & ~(0b11 << 14)) | ((uint)newValue << 14); }
   }
 
-  property f16vec4 accumulatedRotation
+  property vec4 accumulatedRotation
   {
-      get { return _accumulatedRotation; }
-      set { _accumulatedRotation = newValue; }
+      get { return vec4(_accumulatedRotation); }
+      set { _accumulatedRotation = f16vec4(newValue); }
   }
 
 #ifdef RAY_PIPELINE
@@ -188,6 +188,18 @@ struct GeometryResolverState : IBasePayloadState
     return false;
   }
 #endif // defined(RAY_PIPELINE)
+
+  // True if any PSR (reflection or transmission) is being performed for this pixel.
+  bool performedAnyPSR()
+  {
+    return performPSTR || performPSRR;
+  }
+
+  // True only when BOTH PSRR and PSTR fire — one becomes the primary surface, the other becomes a distinct secondary surface.
+  bool hasSecondarySurface()
+  {
+    return performPSTR && performPSRR;
+  }
 }
 
 struct GeometryPSRResolverState : IBasePayloadState
@@ -213,12 +225,12 @@ struct GeometryPSRResolverState : IBasePayloadState
   uint8_t bounceIteration;
   f16vec3 attenuation;
 
-  // Property to get and set pixel coordinate
-  property u16vec2 pixelCoordinate 
+  // Property to get pixel coordinate
+  property u16vec2 pixelCoordinate
   {
-    get 
+    get
     {
-      return getDispatchRaysIndex().xy;
+      return u16vec2(getDispatchRaysIndex().xy);
     }
   }
 
@@ -236,10 +248,10 @@ struct GeometryPSRResolverState : IBasePayloadState
     set { _origin = newValue; }
   }
 
-  property float16_t coneRadius 
+  property float coneRadius
   {
     get { return _coneRadius; }
-    set { _coneRadius = newValue; }
+    set { _coneRadius = float16_t(newValue); }
   }
 
   property float segmentHitDistance 
@@ -248,10 +260,10 @@ struct GeometryPSRResolverState : IBasePayloadState
     set { _segmentHitDistance = newValue; }
   }
 
-  property f16vec3 direction 
+  property vec3 direction
   {
     get { return _direction; }
-    set { _direction = newValue; }
+    set { _direction = f16vec3(newValue); }
   }
 
   property uint8_t rayMask 
@@ -356,14 +368,14 @@ struct GeometryPSRResolverState : IBasePayloadState
 
   // Note: This represents the quaternion to transform a normal or vector from world space into the virtual space seen
   // through PSR and ray portals.
-  property f16vec4 accumulatedRotation
+  property vec4 accumulatedRotation
   {
-      get { return _accumulatedRotation; }
-      set { _accumulatedRotation = newValue; }
+      get { return vec4(_accumulatedRotation); }
+      set { _accumulatedRotation = f16vec4(newValue); }
   }
 
 #ifdef RAY_PIPELINE
-  bool shouldReorder(out uint coherenceHints, out uint numCoherenceHints) 
+  bool shouldReorder(out uint coherenceHints, out uint numCoherenceHints)
   {
     coherenceHints = 0;
     numCoherenceHints = 0;
@@ -389,7 +401,7 @@ struct GbufferPSRData
 // geometry flag data.  Only portalSpace (2 bits) and objectMask dynamic bits (4 bits) are
 // needed on unpack, so we compress the full geometry flags into 6 bits above the index.
 GbufferPSRData packPSRData(Ray sampledRay, uint mediumMaterialIndex, f16vec3 attenuation,
-  f16vec4 accumulatedRotation, uint packedGeometryFlags)
+  vec4 accumulatedRotation, uint packedGeometryFlags)
 {
   GbufferPSRData psrData = (GbufferPSRData)0;
   psrData.origin = floatBitsToUint(sampledRay.origin);

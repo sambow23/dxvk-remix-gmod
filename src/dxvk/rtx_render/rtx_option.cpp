@@ -255,7 +255,7 @@ namespace dxvk {
     case OptionType::Bool: return "bool";
     case OptionType::Int: return "int";
     case OptionType::Float: return "float";
-    case OptionType::HashSet: return "hash set"; 
+    case OptionType::HashSet: return "hash set";
     case OptionType::HashVector: return "hash vector";
     case OptionType::VirtualKeys: return "virtual keys";
     case OptionType::Vector2: return "float2";
@@ -656,8 +656,7 @@ namespace dxvk {
 
   void RtxOptionImpl::clearFromStrongerLayers(const RtxOptionLayer* targetLayer,
                                                std::optional<XXH64_hash_t> hash) {
-    const RtxOptionLayer* target = getTargetLayer(targetLayer);
-    const RtxOptionLayerKey targetKey = target ? target->getLayerKey() : kRtxOptionLayerDefaultKey;
+    const RtxOptionLayerKey targetKey = targetLayer ? targetLayer->getLayerKey() : kRtxOptionLayerDefaultKey;
     
     bool anyModified = false;
     
@@ -757,7 +756,7 @@ namespace dxvk {
   bool RtxOptionImpl::migrateValuesTo(RtxOptionImpl* destOption, std::function<bool(const GenericValue& src, GenericValue& dest, bool destHasExistingValue)> transform) {
     std::lock_guard<std::mutex> lock(getUpdateMutex());
 
-    Logger::info(str::format("[Migration] Migrating from ", getFullName(), " to ", destOption->getFullName()));
+    bool migrated = false;
 
     for (auto& [layerKey, sourcePrioritizedValue] : m_optionLayerValueQueue) {
       if (layerKey == kRtxOptionLayerDefaultKey) {
@@ -777,10 +776,20 @@ namespace dxvk {
 
       if (transform(sourcePrioritizedValue.value, *destValue, !destIsNew)) {
         destOption->markDirty();
+        migrated = true;
       }
     }
 
-    return true;
+    // Only announce the migration when at least one non-default layer actually
+    // moved. Callers (decal-texture / particle maxSpeed) gate their own
+    // `[Deprecated Config]` "please re-save your rtx config" log on this
+    // return value, so emitting true when nothing moved spams users who have
+    // no deprecated keys in any of their configs.
+    if (migrated) {
+      Logger::info(str::format("[Migration] Migrating from ", getFullName(), " to ", destOption->getFullName()));
+    }
+
+    return migrated;
   }
 
   void RtxOptionImpl::updateLayerBlendStrength(const RtxOptionLayer& optionLayer) {

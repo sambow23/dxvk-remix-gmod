@@ -44,3 +44,4 @@ nrc_session_log.txt
 python.dxvk-cache
 nv-private/
 tests/
+*.xml.user

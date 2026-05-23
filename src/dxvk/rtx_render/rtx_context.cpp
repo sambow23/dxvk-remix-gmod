@@ -22,8 +22,6 @@
 #include <cstring>
 #include <cmath>
 #include <cassert>
-#include <array>
-#include <fstream>
 #include <chrono>
 
 #include "dxvk_device.h"
@@ -59,7 +57,7 @@
 
 #include "../util/log/metrics.h"
 #include "../util/util_defer.h"
-#include "../util/util_globaltime.h"
+#include "../util/util_global_time.h"
 
 #include "rtx_imgui.h"
 #include "dxvk_scoped_annotation.h"
@@ -184,6 +182,13 @@ namespace dxvk {
       m_triggerDelayedTerminate = true;
     }
 
+    Metrics::TestTraceConfig testTraceConfig;
+    testTraceConfig.enabled = RtxOptions::Automation::enableTestTrace();
+    testTraceConfig.screenshotFrameEnabled = m_screenshotFrameEnabled;
+    testTraceConfig.screenshotFrameNum = m_screenshotFrameNum;
+    testTraceConfig.terminateAppFrameNum = m_terminateAppFrameNum;
+    Metrics::configureTestTrace(testTraceConfig);
+
     m_prevRunningTime = std::chrono::steady_clock::now();
 
     checkOpacityMicromapSupport();
@@ -191,10 +196,9 @@ namespace dxvk {
     checkNeuralRadianceCacheSupport();
     reportCpuSimdSupport();
 
-    GlobalTime::get().init(RtxOptions::timeDeltaBetweenFrames());
-
-    // Initialize atmosphere system
-    m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
+    GlobalTime::get().init(RtxOptions::timeDeltaBetweenFrames() * 0.001f);
+    GlobalTime::get().setAdvanceTime(RtxOptions::advanceTime());
+  m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
   }
 
   RtxContext::~RtxContext() {
@@ -203,6 +207,7 @@ namespace dxvk {
     if (m_screenshotFrameNum != -1 || m_terminateAppFrameNum != -1) {
       Metrics::serialize();
     }
+
   }
 
   SceneManager& RtxContext::getSceneManager() {
@@ -215,6 +220,14 @@ namespace dxvk {
   // Returns GPU idle time between calls to this in milliseconds
   float RtxContext::getGpuIdleTimeSinceLastCall() {
     uint64_t currGpuIdleTicks = m_device->getStatCounters().getCtr(DxvkStatCounter::GpuIdleTicks);
+    if (!m_prevGpuIdleTicksInitialized) {
+      // DxvkSubmissionQueue::gpuIdleTicks() is a monotonic accumulator, so the
+      // only invalid sample here is the first one before we've established a baseline.
+      m_prevGpuIdleTicks = currGpuIdleTicks;
+      m_prevGpuIdleTicksInitialized = true;
+      return 0.0f;
+    }
+
     uint64_t delta = currGpuIdleTicks - m_prevGpuIdleTicks;
     m_prevGpuIdleTicks = currGpuIdleTicks;
 
@@ -320,7 +333,7 @@ namespace dxvk {
     }
   }
 
-  VkExtent3D RtxContext::onFrameBegin(const VkExtent3D& upscaledExtent) {
+  VkExtent3D RtxContext::onInjectRtxFrameBegin(const VkExtent3D& upscaledExtent) {
     auto logRenderPassRaytraceModeRayQuery = [=](const char* renderPassName, auto mode) {
       switch (mode) {
       case decltype(mode)::RayQuery:
@@ -383,6 +396,7 @@ namespace dxvk {
     }
 
     const RtCamera& mainCamera = getSceneManager().getCamera();
+    m_resetHistory = m_resetHistory || mainCamera.isViewHistoryInvalidated(m_device->getCurrentFrameId());
 
     // Call onFrameBegin callbacks for RtxPases
     // Note: this needs to be called after resetScreenResolution() call in a frame
@@ -418,6 +432,17 @@ namespace dxvk {
     }
 
     return downscaledExtent;
+  }
+
+  void RtxContext::onInjectRtxFrameEnd(bool rayTracedThisFrame) {
+    if (rayTracedThisFrame) {
+      Resources::RaytracingOutput& rtOutput = getResourceManager().getRaytracingOutput();
+
+      m_common->metaNeuralRadianceCache().onFrameEnd(rtOutput);
+      rtOutput.onFrameEnd();
+    }
+
+    getSceneManager().onFrameEnd(this, rayTracedThisFrame);
   }
 
   // Hooked into D3D9 presentImage (same place HUD rendering is)
@@ -520,6 +545,22 @@ namespace dxvk {
     common->getTextureManager().processAllHotReloadRequests();
 
     const float gpuIdleTimeMilliseconds = getGpuIdleTimeSinceLastCall();
+    Metrics::TestTraceSample testTraceSample;
+    testTraceSample.frameId = m_device->getCurrentFrameId();
+    testTraceSample.effectiveDeltaMs = GlobalTime::get().deltaTimeMs();
+    testTraceSample.realWallDeltaMs = GlobalTime::get().realDeltaTimeMs();
+    testTraceSample.gpuIdleTimeMs = gpuIdleTimeMilliseconds;
+    testTraceSample.surfaceCount = getSceneManager().getAccelManager().getSurfaceCount();
+    testTraceSample.shaderCompileInflightCount = getCommonObjects()->pipelineManager().remixShaderCompilationCount();
+    testTraceSample.debugViewMode = m_common->metaDebugView().getDebugViewIndex();
+    testTraceSample.compositeDebugViewMode = m_common->metaDebugView().getCompositeDebugViewIndex();
+    testTraceSample.raytracingEnabled = isRaytracingEnabled;
+    testTraceSample.cameraValid = isCameraValid;
+    testTraceSample.asyncShaderPrewarming = RtxInitializer::asyncShaderPrewarming();
+    testTraceSample.asyncCompilationEnabled = RtxOptions::Shader::enableAsyncCompilation();
+    testTraceSample.asyncCompilationActive = asyncShaderCompilationActive;
+    testTraceSample.surfaceBufferAvailable = getSceneManager().getSurfaceBuffer() != nullptr;
+    Metrics::recordTestTrace(testTraceSample);
 
     bool raytracedThisFrame = false;
 
@@ -548,6 +589,7 @@ namespace dxvk {
         Logger::info(str::format("RTX: Use nis ", RtxOptions::isNISEnabled()));
         if (!s_capturePrePresentTestScreenshot) {
           m_screenshotFrameEnabled = false;
+          Metrics::setTestTraceScreenshotFrameEnabled(false);
         }
       }
 
@@ -582,7 +624,7 @@ namespace dxvk {
       // If we really don't have any RT to do, just bail early (could be UI/menus rendering)
       if (getSceneManager().getSurfaceBuffer() != nullptr) {
 
-        VkExtent3D downscaledExtent = onFrameBegin(targetImage->info().extent);
+        VkExtent3D downscaledExtent = onInjectRtxFrameBegin(targetImage->info().extent);
 
         Resources::RaytracingOutput& rtOutput = getResourceManager().getRaytracingOutput();
 
@@ -730,9 +772,6 @@ namespace dxvk {
           getSceneManager().logStatistics();
         }
 
-        m_common->metaNeuralRadianceCache().onFrameEnd(rtOutput);
-
-        rtOutput.onFrameEnd();
         raytracedThisFrame = true;
       }
 
@@ -757,7 +796,7 @@ namespace dxvk {
       }
     }
 
-    getSceneManager().onFrameEnd(this, raytracedThisFrame);
+    onInjectRtxFrameEnd(raytracedThisFrame);
 
     // apply changes to RtxOptions after the frame has ended
     RtxOptionManager::applyPendingValues(m_device.ptr(), /* forceOnChange */ false);
@@ -823,7 +862,7 @@ namespace dxvk {
 
   void RtxContext::updateMetrics(const float gpuIdleTimeMilliseconds) const {
     ScopedCpuProfileZone();
-    Metrics::logRollingAverage(Metric::dxvk_average_frame_time_ms, GlobalTime::get().deltaTimeMs()); // In milliseconds
+    Metrics::logRollingAverage(Metric::dxvk_average_frame_time_ms, GlobalTime::get().realDeltaTimeMs()); // In milliseconds
     Metrics::logRollingAverage(Metric::dxvk_gpu_idle_time_ms, gpuIdleTimeMilliseconds); // In milliseconds
     uint64_t vidUsageMib = 0;
     uint64_t sysUsageMib = 0;
@@ -1100,6 +1139,8 @@ namespace dxvk {
     constants.enableUnorderedEmissiveParticlesInIndirectRays = RtxOptions::enableUnorderedEmissiveParticlesInIndirectRays();
     constants.enableDecalMaterialBlending = RtxOptions::enableDecalMaterialBlending();
     constants.enableDecalsOnSky = RtxOptions::enableDecalsOnSky();
+    constants.enableLegacyRectLightConeShaping = LightManager::enableLegacyRectLightConeShaping();
+    constants.enableRectLightConeShapingRatioScaling = LightManager::enableRectLightConeShapingRatioScaling();
     constants.enableBillboardOrientationCorrection = RtxOptions::enableBillboardOrientationCorrection() && RtxOptions::enableSeparateUnorderedApproximations();
     constants.useIntersectionBillboardsOnPrimaryRays = RtxOptions::useIntersectionBillboardsOnPrimaryRays() && constants.enableBillboardOrientationCorrection;
     constants.enableDirectLightBoilingFilter = m_common->metaDemodulate().enableDirectLightBoilingFilter() && RtxOptions::useRTXDI();
@@ -1189,7 +1230,7 @@ namespace dxvk {
     constants.reSTIRGIMISRoughness = restirGI.misRoughness();
     constants.reSTIRGIMISParallaxAmount = restirGI.parallaxAmount();
     constants.enableReSTIRGIDemodulatedTargetFunction = restirGI.useDemodulatedTargetFunction();
-    constants.enableReSTIRGILightingValidation = RtxOptions::useRTXDI() && rtxdi.enableDenoiserGradient() && restirGI.validateLightingChange();
+    constants.enableReSTIRGILightingValidation = RtxOptions::useRTXDI() && rtxdi.getEnableDenoiserGradient(*this) && restirGI.validateLightingChange();
     constants.reSTIRGISampleValidationThreshold = restirGI.lightingValidationThreshold();
     constants.enableReSTIRGIVisibilityValidation = restirGI.validateVisibilityChange();
     constants.reSTIRGIVisibilityValidationRange = 1.0f + restirGI.visibilityValidationRange();
@@ -1355,6 +1396,13 @@ namespace dxvk {
     constants.eyeArgs.whitesAlbedoScale = RtxOptions::Eye::eyeWhitesAlbedoScale();
     constants.eyeArgs.irisRadius = RtxOptions::Eye::irisRadius();
     constants.eyeArgs.irisDepth = RtxOptions::Eye::irisDepth();
+
+    constants.shadowTerminatorArgs.soften = RtxOptions::ShadowTerminator::soften();
+
+    // Note: shadow terminator image are allocated/freed based on this RtxOption
+    constants.shadowTerminatorArgs.enableOffset = RtxOptions::ShadowTerminator::enableOffset();
+    constants.shadowTerminatorArgs.maxArea = std::max(0.f, RtxOptions::ShadowTerminator::maxArea() * RtxOptions::getMeterToWorldUnitScale() * RtxOptions::getMeterToWorldUnitScale());
+    constants.shadowTerminatorArgs.maxLength = std::max(0.f, RtxOptions::ShadowTerminator::maxLength() * RtxOptions::getMeterToWorldUnitScale());
 
     // Upload the constants to the GPU
     {
@@ -1609,7 +1657,7 @@ namespace dxvk {
         denoiser.dispatch(this, m_execBarriers, rtOutput, denoiseInput, denoiseOutput);
     };
 
-    bool isSecondaryOnly = useRayReconstruction() && !rayReconstruction.enableNRDForTraining() && rayReconstruction.preprocessSecondarySignal();
+    const bool isSecondaryOnly = rayReconstruction.denoiseSecondarySignalWithExternalDenoiser();
 
     // Primary Direct light denoiser
     if (!isSecondaryOnly)
@@ -1735,8 +1783,9 @@ namespace dxvk {
 
     DxvkTemporalAA& taa = m_common->metaTAA();
     RtCamera& mainCamera = getSceneManager().getCamera();
+    const bool isViewHistoryInvalidated = mainCamera.isViewHistoryInvalidated(m_device->getCurrentFrameId());
 
-    if (taa.isActive() && !mainCamera.isCameraCut()) {
+    if (taa.isActive() && !isViewHistoryInvalidated) {
       float jitterOffset[2];
       mainCamera.getJittering(jitterOffset);
 
@@ -1840,7 +1889,7 @@ namespace dxvk {
       mainCamera.getShaderConstants().resolution,
       RtxOptions::rngSeedWithFrameIndex() ? m_device->getCurrentFrameId() : 0,
       rtOutput,
-      mainCamera.isCameraCut());
+      mainCamera.isViewHistoryInvalidated(m_device->getCurrentFrameId()));
   }
 
   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {

@@ -71,7 +71,7 @@ bool sampleLightRTXDI(
 
   // Get a light sample in portal space
 
-  lightSample = RAB_GetPortalSpaceLightSample(reservoir.lightIdx, f16vec2(reservoir.uv),
+  lightSample = RAB_GetPortalSpaceLightSample(reservoir.lightIdx, vec2(reservoir.uv),
     reservoir.portalIdx, primarySurfaceInteraction);
   
   inverseSelectionPdf = reservoir.weightSum;
@@ -197,7 +197,7 @@ bool sampleLightAdvancedRIS(
   const RNG randomState,
   MinimalSurfaceInteraction surfaceInteraction,
   OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
-  f16vec3 viewDirection,
+  vec3 viewDirection,
   inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t outLightIndex,
   uint customIndex = 0)
 {
@@ -249,7 +249,7 @@ bool sampleLightAdvancedRIS(
       // Calculate the weight (targetPdf)
       MinimalRayInteraction minimalRayInteraction;
       minimalRayInteraction.viewDirection = viewDirection;
-      const f16vec3 inputDirection = normalize(candidateSample.position - surfaceInteraction.position);
+      const vec3 inputDirection = normalize(candidateSample.position - surfaceInteraction.position);
       const SurfaceMaterialInteractionSplitWeight splitWeight = opaqueSurfaceMaterialInteractionCalcApproxProjectedWeight(opaqueSurfaceMaterialInteraction, minimalRayInteraction, inputDirection);
       // Note: Only divide by the light sample's PDF if it is non-zero (as it may be zero when sampling a light from a specific location is impossible).
       const float lightThroughput = candidateSample.solidAnglePdf > 0.0f ? 1.0f / candidateSample.solidAnglePdf : 0.0f;
@@ -327,7 +327,7 @@ bool sampleLightRIS(
   inout RNG randomState,
   MinimalSurfaceInteraction surfaceInteraction,
   OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
-  f16vec3 viewDirection,
+  vec3 viewDirection,
   inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t lightIndex,
   uint customIndex = 0)
 {

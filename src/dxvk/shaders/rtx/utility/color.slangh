@@ -27,7 +27,7 @@
 // Approximate wavelengths for the sRGB primaries in nanometers. Note these are not exact as
 // the sRGB primaries are mixtures of multiple wavelengths.
 // https://clarkvision.com/articles/color-spaces/
-static const f16vec3 sRGBPrimaryWavelengths = f16vec3(612.0f, 549.0f, 465.0f);
+static const vec3 sRGBPrimaryWavelengths = vec3(612.0f, 549.0f, 465.0f);
 
 // Calculates the average value of a color
 #define GENERIC_AVERAGE_COLOR(averageType, colorType)                        \
@@ -137,9 +137,9 @@ GENERIC_GAMMA_TO_LINEAR_FAST(vec3)
 vector<T, 3> rgbToYCoCg<T: __BuiltinFloatingPointType>(vector<T, 3> color)
 {
   const matrix<T, 3, 3> rgbToYCoCgTransform = matrix<T, 3, 3>(
-    T(0.25), T(0.5), T(-0.25),
-    T(0.5), T(0.0), T(0.5),
-    T(0.25), T(-0.5), T(-0.25)
+    T(0.25),  T(0.5), T(0.25),
+    T(0.5),   T(0.0), T(-0.5),
+    T(-0.25), T(0.5), T(-0.25) 
   );
 
   return mul(rgbToYCoCgTransform, color);
@@ -148,9 +148,9 @@ vector<T, 3> rgbToYCoCg<T: __BuiltinFloatingPointType>(vector<T, 3> color)
 vector<T, 3> yCoCgToRGB<T: __BuiltinFloatingPointType>(vector<T, 3> color)
 {
   const matrix<T, 3, 3> yCoCgToRGBTransform = matrix<T, 3, 3>(
-    T(1.0), T(1.0), T(1.0),
-    T(1.0), T(0.0), T(-1.0),
-    T(-1.0), T(1.0), T(-1.0)
+    T(1.0), T(1.0),  T(-1.0),
+    T(1.0), T(0.0),  T(1.0),
+    T(1.0), T(-1.0), T(-1.0)
   );
 
   return mul(yCoCgToRGBTransform, color);

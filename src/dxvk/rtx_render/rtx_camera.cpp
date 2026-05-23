@@ -103,6 +103,15 @@ namespace dxvk
     return { cameraParams[PROJ_ZNEAR], cameraParams[PROJ_ZFAR] };
   }
 
+  void RtCamera::invalidateViewHistory(uint32_t frameIdx) {
+    m_lastViewHistoryInvalidationFrameId = frameIdx;
+  }
+
+  bool RtCamera::isViewHistoryInvalidated(uint32_t frameIdx) const {
+    return m_lastViewHistoryInvalidationFrameId == frameIdx
+        || isCameraCut();
+  }
+
   bool RtCamera::isCameraCut() const {
     return lengthSqr(getViewToWorld()[3] - getPreviousViewToWorld()[3]) > RtxOptions::getUniqueObjectDistanceSqr();
   }
@@ -669,6 +678,12 @@ namespace dxvk
 
     auto modifiedViewToProj = Matrix4d{ newViewToProjection };
 
+    // Correct for games that use a negative Y scale in the projection matrix
+    // (e.g., certain Unity titles) which causes the ray-traced scene to render upside-down.
+    if (correctProjectionYFlip()) {
+      modifiedViewToProj[1][1] = -modifiedViewToProj[1][1];
+    }
+
     updateAntiCulling(fov, aspectRatio, nearPlane, farPlane, isLHS);
 
     // Sometimes we want to modify the near plane for RT.  See DevSettings->Camera->Advanced
@@ -1164,7 +1179,7 @@ namespace dxvk
     }
 
     int oldFrame = m_currentFrame;
-    IMGUI_ADD_TOOLTIP(ImGui::SliderInt("Current Frame", &m_currentFrame, 0, m_settings.size() -1, "%d", ImGuiSliderFlags_AlwaysClamp), "Current Frame.");
+    IMGUI_ADD_TOOLTIP(RemixGui::SliderInt("Current Frame", &m_currentFrame, 0, m_settings.size() -1, "%d", ImGuiSliderFlags_AlwaysClamp), "Current Frame.");
     m_currentFrame = std::min(m_currentFrame, (int)m_settings.size());
 
     Mode currentMode = mode();

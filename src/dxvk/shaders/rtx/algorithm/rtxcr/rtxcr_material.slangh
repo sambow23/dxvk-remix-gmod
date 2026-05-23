@@ -20,16 +20,16 @@
 struct SssTracingResult
 {
   MinimalSurfaceInteraction sssMinimalSurfaceInteraction;
-  f16vec3 normal;
+  vec3 normal;
   vec2 textureCoordinates;
-  uint surfaceIndex;
+  uint subsurfaceMaterialIndex;
   bool hasHit;
-  float16_t hitDistance;
+  float hitDistance;
 };
 
 struct SssDiffusionProfileResult
 {
-  f16vec3 scatteringWeight;
+  vec3 scatteringWeight;
   bool allSamplesHaveHit;
 };
 
@@ -44,7 +44,8 @@ SssDiffusionProfileResult createEmptySssDiffusionProfileResult()
 SssTracingResult traceSssRay(
   const Ray sssSampleRay,
   const uint8_t rayMask,
-  const uint rayFlags) {
+  const uint rayFlags)
+{
   RayQuery<0> rayQuery = RayQuery<0>();
   rayQuery.TraceRayInline(
       sssTLAS,
@@ -53,7 +54,8 @@ SssTracingResult traceSssRay(
   );
 
   // Find the closest hit
-  while (rayQuery.Proceed()) {
+  while (rayQuery.Proceed())
+  {
   }
 
   // Construct hit info from the hit
@@ -65,17 +67,19 @@ SssTracingResult traceSssRay(
   SurfaceInteraction surfaceInteraction =
     surfaceInteractionCreate<SurfaceGenerateTangents>(sssSampleSurface, sssRayInteraction, sssSampleRay);
 
+  const OpaqueSurfaceMaterial sssOpaqueSurfaceMaterial = opaqueSurfaceMaterialCreate(surfaceMaterials[sssRayInteraction.surfaceIndex]);
+
   // Construct sss tracing result
   SssTracingResult sssTracingResult;
   sssTracingResult.hasHit = rayHitInfo.hasHit;
-  sssTracingResult.hitDistance = sssTracingResult.hasHit ? rayHitInfo.hitDistance : -1.0h;
-  sssTracingResult.surfaceIndex = sssTracingResult.hasHit ? sssRayInteraction.surfaceIndex : SURFACE_INDEX_INVALID;
+  sssTracingResult.hitDistance = sssTracingResult.hasHit ? rayHitInfo.hitDistance : -1.0f;
+  sssTracingResult.subsurfaceMaterialIndex = sssTracingResult.hasHit ? sssOpaqueSurfaceMaterial.subsurfaceMaterialIndex : SURFACE_INDEX_INVALID;
   sssTracingResult.sssMinimalSurfaceInteraction.position = surfaceInteraction.position;
   sssTracingResult.sssMinimalSurfaceInteraction.positionError = surfaceInteraction.positionError;
-  sssTracingResult.sssMinimalSurfaceInteraction.triangleNormal = surfaceInteraction.triangleNormal;
-  sssTracingResult.sssMinimalSurfaceInteraction.triangleTangent = surfaceInteraction.triangleTangent;
-  sssTracingResult.sssMinimalSurfaceInteraction.triangleBitangent = surfaceInteraction.triangleBitangent;
-  sssTracingResult.normal = surfaceInteraction.interpolatedNormal;
+  sssTracingResult.sssMinimalSurfaceInteraction.geometryNormal = surfaceInteraction.geometryNormal;
+  sssTracingResult.sssMinimalSurfaceInteraction.geometryTangent = surfaceInteraction.geometryTangent;
+  sssTracingResult.sssMinimalSurfaceInteraction.geometryBitangent = surfaceInteraction.geometryBitangent;
+  sssTracingResult.normal = surfaceInteraction.geometryNormal;
   sssTracingResult.textureCoordinates = surfaceInteraction.textureCoordinates;
 
   return sssTracingResult;
@@ -92,9 +96,10 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
   const uint primarySurfaceIndex,
   ivec2 pixelCoordinate,
   Texture2D<uint> worldShadingNormal,
-  inout RNG randomState) {
+  inout RNG randomState)
+{
 
-  f16vec3 sssScatteringWeight = 0.0f;
+  vec3 sssScatteringWeight = 0.0f;
 
   /// Load Subsurface Material
 
@@ -111,16 +116,19 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
   /// Create interaction
 
   const float rand = getNextSampleBlueNoise(randomState);
-  const f16vec3 diskNormalWorldSpace = (rand <= 0.5f) ? opaqueSurfaceMaterialInteraction.shadingNormal : minimalRayInteraction.viewDirection;
+  const vec3 diskNormalWorldSpace = (rand <= 0.5f) ? opaqueSurfaceMaterialInteraction.shadingNormal : minimalRayInteraction.viewDirection;
 
   RTXCR_SubsurfaceInteraction subsurfaceInteraction =
-    RTXCR_CreateSubsurfaceInteraction(minimalSurfaceInteraction.position, diskNormalWorldSpace, minimalSurfaceInteraction.triangleTangent, minimalSurfaceInteraction.triangleBitangent);
+    RTXCR_CreateSubsurfaceInteraction(minimalSurfaceInteraction.position, diskNormalWorldSpace, minimalSurfaceInteraction.geometryTangent, minimalSurfaceInteraction.geometryBitangent);
 
   uint16_t validSampleCount = 0;
 
+  const uint primarySubsurfaceMaterialIndex = opaqueSurfaceMaterialCreate(surfaceMaterials[primarySurfaceIndex]).subsurfaceMaterialIndex;
+
   // Randomly sample N positions on the surface near the center, evaluate the diffusion profile weight and BSSRDF, and do intergration to calculate the scattered radiance
   [unroll]
-  for (uint16_t i = 0; i < MAX_SSS_SAMPLE_COUNT; ++i) {
+  for (uint16_t i = 0; i < MAX_SSS_SAMPLE_COUNT; ++i)
+  {
     const float2 rand2 = float2(getNextSampleBlueNoise(randomState), getNextSampleBlueNoise(randomState));
 
     RTXCR_SubsurfaceSample subsurfaceSample;
@@ -139,8 +147,10 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
 
     const SssTracingResult sssTracingResult = traceSssRay(sssSampleRay, OBJECT_MASK_OPAQUE, RAY_FLAG_CULL_BACK_FACING_TRIANGLES);
 
-    // Current sample ray misses or hits surface that different to the center surface, continue to the next sample
-    if (!sssTracingResult.hasHit || primarySurfaceIndex != sssTracingResult.surfaceIndex) {
+    // Skip this sample if the ray misses or hits a different material than the center material.
+    // tMax restricts the ray distance to a local region, mitigating the risk of sampling other meshes.
+    if (!sssTracingResult.hasHit || primarySubsurfaceMaterialIndex != sssTracingResult.subsurfaceMaterialIndex)
+    {
       continue;
     }
 
@@ -150,6 +160,11 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
     const vec4 projPos = mul(camera.worldToProjectionJittered, vec4(sssTracingResult.sssMinimalSurfaceInteraction.position.xyz, 1.0f));
     const vec3 ndcPos = projPos.xyz / projPos.w;
     const ivec2 samplePixelCoordinate = cameraNDCToPixelCoordinate(camera, ndcPos.xy);
+    // The SSS mesh may be off-screen when only visible via PSR (mirror reflection).
+    // In that case the camera projection lands outside the viewport, making RTXDI
+    // reservoir reads invalid and silently dropping every disk sample.  Detect this
+    // and fall back to RIS so the SSS contribution is still evaluated.
+    const bool sampleInsideScreen = projPos.w > 0.0f && all((ndcPos.xy >= -1.0f) && (ndcPos.xy <= 1.0f));
 
     LightSample sssLightSample;
     float inverseSelectionPdf;
@@ -159,15 +174,17 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
     uint16_t lightIdx = kInvalidLightIdx;
     // Create synthetic customIndex for view model filtering
     uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
-    
-    if (cb.enableRtxdi && geometryFlags.primarySelectedIntegrationSurface) {
+
+    if (cb.enableRtxdi && geometryFlags.primarySelectedIntegrationSurface && sampleInsideScreen)
+    {
       // Select and sample a light for NEE via RTXDI
       rtxdiLightSampleValid = sampleLightRTXDI(
         samplePixelCoordinate,
         sssTracingResult.sssMinimalSurfaceInteraction,
         sssLightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
     }
-    else {
+    else
+    {
       // Select and sample a light for NEE via RIS
       risLightSampleValid = sampleLightRIS(
         randomState,
@@ -175,13 +192,18 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
         sssLightSample, inverseSelectionPdf, lightIdx, customIndex);
     }
 
-    if ((!rtxdiLightSampleValid && !risLightSampleValid) || all(sssLightSample.radiance == 0.0f)) {
-      if (all(pixelCoordinate == cb.sssArgs.diffusionProfileDebuggingPixel)) {
+    if ((!rtxdiLightSampleValid && !risLightSampleValid) || all(sssLightSample.radiance == 0.0f))
+    {
+      if (all(pixelCoordinate == cb.sssArgs.diffusionProfileDebuggingPixel))
+      {
         rtxcrMaterialDebugView(samplePixelCoordinate, vec4(1, 0, 0, 0));
       }
       continue;
-    } else {
-      if (all(pixelCoordinate == cb.sssArgs.diffusionProfileDebuggingPixel)) {
+    }
+    else
+    {
+      if (all(pixelCoordinate == cb.sssArgs.diffusionProfileDebuggingPixel))
+      {
         rtxcrMaterialDebugView(samplePixelCoordinate, vec4(0, 1, 0, 0));
       }
     }
@@ -202,7 +224,8 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
       opaqueSurfaceMaterialInteraction.shadingNormal);
 
     // Current sample is not visible by the sample light, continue on the next sample
-    if (visibility.hasOpaqueHit) {
+    if (visibility.hasOpaqueHit)
+    {
       continue;
     }
 
@@ -211,11 +234,11 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
 
     /// Evaluate BSSRDF
 
-    const f16vec3 shadingNormal = signedOctahedralToSphereDirection(snorm2x16ToFloat2x32(worldShadingNormal[samplePixelCoordinate]));
-    const f16vec3 inputDirection = visibility.rayDirection;
-    const float16_t /* n.l */ normalDotInputDirection = max(dot(inputDirection, shadingNormal), 0.0f);
+    const vec3 shadingNormal = sssTracingResult.normal;
+    const vec3 inputDirection = visibility.rayDirection;
+    const float /* n.l */ normalDotInputDirection = max(dot(inputDirection, shadingNormal), 0.0f);
 
-    sssScatteringWeight += RTXCR_EvalBssrdf(subsurfaceSample, float3(sssLightSample.radiance), float(normalDotInputDirection)) * lightSampleThroughput.rrr;
+    sssScatteringWeight += RTXCR_EvalBssrdf(subsurfaceSample, float3(sssLightSample.radiance), float(normalDotInputDirection)) * commonLightThroughput;
 
     ++validSampleCount;
   }
@@ -231,7 +254,7 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
       any(subsurfaceMaterialData.scatteringColor < 0.99f);
 
   subsurfaceInteraction =
-    RTXCR_CreateSubsurfaceInteraction(minimalSurfaceInteraction.position, minimalSurfaceInteraction.triangleNormal, minimalSurfaceInteraction.triangleTangent, minimalSurfaceInteraction.triangleBitangent);
+    RTXCR_CreateSubsurfaceInteraction(minimalSurfaceInteraction.position, minimalSurfaceInteraction.geometryNormal, minimalSurfaceInteraction.geometryTangent, minimalSurfaceInteraction.geometryBitangent);
   const float3 singleScatteringTransmission = enableSingleScatteringTransmission ?
     evalSingleScatteringTransmission(opaqueSurfaceMaterialInteraction, minimalRayInteraction, minimalSurfaceInteraction,
     rayMask, sampledTransportPortalIndex, geometryFlags, viewRay, primarySurfaceIndex,
@@ -261,12 +284,14 @@ float3 evalSingleScatteringTransmission(
   const int bsdfSampleCount,
   const int perBsdfScatteringSampleCount,
   ivec2 pixelCoordinate,
-  inout RNG randomState) {
+  inout RNG randomState)
+{
 
   float3 radiance = float3(0.0f, 0.0f, 0.0f);
 
   const RTXCR_SubsurfaceMaterialCoefficients sssMaterialCoefficients = RTXCR_ComputeSubsurfaceMaterialCoefficients(subsurfaceMaterialData);
-  for (int bsdfSampleIndex = 0; bsdfSampleIndex < bsdfSampleCount; ++bsdfSampleIndex) {
+  for (int bsdfSampleIndex = 0; bsdfSampleIndex < bsdfSampleCount; ++bsdfSampleIndex)
+  {
     // Trace rays for diffuse transmittance into the volume
     const float2 rand2 = float2(getNextSampleBlueNoise(randomState), getNextSampleBlueNoise(randomState));
 
@@ -279,12 +304,14 @@ float3 evalSingleScatteringTransmission(
 
     // Note: In theory, we don't need to check hit because the model should be water tight, which is nessary for our SSS algorithm.
     //       But we still check here for extra security just in case the model is not water tight or we suffer on self-intersections.
-    if (!transmissionTracingResult.hasHit) {
+    if (!transmissionTracingResult.hasHit)
+    {
       continue;
     }
 
     const float thickness = transmissionTracingResult.hitDistance;
 
+    // Boundary Term Evaluation
     {
       float3 backPosition = rayOffsetSurfaceOriginHelper(transmissionTracingResult.sssMinimalSurfaceInteraction, true);
       transmissionTracingResult.sssMinimalSurfaceInteraction.position = backPosition;
@@ -294,7 +321,7 @@ float3 evalSingleScatteringTransmission(
 
       // Revert normal, because we are hitting from back of the surface
       transmissionTracingResult.normal = -transmissionTracingResult.normal;
-      transmissionTracingResult.sssMinimalSurfaceInteraction.triangleNormal = -transmissionTracingResult.sssMinimalSurfaceInteraction.triangleNormal;
+      transmissionTracingResult.sssMinimalSurfaceInteraction.geometryNormal = -transmissionTracingResult.sssMinimalSurfaceInteraction.geometryNormal;
 
       // Sample light on back, can't use RTXDI because it's screen space
 
@@ -311,7 +338,8 @@ float3 evalSingleScatteringTransmission(
         minimalRayInteraction.viewDirection,
         transmissionLightSample, inverseSelectionPdf, lightIdx, customIndex);
 
-      if (!risLightSampleValid) {
+      if (!risLightSampleValid)
+      {
         continue;
       }
 
@@ -328,7 +356,8 @@ float3 evalSingleScatteringTransmission(
         opaqueSurfaceMaterialInteraction.shadingNormal);
 
       // Current sample is not visible by the sample light, continue on the next sample
-      if (visibility.hasOpaqueHit) {
+      if (visibility.hasOpaqueHit)
+      {
         continue;
       }
 
@@ -347,7 +376,8 @@ float3 evalSingleScatteringTransmission(
       radiance += transmissionLightSample.radiance * transmissionBsdf * pi * commonLightThroughput;
     }
 
-    if (!cb.enableSssTransmissionSingleScattering) {
+    if (!cb.enableSssTransmissionSingleScattering)
+    {
       continue;
     }
 
@@ -357,10 +387,12 @@ float3 evalSingleScatteringTransmission(
     const float stepSize = thickness / (perBsdfScatteringSampleCount + 1);
     float accumulatedT = 0.0f;
     float3 scatteringThroughput = float3(0.0f, 0.0f, 0.0f);
-    for (int sampleIndex = 0; sampleIndex < perBsdfScatteringSampleCount; ++sampleIndex) {
+    for (int sampleIndex = 0; sampleIndex < perBsdfScatteringSampleCount; ++sampleIndex)
+    {
       const float currentT = accumulatedT + stepSize;
       accumulatedT = currentT;
-      if (currentT >= thickness) {
+      if (currentT >= thickness)
+      {
           break;
       }
 
@@ -379,13 +411,14 @@ float3 evalSingleScatteringTransmission(
 
       SssTracingResult singleScatteringTracingResult = traceSssRay(singleScatteringRay, OBJECT_MASK_OPAQUE, RAY_FLAG_NONE);
 
-      if (!singleScatteringTracingResult.hasHit) {
+      if (!singleScatteringTracingResult.hasHit)
+      {
         continue;
       }
 
       // Revert normal, because we are hitting from back of the surface
       singleScatteringTracingResult.normal = -singleScatteringTracingResult.normal;
-      singleScatteringTracingResult.sssMinimalSurfaceInteraction.triangleNormal = -singleScatteringTracingResult.sssMinimalSurfaceInteraction.triangleNormal;
+      singleScatteringTracingResult.sssMinimalSurfaceInteraction.geometryNormal = -singleScatteringTracingResult.sssMinimalSurfaceInteraction.geometryNormal;
 
       const float totalScatteringDistance = currentT + singleScatteringTracingResult.hitDistance;
 
@@ -404,7 +437,8 @@ float3 evalSingleScatteringTransmission(
         minimalRayInteraction.viewDirection,
         singleScatteringLightSample, singleScatteringInverseSelectionPdf, singleScatteringLightIdx, customIndex);
 
-      if (!risLightSampleValid) {
+      if (!risLightSampleValid)
+      {
         continue;
       }
 
@@ -421,7 +455,8 @@ float3 evalSingleScatteringTransmission(
         opaqueSurfaceMaterialInteraction.shadingNormal);
 
       // Current sample is not visible by the sample light, continue on the next sample
-      if (singleScatteringVisibility.hasOpaqueHit) {
+      if (singleScatteringVisibility.hasOpaqueHit)
+      {
         continue;
       }
 
@@ -444,8 +479,10 @@ float3 evalSingleScatteringTransmission(
   return radiance;
 }
 
-void rtxcrMaterialDebugView(const uvec2 pixelCoordinate, const vec4 debugVal) {
-  switch(cb.debugView) {
+void rtxcrMaterialDebugView(const uvec2 pixelCoordinate, const vec4 debugVal)
+{
+  switch(cb.debugView)
+  {
   default:
   case DEBUG_VIEW_DISABLED:
     break;

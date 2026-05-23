@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2021-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -33,7 +33,7 @@
 #include "rtx_restir_gi_rayquery.h"
 #include "rtx_debug_view.h"
 
-#include "../util/util_globaltime.h"
+#include "../util/util_global_time.h"
 
 #include <rtx_shaders/composite.h>
 #include <rtx_shaders/composite_alpha_blend.h>
@@ -196,8 +196,10 @@ namespace dxvk {
   }
 
   void CompositePass::showDenoiseImguiSettings() {
-    float bsdfPowers[2] = { dlssEnhancementDirectLightPower(), dlssEnhancementIndirectLightPower() };
-    float bsdfMaxValues[2] = { dlssEnhancementDirectLightMaxValue(), dlssEnhancementIndirectLightMaxValue() };
+    const float prevBsdfPowers[2] = { dlssEnhancementDirectLightPower(), dlssEnhancementIndirectLightPower() };
+    const float prevBsdfMaxValues[2] = { dlssEnhancementDirectLightMaxValue(), dlssEnhancementIndirectLightMaxValue() };
+    float bsdfPowers[2] = { prevBsdfPowers[0], prevBsdfPowers[1] };
+    float bsdfMaxValues[2] = { prevBsdfMaxValues[0], prevBsdfMaxValues[1] };
 
     RemixGui::Checkbox("Enhance BSDF Detail Under DLSS", &enableDLSSEnhancementObject());    
     RemixGui::Combo("Indirect Light Enhancement Mode", &dlssEnhancementModeObject(), "Laplacian\0Normal Difference\0");
@@ -207,6 +209,17 @@ namespace dxvk {
     RemixGui::DragFloat("Indirect Light Min Sharpen Roughness", &dlssEnhancementIndirectLightMinRoughnessObject(), 0.01f, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::Checkbox("Use Post Filter", &usePostFilterObject());
     RemixGui::DragFloat("Post Filter Threshold", &postFilterThresholdObject(), 0.01f, 0.0f, 100.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+    if (bsdfPowers[0] != prevBsdfPowers[0]) {
+      RemixGui::CheckRtxOptionPopups(&dlssEnhancementDirectLightPowerObject());
+    } else if (bsdfPowers[1] != prevBsdfPowers[1]) {
+      RemixGui::CheckRtxOptionPopups(&dlssEnhancementIndirectLightPowerObject());
+    }
+    if (bsdfMaxValues[0] != prevBsdfMaxValues[0]) {
+      RemixGui::CheckRtxOptionPopups(&dlssEnhancementDirectLightMaxValueObject());
+    } else if (bsdfMaxValues[1] != prevBsdfMaxValues[1]) {
+      RemixGui::CheckRtxOptionPopups(&dlssEnhancementIndirectLightMaxValueObject());
+    }
 
     dlssEnhancementDirectLightPower.setDeferred(bsdfPowers[0]);
     dlssEnhancementIndirectLightPower.setDeferred(bsdfPowers[1]);
@@ -356,8 +369,6 @@ namespace dxvk {
     ctx->bindResourceView(COMPOSITE_DEBUG_VIEW_OUTPUT, debugView.getDebugOutput(), nullptr);
     ctx->bindResourceView(COMPOSITE_RAY_RECONSTRUCTION_PARTICLE_BUFFER_OUTPUT, rtOutput.m_rayReconstructionParticleBuffer.view, nullptr);
 
-    ctx->bindResourceView(COMPOSITE_RAY_RECONSTRUCTION_PARTICLE_BUFFER_OUTPUT, rtOutput.m_rayReconstructionParticleBuffer.view, nullptr);
-
     const DomeLightArgs& domeLightArgs = sceneManager.getLightManager().getDomeLightArgs();
     ctx->bindResourceSampler(COMPOSITE_SKY_LIGHT_TEXTURE, linearSampler);
     if (domeLightArgs.active) {
@@ -369,15 +380,8 @@ namespace dxvk {
       ctx->bindResourceView(COMPOSITE_SKY_LIGHT_TEXTURE, ctx->getResourceManager().getSkyMatte(ctx).view, nullptr);
     }
 
-    // Some camera parameters for primary ray reconstruction
-    Camera cameraConstants = sceneManager.getCamera().getShaderConstants();
-    compositeArgs.camera = cameraConstants;
-    compositeArgs.projectionToViewJittered = cameraConstants.projectionToViewJittered;
-    compositeArgs.viewToWorld = cameraConstants.viewToWorld;
-    compositeArgs.resolution.x = float(cameraConstants.resolution.x);
-    compositeArgs.resolution.y = float(cameraConstants.resolution.y);
-    compositeArgs.nearPlane = cameraConstants.nearPlane;
-    compositeArgs.frameIdx = m_device->getCurrentFrameId();
+    compositeArgs.camera = sceneManager.getCamera().getShaderConstants();
+    compositeArgs.frameIdx = frameIdx;
 
     if (enableFog()) {
       const float colorScale = fogColorScale();
@@ -484,7 +488,7 @@ namespace dxvk {
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(cb);
 
     ctx->bindResourceBuffer(COMPOSITE_CONSTANTS_INPUT, DxvkBufferSlice(cb, 0, cb->info().size));
-    VkExtent3D workgroups = util::computeBlockCount(rtOutput.m_compositeOutputExtent, VkExtent3D { 16, 8, 1 });
+    VkExtent3D workgroups = util::computeBlockCount(rtOutput.m_compositeOutputExtent, VkExtent3D { COMPOSITE_THREAD_GROUP_WIDTH, COMPOSITE_THREAD_GROUP_HEIGHT, 1 });
 
     if (enableStochasticAlphaBlend()) {
       ScopedGpuProfileZone(ctx, "Composite Alpha Blend");

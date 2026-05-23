@@ -62,6 +62,7 @@ namespace dxvk {
         TEXTURE2D(INTEGRATE_DIRECT_BINDING_PRIMARY_CONE_RADIUS_INPUT)
         TEXTURE2D(INTEGRATE_DIRECT_BINDING_PRIMARY_WORLD_POSITION_WORLD_TRIANGLE_NORMAL_INPUT)
         TEXTURE2D(INTEGRATE_DIRECT_BINDING_PRIMARY_POSITION_ERROR_INPUT)
+        TEXTURE2D(INTEGRATE_DIRECT_BINDING_SHARED_SHADOW_TERMINATOR_FIX_INPUT)
         RW_STRUCTURED_BUFFER(INTEGRATE_DIRECT_BINDING_PRIMARY_RTXDI_RESERVOIR)
 
         TEXTURE2D(INTEGRATE_DIRECT_BINDING_SECONDARY_WORLD_SHADING_NORMAL_INPUT)
@@ -147,6 +148,7 @@ namespace dxvk {
     // Inputs 
 
     ctx->bindResourceView(INTEGRATE_DIRECT_BINDING_SHARED_INTEGRATION_SURFACE_PDF_INPUT, rtOutput.m_sharedIntegrationSurfacePdf.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceView(INTEGRATE_DIRECT_BINDING_SHARED_SHADOW_TERMINATOR_FIX_INPUT, rtOutput.getCurrentSharedTerminatorFix().view, nullptr);
     ctx->bindResourceView(INTEGRATE_DIRECT_BINDING_SHARED_MATERIAL_DATA0_INPUT, rtOutput.m_sharedMaterialData0.view, nullptr);
     ctx->bindResourceView(INTEGRATE_DIRECT_BINDING_SHARED_MATERIAL_DATA1_INPUT, rtOutput.m_sharedMaterialData1.view, nullptr);
     ctx->bindResourceView(INTEGRATE_DIRECT_BINDING_SHARED_TEXTURE_COORD_INPUT, rtOutput.m_sharedTextureCoord.view, nullptr);
@@ -201,9 +203,9 @@ namespace dxvk {
 
     const bool ommEnabled = RtxOptions::getEnableOpacityMicromap();
 
+    const VkExtent3D workgroups = util::computeBlockCount(rayDims, VkExtent3D { INTEGRATE_DIRECT_THREADS_DISPATCH_WIDTH, INTEGRATE_DIRECT_THREADS_DISPATCH_HEIGHT, 1 });
     switch (RtxOptions::renderPassIntegrateDirectRaytraceMode()) {
     case RaytraceMode::RayQuery:
-      VkExtent3D workgroups = util::computeBlockCount(rayDims, VkExtent3D { 16, 8, 1 });
       ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, getComputeShader());
       ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
       break;

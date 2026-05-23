@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2024, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -23,6 +23,10 @@
 
 #include "rtx/pass/common_binding_indices.h"
 
+// Thread group dimensions for Integrate Direct compute dispatch
+#define INTEGRATE_DIRECT_THREADS_DISPATCH_WIDTH 16
+#define INTEGRATE_DIRECT_THREADS_DISPATCH_HEIGHT 8
+
 // Inputs
 #define INTEGRATE_DIRECT_BINDING_SKYPROBE                                           39
 
@@ -33,6 +37,7 @@
 #define INTEGRATE_DIRECT_BINDING_SHARED_SURFACE_INDEX_INPUT                         44
 #define INTEGRATE_DIRECT_BINDING_SHARED_SUBSURFACE_DATA_INPUT                       45
 #define INTEGRATE_DIRECT_BINDING_SHARED_SUBSURFACE_DIFFUSION_PROFILE_DATA_INPUT     46
+#define INTEGRATE_DIRECT_BINDING_SHARED_SHADOW_TERMINATOR_FIX_INPUT                 73
 
 #define INTEGRATE_DIRECT_BINDING_PRIMARY_WORLD_SHADING_NORMAL_INPUT                 47
 #define INTEGRATE_DIRECT_BINDING_PRIMARY_PERCEPTUAL_ROUGHNESS_INPUT                 48

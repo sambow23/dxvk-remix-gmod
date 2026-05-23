@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -33,6 +33,7 @@
 #define OPAQUE_MATERIAL_USE_THIN_FILM 1
 #define OPAQUE_MATERIAL_USE_POM 1
 #define RAB_HAS_RTXDI_RESERVOIRS 1
+#define SHADOW_TERMINATOR_FIX_ALLOWED 1
 
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/common_bindings.slangh"
@@ -51,9 +52,9 @@ void main()
 }
 #else
 [shader("compute")]
-[numthreads(16, 8, 1)]
+[numthreads(INTEGRATE_DIRECT_THREADS_DISPATCH_WIDTH, INTEGRATE_DIRECT_THREADS_DISPATCH_HEIGHT, 1)]
 void main(uint2 ipos : SV_DispatchThreadID)
-{ 
+{
   integrate_direct_pass(ipos);
 }
 #endif

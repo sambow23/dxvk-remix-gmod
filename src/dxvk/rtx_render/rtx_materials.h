@@ -21,6 +21,9 @@
 */
 #pragma once
 
+#include <memory>
+#include <variant>
+
 #include "rtx_texture.h"
 #include "rtx_option.h"
 #include "../../util/util_color.h"
@@ -81,6 +84,8 @@ static_assert((int)AlphaTestType::kAlways == (int)VkCompareOp::VK_COMPARE_OP_ALW
 bool getEnableDiffuseLayerOverrideHack();
 float getEmissiveIntensity();
 float getDisplacementFactor();
+float getDisplacementInFactor();
+float getDisplacementOutFactor();
 
 struct RtEyeParams {
   // origin of eyeball in world space
@@ -167,8 +172,6 @@ struct RtSurface {
     flags1 |= isMotionBlurMaskOut ?           (1 << 28) : 0;
     flags1 |= skipSurfaceInteractionSpritesheetAdjustment ? (1 << 29) : 0;
     flags1 |= ignoreTransparencyLayer ?       (1 << 30) : 0;
-    // Note: This flag is purely for debug view purpose. If we need to add more functional flags and running out of bits, we should move this flag to other place.
-    flags1 |= isInsideFrustum ?               (1 << 31) : 0;
 
     writeGPUHelper(data, offset, flags1);
 
@@ -334,7 +337,6 @@ struct RtSurface {
   bool isVertexColorBakedLighting = true;
   bool isMotionBlurMaskOut = false;
   bool skipSurfaceInteractionSpritesheetAdjustment = false;
-  bool isInsideFrustum = false;
   bool ignoreTransparencyLayer = false;
   bool isOccluder = false;
 
@@ -404,7 +406,6 @@ struct RtSurface {
       "  isTextureFactorBlend: ", isTextureFactorBlend, "\n",
       "  isMotionBlurMaskOut: ", isMotionBlurMaskOut, "\n",
       "  skipSurfaceInteractionSpritesheetAdjustment: ", skipSurfaceInteractionSpritesheetAdjustment, "\n",
-      "  isInsideFrustum: ", isInsideFrustum, "\n",
       "  ignoreTransparencyLayer: ", ignoreTransparencyLayer));
     
     // Print alpha state
@@ -480,8 +481,10 @@ struct RtSurface {
   uint32_t objectPickingValue = 0; // NOTE: a value to fill GBUFFER_BINDING_PRIMARY_OBJECT_PICKING_OUTPUT
   uint32_t decalSortOrder = 0; // see: InstanceManager::m_decalSortOrderCounter
 
-  // PointInstancer support - this surface may represent multiple instances, one for each transform in instancesToObject
-  const std::vector<Matrix4>* instancesToObject = nullptr;
+  // PointInstancer support - this surface may represent multiple instances, one for each transform in instancesToObject.
+  // Some API-provided instance transform arrays are not owned by an AssetReplacement and may be destroyed before the
+  // next full scene clear, so surfaces retain shared ownership of the transform data they reference.
+  std::shared_ptr<const std::vector<Matrix4>> instancesToObject;
   // on the GPU, multiple copies of this surface with different transforms will exist.  They will be in a continuous block, starting at surfaceIndexOfFirstInstance.
   size_t surfaceIndexOfFirstInstance = SIZE_MAX;
 };
@@ -600,8 +603,8 @@ struct RtOpaqueSurfaceMaterial {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_ALPHA_INVERT;
     }
 
-    float displaceIn = m_displaceIn * getDisplacementFactor();
-    float displaceOut = m_displaceOut * getDisplacementFactor();
+    float displaceIn = m_displaceIn * getDisplacementInFactor();
+    float displaceOut = m_displaceOut * getDisplacementOutFactor();
     uint32_t heightTextureIndex = m_heightTextureIndex;
     if (hasValidDisplacement()) {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_HAS_DISPLACEMENT;
@@ -759,6 +762,18 @@ struct RtOpaqueSurfaceMaterial {
 
   uint32_t getIsRaytracedRenderTarget() const {
     return m_isRaytracedRenderTarget;
+  }
+
+  template<typename Fn>
+  void forEachTextureIndex(Fn&& fn) const {
+    fn(m_albedoOpacityTextureIndex);
+    fn(m_secondaryTextureIndex);
+    fn(m_normalTextureIndex);
+    fn(m_tangentTextureIndex);
+    fn(m_heightTextureIndex);
+    fn(m_roughnessTextureIndex);
+    fn(m_metallicTextureIndex);
+    fn(m_emissiveColorTextureIndex);
   }
 
 private:
@@ -942,6 +957,14 @@ struct RtTranslucentSurfaceMaterial {
   XXH64_hash_t getHash() const {
     return m_cachedHash;
   }
+
+  template<typename Fn>
+  void forEachTextureIndex(Fn&& fn) const {
+    fn(m_normalTextureIndex);
+    fn(m_transmittanceTextureIndex);
+    fn(m_emissiveColorTextureIndex);
+  }
+
 private:
   void updateCachedHash() {
     static_assert(
@@ -1118,6 +1141,12 @@ struct RtRayPortalSurfaceMaterial {
 
   float getEmissiveIntensity() const {
     return m_emissiveIntensity;
+  }
+
+  template<typename Fn>
+  void forEachTextureIndex(Fn&& fn) const {
+    fn(m_maskTextureIndex);
+    fn(m_maskTextureIndex2);
   }
 
 private:
@@ -1297,6 +1326,13 @@ struct RtSubsurfaceMaterial {
 
   float getSubsurfaceMaxRadius() const {
     return m_subsurfaceMaxSampleRadius;
+  }
+
+  template<typename Fn>
+  void forEachTextureIndex(Fn&& fn) const {
+    fn(m_subsurfaceTransmittanceTextureIndex);
+    fn(m_subsurfaceThicknessTextureIndex);
+    fn(m_subsurfaceSingleScatteringAlbedoTextureIndex);
   }
 
 private:
@@ -1544,6 +1580,29 @@ struct RtSurfaceMaterial {
 
     return m_rayPortalSurfaceMaterial;
   }
+
+  template<typename Fn>
+  void forEachTextureIndex(Fn&& fn) const {
+    switch (m_type) {
+    default:
+      assert(false);
+
+      [[fallthrough]];
+    case RtSurfaceMaterialType::Opaque:
+      m_opaqueSurfaceMaterial.forEachTextureIndex(fn);
+      break;
+    case RtSurfaceMaterialType::Translucent:
+      m_translucentSurfaceMaterial.forEachTextureIndex(fn);
+      break;
+    case RtSurfaceMaterialType::RayPortal:
+      m_rayPortalSurfaceMaterial.forEachTextureIndex(fn);
+      break;
+    case RtSurfaceMaterialType::Subsurface:
+      m_subsurfaceMaterial.forEachTextureIndex(fn);
+      break;
+    }
+  }
+
 private:
   // Type-specific Surface Material Information
 

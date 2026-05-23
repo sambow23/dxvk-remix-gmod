@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2024, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2021-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -86,7 +86,9 @@ struct NeeCacheArgs {
   float triangleExplorationProbability;
   float triangleExplorationAcceptRangeRatio;
 
-  uint3 padding;
+  uint padding;
+  uint enableReshuffleResilience;
+  uint reshuffleMaxAge;
   uint enableSpatialReuse;
 };
 
@@ -117,6 +119,14 @@ struct EyeArgs {
   float irisDepth;
   uint  pad0;
   uint  pad1;
+};
+
+struct ShadowTerminatorArgs
+{
+  uint  enableOffset;
+  uint  soften;
+  float maxArea;
+  float maxLength;
 };
 
 #define OBJECT_PICKING_INVALID (cb.clearColorPicking)
@@ -153,6 +163,7 @@ struct RaytraceArgs {
   SssArgs sssArgs;
   EyeArgs eyeArgs;
   AtmosphereArgs atmosphereArgs;
+  ShadowTerminatorArgs shadowTerminatorArgs;
 
   Camera renderTargetCamera;
 
@@ -245,7 +256,7 @@ struct RaytraceArgs {
   uint16_t minTranslucentTransmissionLobeSamplingProbability;
   float roughnessDemodulationOffset;
   float timeSinceStartSeconds;
-  
+
   uint enableCalculateVirtualShadingNormals;
   uint enableDirectLighting;
   uint enableEmissiveBlendEmissiveOverride;
@@ -265,6 +276,8 @@ struct RaytraceArgs {
   uint enableTransmissionApproximationInIndirectRays;
   uint enableDecalMaterialBlending;
   uint enableDecalsOnSky;
+  uint enableLegacyRectLightConeShaping;
+  uint enableRectLightConeShapingRatioScaling;
   uint enableBillboardOrientationCorrection;
   uint enablePlayerModelInPrimarySpace;
   uint enablePlayerModelPrimaryShadows;

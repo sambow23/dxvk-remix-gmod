@@ -52,7 +52,7 @@ class RtxOptionManager;
 
 namespace dxvk {
   class DxvkDevice;
-  
+
   // RtxOption refers to a serializable option, which can be of a basic type (i.e. int) or a class type (i.e. vector hash value)
   // On initialization, it retrieves a value from a Config object and add itself to a global list so that all options can be serialized 
   // into a file when requested.
@@ -231,8 +231,11 @@ namespace dxvk {
 
     // Migrate all layer values from this option to another option.
     // The lambda does all type conversion (read from src, write to dest).
-    // bool isDestValueNew will be supplied to the transform indicating that the dest already has a value in its layer
-    // Returns true if all data was migrated successfully
+    // bool isDestValueNew will be supplied to the transform indicating that the dest already has a value in its layer.
+    // Returns true if at least one non-default layer value was migrated (i.e. the
+    // transform returned true for it). Returns false if there was nothing to migrate
+    // (no non-default layer values, or the transform declined every value) — callers
+    // should gate any "please re-save your rtx config" deprecation logging on this.
     bool migrateValuesTo(RtxOptionImpl* destOption, std::function<bool(const GenericValue& src, GenericValue& dest, bool isDestValueNew)> transform);
 
     // Static method for full name construction
@@ -523,7 +526,7 @@ namespace dxvk {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       return getMinMaxValueHelper<T>(minValue);
     }
-    
+
     template<typename = std::enable_if_t<isClampable()>>
     void setMaxValue(const T& v) {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
@@ -750,7 +753,7 @@ namespace dxvk {
       } else {
         // For non-POD types (vectors, etc.), store as pointer
         if (!targetValue.has_value()) {
-          targetValue = std::optional<GenericValue>(GenericValue{});
+          targetValue = std::optional<GenericValue>(GenericValue {});
           // Note: This is a `new` with no matching `delete`. This is safe because the
           // RtxOptionImpl object is never destroyed, and follows the pattern used in the constructor.
           targetValue.value().pointer = new T();
@@ -767,7 +770,7 @@ namespace dxvk {
     std::optional<T> getMinMaxValueHelper(const std::optional<GenericValue>& sourceValue) const {
       if (!sourceValue.has_value()) {
         return std::nullopt;
-      } 
+      }
       if constexpr (std::is_pod_v<T>) {
         // For POD types (int, float, etc.), retrieve from the appropriate union member
         const GenericValue& gv = sourceValue.value();

@@ -187,7 +187,7 @@ namespace dxvk {
     RTX_OPTION("rtx.particles.globalPreset", float, maxParticleLife, 1.f, "Maximum lifetime (in seconds) to give to a particle when spawned.");
 
     static void maxSpeedOnChange(DxvkDevice* device);
-    RTX_OPTION_ARGS("rtx.particles.globalPreset", float, maxSpeed, -1.f, "*DEPRECATED* this setting has been removed in favor of maxSpawnVelocity and maxTargetVelocity.", args.onChangeCallback = &maxSpeedOnChange, args.flags = RtxOptionFlags::NoSave );
+    RTX_OPTION_ARGS("rtx.particles.globalPreset", float, maxSpeed, -1.f, "*DEPRECATED* this setting has been removed in favor of maxSpawnVelocity and maxTargetVelocity.", args.onChangeCallback = &maxSpeedOnChange, args.flags = RtxOptionFlags::NoSave);
 
     RTX_OPTION("rtx.particles.globalPreset", Vector2, minSpawnSize, Vector2(10.f), "Minimum size (in centimeters) to give to a particle when spawned.");
     RTX_OPTION("rtx.particles.globalPreset", Vector2, maxSpawnSize, Vector2(10.f), "Maximum size (in centimeters) to give to a particle when spawned.");
@@ -206,7 +206,7 @@ namespace dxvk {
     RTX_OPTION("rtx.particles.globalPreset", float, initialVelocityFromMotion, 0.f, "Multiplier for initial velocity applied at spawn time, based on the spawning objects current velocity.");
     RTX_OPTION("rtx.particles.globalPreset", float, initialVelocityFromNormal, 0.f, "Initial speed to apply on spawn (centimeters per sec) along the normal vector of the spawning triangle.");
     RTX_OPTION("rtx.particles.globalPreset", float, initialVelocityConeAngleDegrees, 0.f, "Specifies the half angle, in degrees, of the random emission cone  around the triangles surface normal when spawning a new particle.  A value in the range of 0 to 180 degrees is expected.");
-    RTX_OPTION("rtx.particles.globalPreset", float, gravityForce, -.98f, "Net influence of gravity acting on each particle (centimeters per second squared).");
+    RTX_OPTION("rtx.particles.globalPreset", float, gravityForce, 0.f, "Net influence of gravity acting on each particle (centimeters per second squared).");
     RTX_OPTION("rtx.particles.globalPreset", Vector3, maxSpawnVelocity, Vector3(-1.f), "Maximum velocity of a particle in world space (in centimeters per second) to be used at spawn time.  Negative values imply unlimited.");
     RTX_OPTION("rtx.particles.globalPreset", Vector3, maxTargetVelocity, Vector3(-1.f), "Maximum velocity of a particle in world space (in centimeters per second) at a particles end of life.  Negative values imply unlimited.");
     RTX_OPTION("rtx.particles.globalPreset", bool, useSpawnTexcoords, false, "Use the texture coordinates of the emitter mesh when spawning particles.");

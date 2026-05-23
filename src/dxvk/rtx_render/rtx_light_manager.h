@@ -73,6 +73,7 @@ public:
   const std::unordered_map<XXH64_hash_t, RtLight>& getLightTable() const { return m_lights; }
   const std::unordered_map<remixapi_LightHandle, RtLight>& getExternalLights() const { return m_externalLights; }
   const std::unordered_map<remixapi_LightHandle, DomeLight>& getExternalDomeLights() const { return m_externalDomeLights; }
+  const std::unordered_map<uint64_t, RtLight>& getExternallyTrackedLightTable() const { return m_externallyTrackedLights; }
   const Rc<DxvkBuffer> getLightBuffer() const { return m_lightBuffer; }
   const Rc<DxvkBuffer> getPreviousLightBuffer() const { return m_previousLightBuffer.ptr() ? m_previousLightBuffer : m_lightBuffer; }
   const Rc<DxvkBuffer> getLightMappingBuffer() const { return m_lightMappingBuffer; }
@@ -94,11 +95,9 @@ public:
 
   // Externally tracked lights are lights whose lifecycle (creation, update, removal) is managed externally, rather than the
   // existing frame-to-frame tracking and anti-culling systems. These are kept separte to avoid any interference from anti culling
-  // and light matching.
+  // and light matching. Remove external lights by calling light->markForGarbageCollection().
   RtLight* createExternallyTrackedLight(const RtLight& light);
   void updateExternallyTrackedLight(RtLight* light, const RtLight& newLight);
-  void removeExternallyTrackedLight(RtLight* light);
-
   void addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight);
   void addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight);
   void removeExternalLight(remixapi_LightHandle handle);
@@ -215,6 +214,14 @@ private:
                   args.minValue = 0.0f, args.maxValue = kPi);
   RTX_OPTION("rtx", float, lightConversionMaxIntensity, FLT_MAX, "The highest intensity value a converted light can have.");
   RTX_OPTION("rtx", float, lightConversionIntensityFactor, 1.f, "Scales the converted light intensities.");
+  RTX_OPTION("rtx", bool, enableLegacyRectLightConeShaping, false,
+             "If true, restores the legacy cos(angle) * aspectRatio formula for RectLight cone shaping. "
+             "Enable this only to preserve the look of existing scenes that were authored against the legacy behavior. "
+             "Note this can silently kill the light at high aspect ratios.");
+  RTX_OPTION("rtx", bool, enableRectLightConeShapingRatioScaling, false,
+             "If true, scales the RectLight cone half-angle by the light's aspect ratio in tangent space, "
+             "producing a cone that matches the rect's proportions. When false (default), the cone is uniform "
+             "and independent of the light's width/height. Ignored when enableLegacyRectLightConeShaping is true.");
 };
 
 }  // namespace dxvk

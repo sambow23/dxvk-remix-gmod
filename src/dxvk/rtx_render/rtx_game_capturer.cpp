@@ -50,7 +50,7 @@
 #include "rtx_matrix_helpers.h"
 #include "rtx_lights.h"
 
-#include "../util/util_globaltime.h"
+#include "../util/util_global_time.h"
 
 #include <filesystem>
 
@@ -194,11 +194,19 @@ namespace dxvk {
   
   void GameCapturer::prepareInstanceStage(const Rc<DxvkContext> ctx) {
     const auto ogStagePathStr = buildStagePath(m_options.instanceStageName);
-    const auto stagePathStr = env::dedupeFilename(ogStagePathStr);
-    const auto dedupedFileName =  std::filesystem::path(stagePathStr).stem().string();
-    m_pCap->instance.stageName = dedupedFileName;
+    std::string stagePathStr;
+    if (RtxOptions::captureOverwriteExistingCapture()) {
+      if (std::filesystem::exists(ogStagePathStr)) {
+        std::filesystem::remove(ogStagePathStr);
+      }
+      stagePathStr = ogStagePathStr;
+    } else {
+      stagePathStr = env::dedupeFilename(ogStagePathStr);
+    }
+    const auto resolvedFileName = std::filesystem::path(stagePathStr).stem().string();
+    m_pCap->instance.stageName = resolvedFileName;
     m_pCap->instance.stagePath = stagePathStr;
-    m_exporter.generateSceneThumbnail(ctx, BASE_DIR + lss::commonDirName::thumbDir, dedupedFileName);
+    m_exporter.generateSceneThumbnail(ctx, BASE_DIR + lss::commonDirName::thumbDir, resolvedFileName);
   }
 
   void GameCapturer::capture(const Rc<DxvkContext> ctx, const float frameTimeMilliseconds) {
@@ -301,9 +309,7 @@ namespace dxvk {
   }
 
   void GameCapturer::captureLights() {
-    // Capture game lights
-    for (auto&& pair : m_sceneManager.getLightManager().getLightTable()) {
-      const RtLight& rtLight = pair.second;
+    auto captureLight = [&](const RtLight& rtLight) {
       assert(rtLight.getInitialHash() != 0);
       switch (rtLight.getType()) {
       default:
@@ -329,35 +335,17 @@ namespace dxvk {
         captureDistantLight(rtLight.getDistantLight());
         break;
       }
+    };
+
+    for (auto&& pair : m_sceneManager.getLightManager().getLightTable()) {
+      captureLight(pair.second);
+    }
+    for (auto&& pair : m_sceneManager.getLightManager().getExternallyTrackedLightTable()) {
+      captureLight(pair.second);
     }
 
-    // Capture Remix API external lights
     for (auto&& pair : m_sceneManager.getLightManager().getExternalLights()) {
-      const RtLight& rtLight = pair.second;
-      switch (rtLight.getType()) {
-      default:
-      case RtLightType::Sphere:
-        captureSphereLight(rtLight.getSphereLight());
-        break;
-      case RtLightType::Rect:
-        // Todo: Handle Rect lights
-        Logger::err("[GameCapturer][" + m_pCap->idStr + "] RectLight not implemented");
-        assert(false);
-        break;
-      case RtLightType::Disk:
-        // Todo: Handle Disk lights
-        Logger::err("[GameCapturer][" + m_pCap->idStr + "] DiskLight not implemented");
-        assert(false);
-        break;
-      case RtLightType::Cylinder:
-        // Todo: Handle Cylinder lights
-        Logger::err("[GameCapturer][" + m_pCap->idStr + "] CylinderLight not implemented");
-        assert(false);
-        break;
-      case RtLightType::Distant:
-        captureDistantLight(rtLight.getDistantLight());
-        break;
-      }
+      captureLight(pair.second);
     }
   }
 
@@ -785,8 +773,14 @@ namespace dxvk {
                                           std::shared_ptr<Mesh> pMesh) {
 
     AssetExporter::BufferCallback captureMeshTexCoordsAsync = [ctx, geomData, currentFrameNum, pMesh](Rc<DxvkBuffer> texBuf) {
-      assert(geomData.texcoordBuffer.vertexFormat() == VK_FORMAT_R32G32_SFLOAT ||
-             geomData.texcoordBuffer.vertexFormat() == VK_FORMAT_R32G32B32_SFLOAT);
+      // Only float32 texcoord formats can be safely read as float* on the CPU.
+      // Non-float32 formats (e.g. R16G16_SFLOAT) are normally converted to R32G32_SFLOAT by the
+      // GPU interleaver before reaching here, but guard defensively in case that changes.
+      const VkFormat texFmt = geomData.texcoordBuffer.vertexFormat();
+      if (texFmt != VK_FORMAT_R32G32_SFLOAT && texFmt != VK_FORMAT_R32G32B32_SFLOAT && texFmt != VK_FORMAT_R32G32B32A32_SFLOAT) {
+        Logger::err(str::format("[GameCapturer] Skipping texcoord capture for unsupported format: ", texFmt));
+        return;
+      }
       // Prep helper vars
       const size_t numVertices = geomData.vertexCount;
       constexpr size_t texcoordSubElementSize = sizeof(float);

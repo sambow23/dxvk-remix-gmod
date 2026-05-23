@@ -437,7 +437,9 @@ namespace dxvk {
 
     struct ViewModel {
       friend class ImGUI;
-      RTX_OPTION("rtx.viewModel", bool, enable, false, "If true, try to resolve view models (e.g. first-person weapons). World geometry doesn't have shadows / reflections / etc from the view models.");
+      public: static void enableOnChange(DxvkDevice* device);
+      RTX_OPTION_ARGS("rtx.viewModel", bool, enable, false, "If true, try to resolve view models (e.g. first-person weapons). World geometry doesn't have shadows / reflections / etc from the view models.",
+                       args.onChangeCallback = &enableOnChange);
       RTX_OPTION("rtx.viewModel", float, rangeMeters, 1.0f, "[meters] Max distance at which to find a portal for view model virtual instances. If rtx.viewModel.separateRays is true, this is also max length of view model rays.");
       RTX_OPTION("rtx.viewModel", float, scale, 1.0f, "Scale for view models. Minimize to prevent clipping.");
       RTX_OPTION("rtx.viewModel", bool, enableVirtualInstances, true, "If true, virtual instances are created to render the view models behind a portal.");
@@ -470,6 +472,8 @@ namespace dxvk {
       RTX_OPTION("rtx.displacement", bool, enableIndirectHit, false, "Whether indirect ray hits account for displacement mapping (Enabling this is expensive.  Without it, non-perfect reflections of displaced objects will not show displacement.)");
       RTX_OPTION("rtx.displacement", bool, enablePSR, false, "Enable PSR (perfect reflections) for materials with displacement.  Rays that have been perfectly reflected off a POM surface will not collide correctly with other parts of that same surface.");
       RTX_OPTION("rtx.displacement", float, displacementFactor, 1.0f, "Scaling factor for all displacement maps");
+      RTX_OPTION("rtx.displacement", float, displacementInFactor, 1.0f, "Scale factor for inwards displacement");
+      RTX_OPTION("rtx.displacement", float, displacementOutFactor, 1.0f, "Scale factor for outwards displacement");
       RTX_OPTION("rtx.displacement", uint, maxIterations, 64, "The max number of times the POM raymarch will iterate.");
     } displacement;
 
@@ -568,6 +572,10 @@ namespace dxvk {
     RTX_OPTION_ARGS("rtx", bool, restoreCursorPosition, false,
                     "If true, the game's mouse cursor position will be restored when the Remix UI is closed.\n"
                     "This should fix the issue where the game camera suddenly turns when closing the UI.\n",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx", bool, autoUnblockOptionEdits, false,
+                    "If true, editing an RtxOption in the Remix UI that is overridden by a stronger config layer clears the stronger value immediately instead of showing a confirmation dialog.",
+                    args.environment = "RTX_IMGUI_AUTO_UNBLOCK_OPTION_EDITS",
                     args.flags = RtxOptionFlags::UserSetting);
 
     inline static const VirtualKeys kDefaultRemixMenuKeyBinds{ VirtualKey{VK_MENU},VirtualKey{'X'} };
@@ -838,6 +846,12 @@ namespace dxvk {
     RTX_OPTION("rtx", bool, rngSeedWithFrameIndex, true,
                "Indicates that pseudo-random number generator should be seeded with the frame number of the application every frame, otherwise seed with 0.\n"
                "This should generally always be enabled as without the frame index each frame will typically be identical in the random values that are produced which will result in incorrect rendering. Only meant as a debugging tool.");
+    // declare onAdvanceTimeChanged
+    static void onAdvanceTimeChanged(DxvkDevice* device);
+    RTX_OPTION_ARGS("rtx", bool, advanceTime, true,
+                    "A flag to enable or disable advancing time used by Remix subsystems (particle effects, animations, etc.).\n",
+                    args.environment = "RTX_ADVANCE_TIME",
+                    args.onChangeCallback = &RtxOptions::onAdvanceTimeChanged);
     RTX_OPTION_ARGS("rtx", bool, enableFirstBounceLobeProbabilityDithering, true,
                "A flag to enable or disable screen-space probability dithering on the first indirect lobe sampled.\n"
                "Generally sampling a diffuse, specular or other lobe relies on a random number generated against the probability of sampling each lobe, effectively focusing more rays/paths on lobes which matter more.\n"
@@ -882,6 +896,19 @@ namespace dxvk {
                "The need for this option could be avoided by simply authoring decals applied to translucent materials with a higher albedo to begin with, but sometimes applications may share decals between different material types.");
 
     RTX_OPTION("rtx", float, worldSpaceUiBackgroundOffset, -0.01f, "Distance along normal to offset objects rendered as worldspace UI, specifically for the background of screens.");
+
+    struct ShadowTerminator {
+      RTX_OPTION("rtx.shadowTerminator", bool, soften, true,
+                 "Fix the harsh transition on a shadow terminator by gradually smoothing, when the geometry normal is inconsistent with shading normal."
+                 "Note that it doesn't modify the shadow ray, and only applies a falloff when calculating a direct illumination.");
+
+      RTX_OPTION("rtx.shadowTerminator", bool, enableOffset, true,
+                 "Offset the shadow ray origin along the triangle vertex normals to avoid self-intersection. "
+                 "Helps to remove the triangular shadow artifacts on a terminator region. "
+                 "Note that it may introduce a noticeable light leaking if the geometry is low-poly.");
+      RTX_OPTION("rtx.shadowTerminator", float, maxArea, 0.05f, "If a polygon area is larger than this value (in square meters), then a shadow terminator offset will not be applied.");
+      RTX_OPTION("rtx.shadowTerminator", float, maxLength, 0.02f, "Clamp shadow terminator length by this value (in meters).");
+    };
 
     // Light Selection/Sampling Options
     RTX_OPTION_ARGS("rtx", uint16_t, risLightSampleCount, 7,
@@ -1180,8 +1207,10 @@ namespace dxvk {
                "String that can be used for auto-replacing current time stamp in instance stage name.\n"
                "Note: Changing this value does not change the default value for rtx.captureInstanceStageName.");
     // Note: default values are used before configs are loaded.  Cannot use the value of `captureTimestampReplacement` to set the default value of `captureInstanceStageName`.
-    RTX_OPTION("rtx", std::string, captureInstanceStageName, "capture_{timestamp}.usd",  
+    RTX_OPTION("rtx", std::string, captureInstanceStageName, "capture_{timestamp}.usd",
                "Name of the \'instance\' stage (see: \'rtx.captureInstances\').");
+    RTX_OPTION("rtx", bool, captureOverwriteExistingCapture, false,
+               "If true, a capture with the same filename will overwrite any existing capture file instead of appending a numeric suffix to avoid collisions.");
     RTX_OPTION("rtx", bool, captureEnableMultiframe, false, "Enables multi-frame capturing. THIS HAS NOT BEEN MAINTAINED AND SHOULD BE USED WITH EXTREME CAUTION.");
     RTX_OPTION("rtx", uint32_t, captureMaxFrames, 1, "Max frames capturable when running a multi-frame capture. The capture can be toggled to completion manually.");
     RTX_OPTION("rtx", uint32_t, captureFramesPerSecond, 24,
@@ -1225,6 +1254,11 @@ namespace dxvk {
                "Useful, if a game has a skybox that contains geometry that can be a part of the main scene (e.g. buildings, mountains). "
                "So with this option enabled, that geometry would be promoted from sky rasterization to ray tracing.");
     RTX_OPTION("rtx", float, skyReprojectScale, 16.0f, "Scaling of the sky geometry on reprojection to main camera space.");
+    RTX_OPTION("rtx", bool, skyForceAutoDetectedToReproject, false,
+               "When enabled, draw calls classified as sky by auto-detect are always reprojected to main camera space "
+               "instead of being rasterized to the sky cubemap. This fixes a class of bugs where auto-detect misclassifies "
+               "world geometry as sky (due to shared camera positions), causing that geometry to become invisible. "
+               "Only effective when Sky Auto-Detect and Reproject Sky to Main Camera are both enabled.");
 
     RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization,
                "Sky rendering mode. SkyboxRasterization uses traditional skybox rasterization, PhysicalAtmosphere uses Hillaire atmospheric scattering.");
@@ -1307,6 +1341,9 @@ namespace dxvk {
       RTX_OPTION_FLAG_ENV("rtx.automation", bool, suppressAssetLoadingErrors, false, RtxOptionFlags::NoSave, "RTX_AUTOMATION_SUPPRESS_ASSET_LOADING_ERRORS",
                           "Suppresses asset loading errors by turning them into warnings.\n"
                           "This option is typically meant for automation of tests for which acceptable asset loading issues are known.");
+      RTX_OPTION_FLAG_ENV("rtx.automation", bool, enableTestTrace, false, RtxOptionFlags::NoSave, "RTX_TEST_TRACE",
+                          "Enables opt-in frame trace artifacts for automation-driven image tests.\n"
+                          "When enabled, Remix records a bounded frame window around the configured screenshot frame, writes frame_trace.jsonl, and appends dxvk_trace_* summary fields to metrics.txt.");
     };
 
   public:

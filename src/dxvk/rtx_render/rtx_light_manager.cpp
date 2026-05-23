@@ -156,7 +156,6 @@ namespace dxvk {
         // 3. Light replaces mesh: Do the same as Object Anti-Culling for the original mesh
         switch (rtLight.getLightAntiCullingType()) {
         case RtLightAntiCullingType::GameLight:
-        case RtLightAntiCullingType::LightReplacement:
           isLightInsideFrustum = sphereIntersectsFrustum(
             cameraLightAntiCullingFrustum, rtLight.getSphereLightReplacementOriginalPosition(), rtLight.getSphereLightReplacementOriginalRadius());
           break;
@@ -792,11 +791,6 @@ namespace dxvk {
     light->setFrameLastTouched(m_device->getCurrentFrameId());
   }
 
-  // Marks an externally tracked light for garbage collection. The light's lifecycle is managed by external systems
-  // rather than LightManager's frame-to-frame tracking and anti-culling systems.
-  void LightManager::removeExternallyTrackedLight(RtLight* light) {
-    light->markForGarbageCollection();
-  }
 
   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
     auto found = m_externalLights.find(handle);

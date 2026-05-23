@@ -280,7 +280,10 @@ namespace dxvk {
 
     // Note: VK_FORMAT_R32_UINT assumed to be 32 bit spherical octahedral normals.
     assert(normalVertexFormat == VK_FORMAT_R32G32B32_SFLOAT || normalVertexFormat == VK_FORMAT_R32G32B32A32_SFLOAT || normalVertexFormat == VK_FORMAT_R32_UINT);
-    assert(drawCallState.getGeometryData().blendWeightBuffer.defined());
+    if (!drawCallState.getGeometryData().blendWeightBuffer.defined()) {
+      ONCE(Logger::err("RtxGeometryUtils::dispatchSkinning: draw call has bones but no blend weight buffer, cannot apply skinning"));
+      return;
+    }
 
     memcpy(&params.bones[0], &drawCallState.getSkinningState().pBoneMatrices[0], sizeof(Matrix4) * drawCallState.getSkinningState().numBones);
 
@@ -596,10 +599,12 @@ namespace dxvk {
     const uint32_t numDispatches = dxvk::util::ceilDivide(numThreads, numThreadsPerDispatch);
     const uint32_t baseThreadIndexOffset = bakeState.numMicroTrianglesBaked / args.numMicroTrianglesPerThread;
 
-    args.numActiveThreads = numThreadsPerDispatch;
-
     for (uint32_t i = 0; i < numDispatches; i++) {
-      args.threadIndexOffset = i * numThreadsPerDispatch + baseThreadIndexOffset;
+      const uint32_t dispatchThreadOffset = i * numThreadsPerDispatch;
+      const uint32_t numActiveThreadsThisDispatch = std::min(numThreads - dispatchThreadOffset, numThreadsPerDispatch);
+
+      args.threadIndexOffset = dispatchThreadOffset + baseThreadIndexOffset;
+      args.numActiveThreads = numActiveThreadsThisDispatch;
 
       // Upload the arguments into a buffer slice
       const auto& devInfo = ctx->getDevice()->properties().core.properties;
@@ -611,7 +616,9 @@ namespace dxvk {
       ctx->bindResourceBuffer(BINDING_BAKE_OPACITY_MICROMAP_CONSTANTS, cb);
 
       // Run the shader
-      const VkExtent3D workgroups = util::computeBlockCount(VkExtent3D { numThreadsPerDispatch, 1, 1 }, VkExtent3D { BAKE_OPACITY_MICROMAP_NUM_THREAD_PER_COMPUTE_BLOCK, 1, 1 });
+      const VkExtent3D workgroups = util::computeBlockCount(
+        VkExtent3D { numActiveThreadsThisDispatch, 1, 1 },
+        VkExtent3D { BAKE_OPACITY_MICROMAP_NUM_THREAD_PER_COMPUTE_BLOCK, 1, 1 });
       ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
     }
 
@@ -703,13 +710,6 @@ namespace dxvk {
 
     const VkIndexType indexBufferType = getOptimalIndexFormat(input.vertexCount);
     const uint32_t indexStride = (indexBufferType == VK_INDEX_TYPE_UINT16) ? 2 : 4;
-
-    // TODO: Dont support 32-bit indices here yet
-    if (indexBufferType != VK_INDEX_TYPE_UINT16 || (input.indexBuffer.defined() && input.indexBuffer.indexType() != VK_INDEX_TYPE_UINT16)) {
-      ONCE(Logger::err("Not implemented yet, generating indices for a mesh which has 32-bit indices"));
-      return false;
-    }
-
     assert(output->info().size == align(indexCount * indexStride, CACHE_LINE_SIZE));
 
     // Prepare shader arguments
@@ -720,6 +720,8 @@ namespace dxvk {
     pushArgs.useIndexBuffer = (input.indexBuffer.defined() && input.indexCount > 0) ? 1 : 0;
     pushArgs.minVertex = 0;
     pushArgs.maxVertex = input.vertexCount - 1;
+    pushArgs.useUint32 = (indexBufferType == VK_INDEX_TYPE_UINT32) ? 1 : 0;
+    pushArgs.srcUseUint32 = (input.indexBuffer.defined() && input.indexBuffer.indexType() == VK_INDEX_TYPE_UINT32) ? 1 : 0;
 
     ctx->getCommonObjects()->metaGeometryUtils().dispatchGenTriList(ctx, pushArgs, DxvkBufferSlice(output), pushArgs.useIndexBuffer ? &input.indexBuffer : nullptr);
 
@@ -731,11 +733,22 @@ namespace dxvk {
     return true;
   }
 
+  // CPU path only writes uint16 indices; meshes needing uint32 output (vertexCount >= 64K) use the compute shader.
+  template<typename SrcType>
+  static void dispatchGenTriListCpu(const Rc<DxvkContext>& ctx, const GenTriListArgs& cb, const DxvkBufferSlice& dstSlice, uint16_t* dst, const RasterBuffer* srcBuffer) {
+    const SrcType* src = (cb.useIndexBuffer != 0) ? reinterpret_cast<SrcType*>(srcBuffer->mapPtr()) : nullptr;
+    for (uint32_t idx = 0; idx < cb.primCount; idx++) {
+      generateIndices(idx, dst, src, cb);
+    }
+    ctx->writeToBuffer(dstSlice.buffer(), 0, cb.primCount * 3 * sizeof(uint16_t), dst);
+  }
+
   void RtxGeometryUtils::dispatchGenTriList(const Rc<DxvkContext>& ctx, const GenTriListArgs& cb, const DxvkBufferSlice& dstSlice, const RasterBuffer* srcBuffer) const {
     ScopedGpuProfileZone(ctx, "generateTriangleList");
-    // At some point, its more efficient to do these calculations on the GPU, this limit is somewhat arbitrary however, and might require better tuning...
-    const uint32_t kNumTrianglesToProcessOnCPU = 512;
-    const bool useGPU = ((srcBuffer != nullptr) && (srcBuffer->isPendingGpuWrite())) || cb.primCount > kNumTrianglesToProcessOnCPU;
+    constexpr uint32_t kNumTrianglesToProcessOnCPU = 512;
+    const bool useGPU = (cb.useUint32 != 0)
+      || ((srcBuffer != nullptr) && (srcBuffer->isPendingGpuWrite()))
+      || cb.primCount > kNumTrianglesToProcessOnCPU;
 
     if (useGPU) {
       ctx->bindResourceBuffer(GEN_TRILIST_BINDING_OUTPUT, dstSlice);
@@ -753,14 +766,11 @@ namespace dxvk {
       ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
     } else {
       uint16_t dst[kNumTrianglesToProcessOnCPU * 3];
-
-      const uint16_t* src = (cb.useIndexBuffer != 0) ? reinterpret_cast<uint16_t*>(srcBuffer->mapPtr()) : nullptr;
-
-      for (uint32_t idx = 0; idx < cb.primCount; idx++) {
-        generateIndices(idx, dst, src, cb);
+      if (cb.srcUseUint32 != 0) {
+        dispatchGenTriListCpu<uint32_t>(ctx, cb, dstSlice, dst, srcBuffer);
+      } else {
+        dispatchGenTriListCpu<uint16_t>(ctx, cb, dstSlice, dst, srcBuffer);
       }
-
-      ctx->writeToBuffer(dstSlice.buffer(), 0, cb.primCount * 3 * sizeof(uint16_t), dst);
     }
   }
 
@@ -970,7 +980,15 @@ namespace dxvk {
     const void* pVertexData = input.positionBuffer.mapPtr((size_t)input.positionBuffer.offsetFromSlice());
     const uint32_t vertexCount = input.vertexCount;
     const size_t vertexStride = input.positionBuffer.stride();
-    
+
+    // R16G16_SFLOAT and other non-float32 texcoord formats cannot be safely read as Vector2 on the CPU.
+    // The interleaver converts them to R32G32_SFLOAT on the GPU, but this function operates on raw
+    // pre-interleave input geometry, so skip computation for unsupported formats.
+    const VkFormat texFmt = input.texcoordBuffer.vertexFormat();
+    if (texFmt != VK_FORMAT_R32G32_SFLOAT && texFmt != VK_FORMAT_R32G32B32_SFLOAT && texFmt != VK_FORMAT_R32G32B32A32_SFLOAT) {
+      return NAN;
+    }
+
     const void* pTexcoordData = input.texcoordBuffer.mapPtr((size_t)input.texcoordBuffer.offsetFromSlice());
     const size_t texcoordStride = input.texcoordBuffer.stride();
 
@@ -1007,7 +1025,7 @@ namespace dxvk {
     return std::sqrtf(maxUvTileSizeSqr);
   }
 
-  void RtxGeometryUtils::dispatchSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, const RaytraceGeometry& geo) {
+  void RtxGeometryUtils::dispatchSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& geo) {
     ScopedGpuProfileZone(ctx, "smoothNormals");
 
     if (!geo.positionBuffer.defined() || !geo.indexBuffer.defined() || !geo.normalBuffer.defined()) {
@@ -1030,13 +1048,7 @@ namespace dxvk {
     hashTableSize |= hashTableSize >> 16;
     hashTableSize++;
 
-    // Set up shared args used by both CPU and GPU paths
     SmoothNormalsArgs params {};
-    params.positionOffset = geo.positionBuffer.offsetFromSlice();
-    params.positionStride = geo.positionBuffer.stride();
-    params.normalOffset = geo.normalBuffer.offsetFromSlice();
-    params.normalStride = geo.normalBuffer.stride();
-    params.indexOffset = geo.indexBuffer.offsetFromSlice();
     params.indexStride = (geo.indexBuffer.indexType() == VK_INDEX_TYPE_UINT16) ? 2 : 4;
     params.numTriangles = numTriangles;
     params.numVertices = geo.vertexCount;
@@ -1044,17 +1056,15 @@ namespace dxvk {
     params.phase = 0;
     params.hashTableSize = hashTableSize;
 
+    assert(geo.vertexCount == input.vertexCount);
+
     // Decide whether to use the CPU path.  The input raster buffers must be host-visible
     // and not pending GPU write.  For small meshes the CPU path avoids GPU dispatch overhead.
+    const bool mustUseGPU = input.indexBuffer.mapPtr() == nullptr || input.positionBuffer.mapPtr() == nullptr;
+    const bool pendingGpuWrite = input.positionBuffer.isPendingGpuWrite() || input.indexBuffer.isPendingGpuWrite();
+
     const uint32_t kMaxTrianglesForCPU = 512;
-    const bool inputAccessible = input.positionBuffer.defined() && input.indexBuffer.defined() && input.normalBuffer.defined()
-                              && input.positionBuffer.mapPtr() != nullptr
-                              && input.indexBuffer.mapPtr() != nullptr
-                              && input.normalBuffer.mapPtr() != nullptr
-                              && !input.positionBuffer.isPendingGpuWrite()
-                              && !input.indexBuffer.isPendingGpuWrite()
-                              && !input.normalBuffer.isPendingGpuWrite();
-    const bool useCPU = inputAccessible && numTriangles <= kMaxTrianglesForCPU;
+    const bool useCPU = numTriangles <= kMaxTrianglesForCPU && !pendingGpuWrite && !mustUseGPU;
 
     if (useCPU) {
       // --- CPU path: uses the same shared functions as the GPU shader ---
@@ -1062,33 +1072,33 @@ namespace dxvk {
       const uint32_t* srcIndex = reinterpret_cast<const uint32_t*>(input.indexBuffer.mapPtr(0));
 
       // Remap offsets to the raster input buffers
-      SmoothNormalsArgs cpuParams = params;
-      cpuParams.positionOffset = input.positionBuffer.offsetFromSlice();
-      cpuParams.positionStride = input.positionBuffer.stride();
-      cpuParams.indexOffset = input.indexBuffer.offsetFromSlice();
+      params.positionOffset = input.positionBuffer.offsetFromSlice();
+      params.positionStride = input.positionBuffer.stride();
+      params.normalOffset = 0; // CPU output writes per-vertex via writeToBuffer, so offset/stride handled externally
+      params.normalStride = 0; 
+      params.indexOffset = input.indexBuffer.offsetFromSlice();
 
       // Allocate and zero the hash table on the CPU
-      std::vector<int32_t> hashTableData(hashTableSize * 4, 0);
+      std::vector<int32_t> hashTable(hashTableSize * 4, 0);
 
       // Phase 1: Accumulate face normals (shared function)
       for (uint32_t tri = 0; tri < numTriangles; tri++) {
-        smoothNormalsAccumulate(tri, srcPosition, srcIndex, hashTableData.data(), cpuParams);
+        smoothNormalsAccumulate(tri, srcPosition, srcIndex, hashTable.data(), params);
       }
 
-      // Phase 2: Scatter & normalize, writing directly to the output buffer if CPU-accessible
-      float* dstNormalPtr = reinterpret_cast<float*>(geo.normalBuffer.mapPtr(0));
-
-      // Write directly to the mapped output buffer — no writeToBuffer overhead
-      SmoothNormalsArgs scatterParams = cpuParams;
-      scatterParams.normalOffset = geo.normalBuffer.offsetFromSlice();
-      scatterParams.normalStride = geo.normalBuffer.stride();
-
+      // Phase 2: Scatter & normalize — writes encoded normals to the GPU buffer
+      float dstNormal;
       for (uint32_t v = 0; v < geo.vertexCount; v++) {
-        smoothNormalsScatter(v, srcPosition, dstNormalPtr, hashTableData.data(), scatterParams);
+        smoothNormalsScatter(v, srcPosition, &dstNormal, hashTable.data(), params);
+        ctx->writeToBuffer(geo.normalBuffer.buffer(), geo.normalBuffer.offsetFromSlice() + v * geo.normalBuffer.stride(), sizeof(dstNormal),  &dstNormal);
       }
-      
     } else {
       // --- GPU path ---
+      params.positionOffset = geo.positionBuffer.offsetFromSlice();
+      params.positionStride = geo.positionBuffer.stride();
+      params.normalOffset = geo.normalBuffer.offsetFromSlice();
+      params.normalStride = geo.normalBuffer.stride();
+      params.indexOffset = geo.indexBuffer.offsetFromSlice();
 
       // Sub-allocate from a pooled device-local buffer for the hash table (4 ints per entry: tag + 3 normal components)
       const VkDeviceSize hashBufSize = hashTableSize * 4 * sizeof(int);
@@ -1113,10 +1123,15 @@ namespace dxvk {
       ctx->pushConstants(0, sizeof(SmoothNormalsArgs), &params);
       ctx->dispatch(triangleWorkgroups.width, triangleWorkgroups.height, triangleWorkgroups.depth);
 
-      // Phase 2: Each vertex reads its smoothed normal from hash table, normalizes, writes to output
+      // Phase 2: Each vertex reads its smoothed normal from hash table, normalizes, writes encoded output
       params.phase = 2;
       ctx->pushConstants(0, sizeof(SmoothNormalsArgs), &params);
       ctx->dispatch(vertexWorkgroups.width, vertexWorkgroups.height, vertexWorkgroups.depth);
     }
+
+    // Smooth normals always outputs octahedral-encoded normals (single R32_UINT per vertex).
+    // Update the buffer format metadata so downstream readers (surface_interaction, skinning)
+    // correctly decode the normals.
+    geo.normalBuffer.setVertexFormat(VK_FORMAT_R32_UINT);
   }
 }

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2021-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -38,7 +38,7 @@
 #include "rtx_texture_manager.h"
 #include "rtx_debug_view.h"
 #include "rtx_xess.h"
-#include "../util/util_globaltime.h"
+#include "../util/util_global_time.h"
 
 namespace dxvk {
 
@@ -450,16 +450,40 @@ namespace dxvk {
     // Only create SSS Textures when there're SSS materials in the scene
     {
       if (sceneManager.isSssMaterialExist() || sceneManager.isThinOpaqueMaterialExist()) {
-        if (!m_raytracingOutput.m_sharedSubsurfaceData.isValid()) {
+        if (!m_raytracingOutput.m_sharedSubsurfaceData.isValid() ||
+            m_raytracingOutput.m_sharedSubsurfaceData.image->info().extent != m_downscaledExtent) {
           m_raytracingOutput.m_sharedSubsurfaceData = createImageResource(ctx, "primary subsurface material buffer", m_downscaledExtent, VK_FORMAT_R16G16_UINT);
         }
-        if (!m_raytracingOutput.m_sharedSubsurfaceDiffusionProfileData.isValid()) {
+        if (!m_raytracingOutput.m_sharedSubsurfaceDiffusionProfileData.isValid() ||
+            m_raytracingOutput.m_sharedSubsurfaceDiffusionProfileData.image->info().extent != m_downscaledExtent) {
           // The single scattering is also stored in diffusion profile texture which is used in thin opaque. So we need to create this texture for thin opaque as well.
           m_raytracingOutput.m_sharedSubsurfaceDiffusionProfileData = createImageResource(ctx, "primary subsurface material diffusion profile data buffer", m_downscaledExtent, VK_FORMAT_R32G32_UINT);
         }
       } else {
         m_raytracingOutput.m_sharedSubsurfaceData.reset();
         m_raytracingOutput.m_sharedSubsurfaceDiffusionProfileData.reset();
+      }
+    }
+
+    // Alloc / free images based on RtxOption
+    if (RtxOptions::ShadowTerminator::enableOffset()) {
+      for (auto& terminatorResource : m_raytracingOutput.m_sharedTerminatorFix) {
+        if (!terminatorResource.isValid() || terminatorResource.image->info().extent != m_downscaledExtent) {
+          terminatorResource = createImageResource(ctx, "shadow terminator fix", m_downscaledExtent, VK_FORMAT_R16_SFLOAT);
+        }
+        assert(terminatorResource.isValid());
+        if (resetHistory && terminatorResource.isValid()) {
+          VkClearColorValue clearValue = { 0.f, 0.f, 0.f, 0.f };
+          VkImageSubresourceRange subRange = {};
+          subRange.layerCount = 1;
+          subRange.levelCount = 1;
+          subRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+          ctx->clearColorImage(terminatorResource.image, clearValue, subRange);
+        }
+      }
+    } else {
+      for (auto& terminatorResource : m_raytracingOutput.m_sharedTerminatorFix) {
+        terminatorResource.reset();
       }
     }
   }
@@ -1035,7 +1059,6 @@ namespace dxvk {
 
     m_raytracingOutput.m_primaryAttenuation = createImageResource(ctx, "primary attenuation", m_downscaledExtent, VK_FORMAT_R32_UINT);
     m_raytracingOutput.m_primaryWorldShadingNormal = createImageResource(ctx, "primary world shading normal", m_downscaledExtent, VK_FORMAT_R32_UINT);
-    m_raytracingOutput.m_primaryWorldInterpolatedNormal = createImageResource(ctx, "primary world interpolated normal", m_downscaledExtent, VK_FORMAT_R32_UINT);
     m_raytracingOutput.m_primaryPerceptualRoughness = createImageResource(ctx, "primary perceptual roughness", m_downscaledExtent, VK_FORMAT_R8_UNORM);
     m_raytracingOutput.m_primaryLinearViewZ = createImageResource(ctx, "primary linear view Z", m_downscaledExtent, VK_FORMAT_R32_SFLOAT);
     uint32_t primaryDepthIndex = 0;
