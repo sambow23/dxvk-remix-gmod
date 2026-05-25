@@ -44,6 +44,7 @@ using TracyVkCtx = void*;
 #include "client/TracyCallstack.hpp"
 
 #include <atomic>
+#include <thread>
 
 namespace tracy
 {
@@ -100,6 +101,9 @@ public:
     VkCtx( VkPhysicalDevice physdev, VkDevice device, VkQueue queue, VkCommandBuffer cmdbuf, PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT vkGetPhysicalDeviceCalibrateableTimeDomainsEXT, PFN_vkGetCalibratedTimestampsEXT vkGetCalibratedTimestampsEXT)
 #endif
         : m_device( device )
+    , m_physdev( physdev )
+    , m_queue( queue )
+    , m_cmdbuf( cmdbuf )
         , m_timeDomain( VK_TIME_DOMAIN_DEVICE_EXT )
         , m_context( GetGpuCtxCounter().fetch_add( 1, std::memory_order_relaxed ) )
         , m_head( 0 )
@@ -170,7 +174,7 @@ public:
 
         WriteInitialItem( physdev, tcpu, tgpu );
 
-        m_res = (int64_t*)tracy_malloc( sizeof( int64_t ) * m_queryCount );
+        m_res = (int64_t*)tracy_malloc( sizeof( int64_t ) * m_queryCount * 2 );
     }
 
 #if defined VK_EXT_host_query_reset
@@ -185,6 +189,9 @@ public:
     VkCtx( VkPhysicalDevice physdev, VkDevice device, PFN_vkResetQueryPoolEXT vkResetQueryPool, PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT vkGetPhysicalDeviceCalibrateableTimeDomainsEXT, PFN_vkGetCalibratedTimestampsEXT vkGetCalibratedTimestampsEXT )
 #endif
         : m_device( device )
+    , m_physdev( physdev )
+    , m_queue( VK_NULL_HANDLE )
+    , m_cmdbuf( VK_NULL_HANDLE )
         , m_timeDomain( VK_TIME_DOMAIN_DEVICE_EXT )
         , m_context( GetGpuCtxCounter().fetch_add(1, std::memory_order_relaxed) )
         , m_head( 0 )
@@ -236,6 +243,11 @@ public:
         auto ptr = (char*)tracy_malloc( len );
         memcpy( ptr, name, len );
 
+#ifdef TRACY_ON_DEMAND
+        m_name = ptr;
+        m_nameLen = len;
+#endif
+
         auto item = Profiler::QueueSerial();
         MemWrite( &item->hdr.type, QueueType::GpuContextName );
         MemWrite( &item->gpuContextNameFat.context, m_context );
@@ -250,6 +262,10 @@ public:
     void Collect( VkCommandBuffer cmdbuf )
     {
         ZoneScopedC( Color::Red4 );
+
+    #ifdef TRACY_ON_DEMAND
+        RefreshCtxOnDemand();
+    #endif
 
         const uint64_t head = m_head.load(std::memory_order_relaxed);
         if( m_tail == head ) return;
@@ -267,7 +283,18 @@ public:
             return;
         }
 #endif
-        assert( head > m_tail );
+        if( head <= m_tail ) return;
+
+        const uint64_t pending = head - m_tail;
+        if( pending > m_queryCount )
+        {
+            cmdbuf ?
+                VK_FUNCTION_WRAPPER( vkCmdResetQueryPool( cmdbuf, m_query, 0, m_queryCount ) ) :
+                VK_FUNCTION_WRAPPER( vkResetQueryPool( m_device, m_query, 0, m_queryCount ) );
+            m_tail = head;
+            m_oldCnt = 0;
+            return;
+        }
 
         const unsigned int wrappedTail = (unsigned int)( m_tail % m_queryCount );
 
@@ -279,7 +306,7 @@ public:
         }
         else
         {
-            cnt = (unsigned int)( head - m_tail );
+            cnt = (unsigned int)pending;
             assert( cnt <= m_queryCount );
             if( wrappedTail + cnt > m_queryCount )
             {
@@ -287,8 +314,10 @@ public:
             }
         }
 
+        if( cnt == 0 ) return;
 
-        VK_FUNCTION_WRAPPER( vkGetQueryPoolResults( m_device, m_query, wrappedTail, cnt, sizeof( int64_t ) * m_queryCount * 2, m_res, sizeof( int64_t ) * 2, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT ) );
+
+    VK_FUNCTION_WRAPPER( vkGetQueryPoolResults( m_device, m_query, wrappedTail, cnt, sizeof( int64_t ) * cnt * 2, m_res, sizeof( int64_t ) * 2, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT ) );
 
         for( unsigned int idx=0; idx<cnt; idx++ )
         {
@@ -352,6 +381,97 @@ public:
     }
 
 private:
+    tracy_force_inline void WriteContextNameItem( const char* name, uint16_t len )
+    {
+        if( !name || len == 0 ) return;
+
+        auto item = Profiler::QueueSerial();
+        MemWrite( &item->hdr.type, QueueType::GpuContextName );
+        MemWrite( &item->gpuContextNameFat.context, m_context );
+        MemWrite( &item->gpuContextNameFat.ptr, (uint64_t)name );
+        MemWrite( &item->gpuContextNameFat.size, len );
+
+#ifdef TRACY_ON_DEMAND
+        GetProfiler().DeferItem( *item );
+#endif
+        Profiler::QueueSerialFinish();
+    }
+
+#ifdef TRACY_ON_DEMAND
+    tracy_force_inline void RefreshCtxOnDemand()
+    {
+        auto& profiler = GetProfiler();
+        if( !profiler.IsConnected() ) return;
+
+        const auto connectionId = profiler.ConnectionId();
+        if( m_connectionId.load( std::memory_order_acquire ) == connectionId ) return;
+
+        for(;;)
+        {
+            uint64_t expected = 0;
+            if( m_refreshConnectionId.compare_exchange_weak( expected, connectionId, std::memory_order_acq_rel, std::memory_order_acquire ) ) break;
+            if( expected == connectionId )
+            {
+                while( m_connectionId.load( std::memory_order_acquire ) != connectionId )
+                {
+                    std::this_thread::yield();
+                }
+                return;
+            }
+            std::this_thread::yield();
+        }
+
+        int64_t tcpu = Profiler::GetTime();
+        int64_t tgpu = 0;
+
+        // Drop any outstanding query results from a previous on-demand session.
+        m_tail = m_head.load( std::memory_order_relaxed );
+        m_oldCnt = 0;
+
+        if( m_timeDomain == VK_TIME_DOMAIN_DEVICE_EXT )
+        {
+            if( m_queue == VK_NULL_HANDLE || m_cmdbuf == VK_NULL_HANDLE )
+            {
+                m_refreshConnectionId.store( 0, std::memory_order_release );
+                return;
+            }
+
+            VkCommandBufferBeginInfo beginInfo = {};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            VkSubmitInfo submitInfo = {};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &m_cmdbuf;
+
+            VK_FUNCTION_WRAPPER( vkBeginCommandBuffer( m_cmdbuf, &beginInfo ) );
+            VK_FUNCTION_WRAPPER( vkCmdWriteTimestamp( m_cmdbuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_query, 0 ) );
+            VK_FUNCTION_WRAPPER( vkEndCommandBuffer( m_cmdbuf ) );
+            VK_FUNCTION_WRAPPER( vkQueueSubmit( m_queue, 1, &submitInfo, VK_NULL_HANDLE ) );
+            VK_FUNCTION_WRAPPER( vkQueueWaitIdle( m_queue ) );
+
+            tcpu = Profiler::GetTime();
+            VK_FUNCTION_WRAPPER( vkGetQueryPoolResults( m_device, m_query, 0, 1, sizeof( tgpu ), &tgpu, sizeof( tgpu ), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT ) );
+
+            VK_FUNCTION_WRAPPER( vkBeginCommandBuffer( m_cmdbuf, &beginInfo ) );
+            VK_FUNCTION_WRAPPER( vkCmdResetQueryPool( m_cmdbuf, m_query, 0, 1 ) );
+            VK_FUNCTION_WRAPPER( vkEndCommandBuffer( m_cmdbuf ) );
+            VK_FUNCTION_WRAPPER( vkQueueSubmit( m_queue, 1, &submitInfo, VK_NULL_HANDLE ) );
+            VK_FUNCTION_WRAPPER( vkQueueWaitIdle( m_queue ) );
+        }
+        else
+        {
+            Calibrate( m_device, m_prevCalibration, tgpu );
+        }
+
+        m_connectionId.store( connectionId, std::memory_order_release );
+        WriteInitialItem( m_physdev, tcpu, tgpu );
+        WriteContextNameItem( m_name, m_nameLen );
+        m_refreshConnectionId.store( 0, std::memory_order_release );
+    }
+#endif
+
     tracy_force_inline void Calibrate( VkDevice device, int64_t& tCpu, int64_t& tGpu )
     {
         assert( m_timeDomain != VK_TIME_DOMAIN_DEVICE_EXT );
@@ -487,6 +607,9 @@ private:
 #endif
 
     VkDevice m_device;
+    VkPhysicalDevice m_physdev;
+    VkQueue m_queue;
+    VkCommandBuffer m_cmdbuf;
     VkQueryPool m_query;
     VkTimeDomainEXT m_timeDomain;
 #if defined TRACY_VK_USE_SYMBOL_TABLE
@@ -507,6 +630,13 @@ private:
     int64_t* m_res;
 
     PFN_vkGetCalibratedTimestampsEXT m_vkGetCalibratedTimestampsEXT;
+
+#ifdef TRACY_ON_DEMAND
+    const char* m_name = nullptr;
+    uint16_t m_nameLen = 0;
+    std::atomic<uint64_t> m_connectionId { 0 };
+    std::atomic<uint64_t> m_refreshConnectionId { 0 };
+#endif
 };
 
 class VkCtxScope
@@ -522,6 +652,10 @@ public:
         if( !m_active ) return;
         m_cmdbuf = cmdbuf;
         m_ctx = ctx;
+
+#ifdef TRACY_ON_DEMAND
+    m_ctx->RefreshCtxOnDemand();
+#endif
 
         const auto queryId = ctx->NextQueryId();
         CONTEXT_VK_FUNCTION_WRAPPER( vkCmdWriteTimestamp( cmdbuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx->m_query, queryId ) );
@@ -546,6 +680,10 @@ public:
         if( !m_active ) return;
         m_cmdbuf = cmdbuf;
         m_ctx = ctx;
+
+#ifdef TRACY_ON_DEMAND
+    m_ctx->RefreshCtxOnDemand();
+#endif
 
         const auto queryId = ctx->NextQueryId();
         CONTEXT_VK_FUNCTION_WRAPPER( vkCmdWriteTimestamp( cmdbuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx->m_query, queryId ) );
@@ -580,6 +718,10 @@ public:
         m_cmdbuf = cmdbuf;
         m_ctx = ctx;
 
+#ifdef TRACY_ON_DEMAND
+    m_ctx->RefreshCtxOnDemand();
+#endif
+
         const auto queryId = ctx->NextQueryId();
         CONTEXT_VK_FUNCTION_WRAPPER( vkCmdWriteTimestamp( cmdbuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx->m_query, queryId ) );
 
@@ -604,6 +746,10 @@ public:
         if( !m_active ) return;
         m_cmdbuf = cmdbuf;
         m_ctx = ctx;
+
+#ifdef TRACY_ON_DEMAND
+    m_ctx->RefreshCtxOnDemand();
+#endif
 
         const auto queryId = ctx->NextQueryId();
         CONTEXT_VK_FUNCTION_WRAPPER( vkCmdWriteTimestamp( cmdbuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx->m_query, queryId ) );
