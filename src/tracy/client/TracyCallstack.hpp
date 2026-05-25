@@ -1,26 +1,60 @@
 #ifndef __TRACYCALLSTACK_HPP__
 #define __TRACYCALLSTACK_HPP__
 
+#include <stdint.h>
+
 #include "../common/TracyApi.h"
+#include "../common/TracyForceInline.hpp"
 #include "TracyCallstack.h"
+
+namespace tracy
+{
+
+struct ImageEntry
+{
+    uint64_t m_startAddress = 0;
+    uint64_t m_endAddress = 0;
+    char* m_name = nullptr;
+    char* m_path = nullptr;
+};
+
+}
+
+#ifndef TRACY_HAS_CALLSTACK
+
+namespace tracy
+{
+static constexpr bool has_callstack() { return false; }
+static tracy_force_inline void* Callstack( int32_t /*depth*/ ) { return nullptr; }
+}
+
+#else
 
 #if TRACY_HAS_CALLSTACK == 2 || TRACY_HAS_CALLSTACK == 5
 #  include <unwind.h>
 #elif TRACY_HAS_CALLSTACK >= 3
-#  include <execinfo.h>
+#  ifdef TRACY_LIBUNWIND_BACKTRACE
+     // libunwind is, in general, significantly faster than execinfo based backtraces
+#    define UNW_LOCAL_ONLY
+#    include <libunwind.h>
+#  else
+#    include <execinfo.h>
+#  endif
 #endif
 
-
-#ifdef TRACY_HAS_CALLSTACK
+#ifdef TRACY_DEBUGINFOD
+#  include <elfutils/debuginfod.h>
+#endif
 
 #include <assert.h>
 #include <stdint.h>
 
 #include "../common/TracyAlloc.hpp"
-#include "../common/TracyForceInline.hpp"
 
 namespace tracy
 {
+
+static constexpr bool has_callstack() { return true; }
 
 struct CallstackSymbolData
 {
@@ -47,21 +81,26 @@ struct CallstackEntryData
 };
 
 CallstackSymbolData DecodeSymbolAddress( uint64_t ptr );
-CallstackSymbolData DecodeCodeAddress( uint64_t ptr );
 const char* DecodeCallstackPtrFast( uint64_t ptr );
 CallstackEntryData DecodeCallstackPtr( uint64_t ptr );
 void InitCallstack();
+void InitCallstackCritical();
+void EndCallstack();
 const char* GetKernelModulePath( uint64_t addr );
+
+#ifdef TRACY_DEBUGINFOD
+const uint8_t* GetBuildIdForImage( const char* image, size_t& size );
+debuginfod_client* GetDebuginfodClient();
+#endif
 
 #if TRACY_HAS_CALLSTACK == 1
 
 extern "C"
 {
-    typedef unsigned long (__stdcall *___tracy_t_RtlWalkFrameChain)( void**, unsigned long, unsigned long );
-    TRACY_API extern ___tracy_t_RtlWalkFrameChain ___tracy_RtlWalkFrameChain;
+    TRACY_API unsigned long ___tracy_RtlWalkFrameChain( void**, unsigned long, unsigned long );
 }
 
-static tracy_force_inline void* Callstack( int depth )
+static tracy_force_inline void* Callstack( int32_t depth )
 {
     assert( depth >= 1 && depth < 63 );
     auto trace = (uintptr_t*)tracy_malloc( ( 1 + depth ) * sizeof( uintptr_t ) );
@@ -90,7 +129,7 @@ static _Unwind_Reason_Code tracy_unwind_callback( struct _Unwind_Context* ctx, v
     return _URC_NO_REASON;
 }
 
-static tracy_force_inline void* Callstack( int depth )
+static tracy_force_inline void* Callstack( int32_t depth )
 {
     assert( depth >= 1 && depth < 63 );
 
@@ -105,12 +144,18 @@ static tracy_force_inline void* Callstack( int depth )
 
 #elif TRACY_HAS_CALLSTACK == 3 || TRACY_HAS_CALLSTACK == 4 || TRACY_HAS_CALLSTACK == 6
 
-static tracy_force_inline void* Callstack( int depth )
+static tracy_force_inline void* Callstack( int32_t depth )
 {
     assert( depth >= 1 );
 
     auto trace = (uintptr_t*)tracy_malloc( ( 1 + (size_t)depth ) * sizeof( uintptr_t ) );
+
+#ifdef TRACY_LIBUNWIND_BACKTRACE
+    size_t num =  unw_backtrace( (void**)(trace+1), depth );
+#else
     const auto num = (size_t)backtrace( (void**)(trace+1), depth );
+#endif
+
     *trace = num;
 
     return trace;

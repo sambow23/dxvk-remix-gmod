@@ -24,14 +24,30 @@
 #define ProfilerPlotValueI64(name, val) \
         TracyPlot(name, int64_t(val))
 
+#define TracyVkZoneSafe(ctx, cmdbuf, name) \
+        do { \
+          auto* __tracyVkCtx = (ctx); \
+          if (__tracyVkCtx) { \
+            TracyVkZone(__tracyVkCtx, cmdbuf, name); \
+          } \
+        } while (0)
+
+#define TracyVkZoneTransientSafe(ctx, varname, cmdbuf, name, active) \
+        do { \
+          auto* __tracyVkCtx = (ctx); \
+          if (__tracyVkCtx) { \
+            TracyVkZoneTransient(__tracyVkCtx, varname, cmdbuf, name, active); \
+          } \
+        } while (0)
+
 #define ScopedGpuProfileZone(ctx, name) \
         ScopedCpuProfileZoneN(name); \
-        TracyVkZone((ctx)->getDevice()->queues().graphics.tracyCtx, (ctx)->getCmdBuffer(DxvkCmdBuffer::ExecBuffer), name); \
+        TracyVkZoneSafe((ctx)->getDevice()->queues().graphics.tracyCtx, (ctx)->getCmdBuffer(DxvkCmdBuffer::ExecBuffer), name); \
         __ScopedAnnotation __scopedAnnotation(ctx, name)
 
 #define ScopedGpuProfileZoneQ(device, cmdbuf, queue, name) \
         ScopedCpuProfileZoneN(name); \
-        TracyVkZone((device)->queues().queue.tracyCtx, cmdbuf, name); \
+        TracyVkZoneSafe((device)->queues().queue.tracyCtx, cmdbuf, name); \
         __ScopedQueueAnnotation __scopedQueueAnnotation(device, cmdbuf, name)
 
 #define ScopedGpuProfileZone_Present(device, cmdbuf, name) \
@@ -47,7 +63,7 @@
   #define ScopedGpuProfileZoneDynamicZ(ctx, name) \
           ScopedCpuProfileZone(); \
           ZoneText(name, std::strlen(name)); \
-          TracyVkZoneTransient((ctx)->getDevice()->queues().graphics.tracyCtx, TracyConcat(__tracy_gpu_source_location,__LINE__), (ctx)->getCmdBuffer(DxvkCmdBuffer::ExecBuffer), name, true); \
+          TracyVkZoneTransientSafe((ctx)->getDevice()->queues().graphics.tracyCtx, TracyConcat(__tracy_gpu_source_location,__LINE__), (ctx)->getCmdBuffer(DxvkCmdBuffer::ExecBuffer), name, true); \
           __ScopedAnnotation __scopedAnnotation(ctx, name)
 
   #define TRACY_OBJECT_MEMORY_PROFILING \

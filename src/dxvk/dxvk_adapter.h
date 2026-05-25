@@ -222,6 +222,9 @@ namespace dxvk {
      */
     DxvkAdapterQueueIndices findQueueFamilies() const;
 
+    bool queueFamilySupportsTimestamps(
+      uint32_t              queueFamily) const;
+
     /**
      * \brief Tests whether all required features are supported
      * 

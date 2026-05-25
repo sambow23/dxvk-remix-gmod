@@ -110,7 +110,7 @@ If a dependency path changes (new Vulkan SDK, etc.), run
 
 Tracy profiling is supported. Enable with
 `meson --reconfigure -D enable_tracy=true`, rebuild, then connect
-[Tracy v0.8.7](https://github.com/wolfpld/tracy/releases/download/v0.8/Tracy-0.8.7z)
+[Tracy v0.13.1](https://github.com/wolfpld/tracy/releases/download/v0.13.1/Tracy-0.13.1.7z)
 to a running session.
 
 ## Making changes — general guidance

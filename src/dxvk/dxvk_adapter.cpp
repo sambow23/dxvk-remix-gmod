@@ -1157,6 +1157,14 @@ namespace dxvk {
   }
 
 
+  bool DxvkAdapter::queueFamilySupportsTimestamps(
+          uint32_t              queueFamily) const {
+    return queueFamily != VK_QUEUE_FAMILY_IGNORED
+        && queueFamily < m_queueFamilies.size()
+        && m_queueFamilies[queueFamily].timestampValidBits != 0;
+  }
+
+
   void DxvkAdapter::logNameList(const DxvkNameList& names) {
     for (uint32_t i = 0; i < names.count(); i++)
       Logger::info(str::format("  ", names.name(i)));

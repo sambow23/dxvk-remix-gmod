@@ -82,30 +82,34 @@ namespace dxvk {
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.pNext = nullptr;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = m_queues.graphics.queueFamily;
-
-    if (m_vkd->vkCreateCommandPool(m_vkd->device(), &poolInfo, nullptr, &m_queues.graphics.tracyPool) != VK_SUCCESS)
-      throw DxvkError("DxvkCommandList: Failed to create graphics command pool");
 
     VkCommandBufferAllocateInfo cmdInfoTracy;
     cmdInfoTracy.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cmdInfoTracy.pNext = nullptr;
-    cmdInfoTracy.commandPool = m_queues.graphics.tracyPool;
     cmdInfoTracy.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdInfoTracy.commandBufferCount = 1;
 
-    if (m_vkd->vkAllocateCommandBuffers(m_vkd->device(), &cmdInfoTracy, &m_queues.graphics.tracyCmdList) != VK_SUCCESS)
-      throw DxvkError("DxvkCommandList: Failed to allocate command buffer");
+    if (m_adapter->queueFamilySupportsTimestamps(m_queues.graphics.queueFamily)) {
+      poolInfo.queueFamilyIndex = m_queues.graphics.queueFamily;
 
-    m_queues.graphics.tracyCtx = TracyVkContextCalibrated(m_adapter->handle(),
-                                                          m_vkd->device(),
-                                                          m_queues.graphics.queueHandle,
-                                                          m_queues.graphics.tracyCmdList,
-                                                          vki->vkGetPhysicalDeviceCalibrateableTimeDomainsEXT,
-                                                          m_vkd->vkGetCalibratedTimestampsEXT);
-    TracyVkContextName(m_queues.graphics.tracyCtx, "Graphics Queue", strlen("Graphics Queue"));
+      if (m_vkd->vkCreateCommandPool(m_vkd->device(), &poolInfo, nullptr, &m_queues.graphics.tracyPool) != VK_SUCCESS)
+        throw DxvkError("DxvkCommandList: Failed to create graphics command pool");
 
-    if (m_queues.present.queueHandle) {
+      cmdInfoTracy.commandPool = m_queues.graphics.tracyPool;
+
+      if (m_vkd->vkAllocateCommandBuffers(m_vkd->device(), &cmdInfoTracy, &m_queues.graphics.tracyCmdList) != VK_SUCCESS)
+        throw DxvkError("DxvkCommandList: Failed to allocate command buffer");
+
+      m_queues.graphics.tracyCtx = TracyVkContextCalibrated(m_adapter->handle(),
+                                                            m_vkd->device(),
+                                                            m_queues.graphics.queueHandle,
+                                                            m_queues.graphics.tracyCmdList,
+                                                            vki->vkGetPhysicalDeviceCalibrateableTimeDomainsEXT,
+                                                            m_vkd->vkGetCalibratedTimestampsEXT);
+      TracyVkContextName(m_queues.graphics.tracyCtx, "Graphics Queue", strlen("Graphics Queue"));
+    }
+
+    if (m_queues.present.queueHandle && m_adapter->queueFamilySupportsTimestamps(m_queues.present.queueFamily)) {
       poolInfo.queueFamilyIndex = m_queues.present.queueFamily;
 
       if (m_vkd->vkCreateCommandPool(m_vkd->device(), &poolInfo, nullptr, &m_queues.present.tracyPool) != VK_SUCCESS)
