@@ -78,11 +78,9 @@ namespace dxvk {
     VkQueue   queueHandle = VK_NULL_HANDLE;
     uint32_t  queueFamily = 0;
     uint32_t  queueIndex  = 0;
-#ifdef TRACY_ENABLE
     TracyVkCtx tracyCtx = nullptr;
     VkCommandPool tracyPool = VK_NULL_HANDLE;
     VkCommandBuffer tracyCmdList = VK_NULL_HANDLE;
-#endif
   };
 
   /**

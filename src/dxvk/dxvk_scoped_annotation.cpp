@@ -24,7 +24,6 @@
 #include "dxvk_scoped_annotation.h"
 #include "dxvk_context.h"
 #include "dxvk_device.h"
-#include "client/TracyProfiler.hpp"
 
 // Global overload
 TRACY_OBJECT_MEMORY_PROFILING
