@@ -793,6 +793,10 @@ namespace dxvk {
         // Composite screen overlay (from external C API) after tone mapping
         dispatchScreenOverlay(rtOutput);
 
+        // Rasterize the native screen-space UI draw list (from external C API)
+        // over the composited image, on top of the overlay and tint.
+        dispatchUi(rtOutput);
+
         // Set up output src
         Rc<DxvkImage> srcImage = rtOutput.m_finalOutput.resource(Resources::AccessType::Read).image;
 
@@ -1859,6 +1863,15 @@ namespace dxvk {
 
   void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
     fork_hooks::dispatchScreenOverlay(*this, rtOutput);
+  }
+
+  void RtxContext::dispatchUi(Resources::RaytracingOutput& rtOutput) {
+    // The UI raster pass binds m_finalOutput as a colour attachment. Save and
+    // restore the render-target binding so following passes (debug view,
+    // present blit) see the state they expect.
+    DxvkRenderTargets prevRts = m_state.om.renderTargets;
+    fork_hooks::dispatchUi(*this, rtOutput);
+    bindRenderTargets(prevRts);
   }
 
   void RtxContext::dispatchScreenTint(Resources::RaytracingOutput& rtOutput) {
