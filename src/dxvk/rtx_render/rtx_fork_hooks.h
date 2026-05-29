@@ -283,6 +283,45 @@ namespace dxvk {
     // Implementation in rtx_fork_api_entry.cpp.
     void presentScreenOverlayFlush(D3D9DeviceEx* remixDevice);
 
+    // --- Screen-space UI rendering (rtx_fork_ui.cpp) -------------------------
+    // A textured-quad draw-list renderer that composites the game's 2D UI
+    // directly over the final tone-mapped image, replacing the CPU
+    // framebuffer-readback overlay path. All state (texture registry +
+    // per-frame draw list) is owned inside rtx_fork_ui.cpp; these are the
+    // entry points the remix API and the render loop call into.
+
+    // Stages a UI texture upload from the API thread: copies pPixelData into a
+    // host-visible staging buffer and queues an (id, dims, format) record.
+    // presentUiFlush applies the upload on the render thread. dataSize must be
+    // width * height * 4. id 0 is reserved (built-in white) and rejected.
+    remixapi_ErrorCode registerUiTexture(
+      D3D9DeviceEx*   remixDevice,
+      uint64_t        id,
+      uint32_t        width,
+      uint32_t        height,
+      remixapi_Format format,
+      const void*     pPixelData,
+      uint64_t        dataSize);
+
+    // Queues a UI texture for release; applied on the render thread by
+    // presentUiFlush. Unknown ids are ignored; id 0 cannot be freed.
+    remixapi_ErrorCode freeUiTexture(uint64_t id);
+
+    // Copies the supplied draw list (vertices, indices, commands) into a
+    // pending buffer on the API thread. A null/empty list clears the UI for
+    // the next frame. presentUiFlush hands it to the render thread.
+    remixapi_ErrorCode submitUiDrawList(const remixapi_UIDrawList* drawList);
+
+    // Drains the pending texture uploads/frees and the pending draw list onto
+    // the render thread via EmitCs. Called from the remixapi_Present paths
+    // alongside presentScreenOverlayFlush.
+    void presentUiFlush(D3D9DeviceEx* remixDevice);
+
+    // Rasterizes the current UI draw list over rtOutput.m_finalOutput. Called
+    // from RtxContext::dispatchUi (a one-line delegate) at the post-tonemap
+    // overlay slot. Uses only public DxvkContext raster APIs; no friend needed.
+    void dispatchUi(RtxContext& ctx, Resources::RaytracingOutput& rtOutput);
+
     // Reads RtxOptions::showUI() and maps the internal UIType to remixapi_UIState.
     // Returns REMIXAPI_UI_STATE_NONE if the device is not registered.
     // No private-member access; no friend declaration needed.
