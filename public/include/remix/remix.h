@@ -145,6 +145,12 @@ namespace remix {
     }
   }
 
+  enum class UIState {
+    None = REMIXAPI_UI_STATE_NONE,
+    Basic = REMIXAPI_UI_STATE_BASIC,
+    Advanced = REMIXAPI_UI_STATE_ADVANCED,
+  };
+
   template< typename T >
   using Result = detail::Result< T >;
 
@@ -226,7 +232,7 @@ namespace remix {
         return status;
       }
 
-  static_assert(sizeof(remixapi_Interface) == 184,
+  static_assert(sizeof(remixapi_Interface) == 272,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};

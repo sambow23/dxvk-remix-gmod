@@ -210,6 +210,7 @@ namespace dxvk {
     void dispatchDLFG();
     void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
     void dispatchScreenTint(Resources::RaytracingOutput& rtOutput);
+    void dispatchUi(Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
     void initSkyProbe();

@@ -1671,6 +1671,9 @@ namespace {
     if (!remixDevice) {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
     }
+    dxvk::fork_hooks::presentScreenOverlayFlush(remixDevice);
+    dxvk::fork_hooks::presentUiFlush(remixDevice);
+    dxvk::fork_hooks::presentEndSceneDispatch();
     HRESULT hr = remixDevice->Present(NULL, NULL, info ? info->hwndOverride : NULL, NULL);
     if (FAILED(hr)) {
       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
@@ -1847,6 +1850,9 @@ extern "C"
     // Forward any pending screen overlay to the render thread for this frame.
     dxvk::fork_hooks::presentScreenOverlayFlush(remixDevice);
 
+    // Forward the pending native UI draw list to the render thread.
+    dxvk::fork_hooks::presentUiFlush(remixDevice);
+
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -1939,6 +1945,36 @@ extern "C"
     std::lock_guard lock { s_mutex };
     return dxvk::fork_hooks::drawScreenOverlay(remixDevice, pPixelData, width, height, format, opacity);
   }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterUITexture(
+    remixapi_UITextureHandle id,
+    uint32_t                 width,
+    uint32_t                 height,
+    remixapi_Format          format,
+    const void*              pPixelData,
+    uint64_t                 dataSize) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    std::lock_guard lock { s_mutex };
+    return dxvk::fork_hooks::registerUiTexture(remixDevice, id, width, height, format, pPixelData, dataSize);
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_FreeUITexture(
+    remixapi_UITextureHandle id) {
+    std::lock_guard lock { s_mutex };
+    return dxvk::fork_hooks::freeUiTexture(id);
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_SubmitUIDrawList(
+    const remixapi_UIDrawList* drawList) {
+    if (drawList && drawList->sType != REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    std::lock_guard lock { s_mutex };
+    return dxvk::fork_hooks::submitUiDrawList(drawList);
+  }
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,
                                                                        remixapi_Interface* out_result) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO) {
@@ -1975,10 +2011,16 @@ extern "C"
       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
+      interf.GetUIState = remixapi_GetUIState;
+      interf.SetUIState = remixapi_SetUIState;
       interf.SetFogState = remixapi_SetFogState;
       interf.SetScreenTint = remixapi_SetScreenTint;
+      interf.RegisterUITexture = remixapi_RegisterUITexture;
+      interf.FreeUITexture = remixapi_FreeUITexture;
+      interf.SubmitUIDrawList = remixapi_SubmitUIDrawList;
+      dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 184, "Add/remove function registration");
+    static_assert(sizeof(interf) == 272, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
