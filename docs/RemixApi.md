@@ -441,6 +441,40 @@ that need to land *after* tonemapping.
 
 ---
 
+## Screen-space UI
+
+### `RegisterUITexture` / `FreeUITexture` / `SubmitUIDrawList`
+
+```c
+remixapi_ErrorCode RegisterUITexture(
+    remixapi_UITextureHandle id,
+    uint32_t                 width,
+    uint32_t                 height,
+    remixapi_Format          format,
+    const void*              pPixelData,
+    uint64_t                 dataSize);
+
+remixapi_ErrorCode FreeUITexture(
+    remixapi_UITextureHandle id);
+
+remixapi_ErrorCode SubmitUIDrawList(
+    const remixapi_UIDrawList* drawList);
+```
+
+A textured-quad draw-list renderer that composites a game's 2D UI
+directly over the final tone-mapped image on the GPU, avoiding a
+full-framebuffer CPU readback. Register each texture the UI samples once
+(by caller-chosen `id`; `id` 0 is the built-in white texture), then
+submit a `remixapi_UIVertex` / `uint32_t` index / `remixapi_UIDrawCommand`
+draw list per frame. Commands render in array order (painter's
+algorithm); there is no per-draw clip rect and no depth test.
+Coordinates are screen-space pixels in a top-left origin mapped to the
+draw list's `displayWidth` / `displayHeight`. The `remixapi_UIDrawList`
+`sType` must be `REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST`. Full reference:
+[`RemixUIAPI.md`](RemixUIAPI.md).
+
+---
+
 ## Object picking
 
 ### `pick_RequestObjectPicking`
@@ -558,6 +592,7 @@ For the dated change log, see
 
 - [`RemixSDK.md`](RemixSDK.md) — SDK setup, mental model, minimal C example.
 - [`RemixApiChangelog.md`](RemixApiChangelog.md) — dated API change log.
+- [`RemixUIAPI.md`](RemixUIAPI.md) — screen-space UI draw-list rendering API.
 - [`RemixConfig.md`](RemixConfig.md) — `RtxOptions` config-layer architecture.
 - [`RtxOptions.md`](../RtxOptions.md) — auto-generated complete `rtx.*` reference.
 - [`RemixSkyAPI.md`](RemixSkyAPI.md) — Sky / atmosphere plugin surface (sun, stars, moons, clouds) plus weather preset blender.
