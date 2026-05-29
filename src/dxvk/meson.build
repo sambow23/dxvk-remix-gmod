@@ -250,6 +250,7 @@ dxvk_src = files([
   'rtx_render/rtx_fork_upscaler_ui.cpp',
   'rtx_render/rtx_fork_tonemap.cpp',
   'rtx_render/rtx_fork_tonemap.h',
+  'rtx_render/rtx_fork_ui.cpp',
   'rtx_render/rtx_fork_weather.cpp',
   'rtx_render/rtx_fork_weather.h',
   'rtx_render/rtx_game_capturer.cpp',

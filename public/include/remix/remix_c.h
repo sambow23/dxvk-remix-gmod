@@ -139,6 +139,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT     = 26,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT      = 27,
     REMIXAPI_STRUCT_TYPE_FOG_INFO                              = 29,
+    REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST                         = 30,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -985,6 +986,85 @@ extern "C" {
     float             alpha);
 
 
+  // Screen-space UI rendering API
+  //
+  // A lightweight textured-quad renderer that composites a per-frame UI draw
+  // list directly over the final tone-mapped image on the GPU. Intended to
+  // replace CPU framebuffer-readback overlays (DrawScreenOverlay) with a
+  // direct draw-submission path: register the textures the UI samples once,
+  // then submit a vertex/index/command draw list each frame.
+  //
+  // Draw commands are rendered in array order (painter's algorithm); there is
+  // no per-draw clip rectangle and no depth test. Coordinates are screen-space
+  // pixels in a top-left origin, mapped to the display size supplied with the
+  // draw list.
+
+  // Caller-chosen stable identifier for a registered UI texture. 0 is the
+  // built-in 1x1 opaque-white texture (used for untextured / solid-color
+  // quads); callers must not register or free id 0.
+  typedef uint64_t remixapi_UITextureHandle;
+
+  // Register or update a UI texture from CPU pixel data. If a texture with the
+  // same id, dimensions and format already exists its contents are updated in
+  // place; otherwise the texture is (re)created. Only the 8-bit RGBA/BGRA
+  // formats are accepted. dataSize must equal width * height * 4.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RegisterUITexture)(
+    remixapi_UITextureHandle id,
+    uint32_t                 width,
+    uint32_t                 height,
+    remixapi_Format          format,
+    const void*              pPixelData,
+    uint64_t                 dataSize);
+
+  // Release a previously registered UI texture. Safe to call with an unknown
+  // id (no-op). The built-in id 0 cannot be freed.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_FreeUITexture)(
+    remixapi_UITextureHandle id);
+
+  typedef struct remixapi_UIVertex {
+    float    x;       // screen-space pixel position (top-left origin)
+    float    y;
+    float    z;       // normalized depth [0,1]; 0 for flat 2D quads
+    float    u;       // texture coordinate
+    float    v;
+    uint32_t color;   // packed RGBA8, R in the least-significant byte
+  } remixapi_UIVertex;
+
+  // remixapi_UIDrawCommand::flags bits.
+  // DEPTH_TEST: depth-test and depth-write this draw against the UI pass's
+  // depth buffer (for 3D screen-space geometry such as inventory models and
+  // block item icons). Flat 2D draws leave this unset and composite in
+  // submission (painter) order.
+  #define REMIXAPI_UI_DRAW_FLAG_DEPTH_TEST 0x1u
+
+  typedef struct remixapi_UIDrawCommand {
+    remixapi_UITextureHandle textureId;     // texture to sample (0 = white)
+    uint32_t                 indexCount;    // indices consumed by this draw
+    uint32_t                 indexOffset;   // first index into pIndices
+    int32_t                  vertexOffset;  // added to each index
+    uint32_t                 flags;         // REMIXAPI_UI_DRAW_FLAG_* bitmask
+  } remixapi_UIDrawCommand;
+
+  typedef struct remixapi_UIDrawList {
+    remixapi_StructType           sType;
+    void*                         pNext;
+    uint32_t                      displayWidth;   // logical UI canvas size, px
+    uint32_t                      displayHeight;
+    const remixapi_UIVertex*      pVertices;
+    uint32_t                      vertexCount;
+    const uint32_t*               pIndices;
+    uint32_t                      indexCount;
+    const remixapi_UIDrawCommand* pCommands;
+    uint32_t                      commandCount;
+  } remixapi_UIDrawList;
+
+  // Submit the UI draw list for the next presented frame. A null draw list (or
+  // one with no commands) clears the UI for that frame. The vertex, index and
+  // command arrays are copied; the caller retains ownership of its buffers.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SubmitUIDrawList)(
+    const remixapi_UIDrawList* drawList);
+
+
   typedef struct remixapi_InitializeLibraryInfo {
     remixapi_StructType sType;
     void*               pNext;
@@ -1125,6 +1205,9 @@ extern "C" {
     PFN_remixapi_GetGameValue               GetGameValue;
     PFN_remixapi_SetFogState                SetFogState;
     PFN_remixapi_SetScreenTint              SetScreenTint;
+    PFN_remixapi_RegisterUITexture          RegisterUITexture;
+    PFN_remixapi_FreeUITexture              FreeUITexture;
+    PFN_remixapi_SubmitUIDrawList           SubmitUIDrawList;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

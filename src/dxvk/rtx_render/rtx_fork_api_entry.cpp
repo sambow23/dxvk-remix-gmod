@@ -35,6 +35,7 @@
 // of this struct and optional was removed in migration #7b.
 
 #include "rtx_fork_hooks.h"
+#include "rtx_fork_ui.h"                  // fork_ui::UiDrawList, UiTextureUpload, render-thread mutators
 
 #include "rtx_context.h"                  // DxvkContext::getCommonObjects(), RtxContext
 #include "rtx_option.h"                   // RtxOption, RtxOptionImpl, fast_unordered_set
@@ -110,6 +111,24 @@ namespace {
   };
 
   std::optional<PendingScreenOverlay> s_pendingScreenOverlay;
+
+  // -------------------------------------------------------------------------
+  // Pending screen-space UI state (Phase 1)
+  //
+  // Staged on the API thread by registerUiTexture / freeUiTexture /
+  // submitUiDrawList and drained to the render thread by presentUiFlush via
+  // EmitCs. Texture uploads carry a host-visible staging buffer; the render
+  // thread (fork_ui::applyTextureUpload) creates the GPU image and copies. The
+  // draw list is double-buffered: a submitted (possibly empty) list replaces
+  // the current frame's UI; an empty list clears it.
+  //
+  // TU-local (anonymous namespace) so the EmitCs-using flush stays in this
+  // file, out of reach of the unit-test link (which lacks the private
+  // D3D9DeviceEx symbols the EmitCs template needs).
+  // -------------------------------------------------------------------------
+  std::vector<fork_ui::UiTextureUpload> s_pendingUiUploads;
+  std::vector<uint64_t>                 s_pendingUiFrees;
+  std::optional<fork_ui::UiDrawList>    s_pendingUiDrawList;
 
   // -------------------------------------------------------------------------
   // Frame-boundary callback state (migration #7c)
@@ -321,6 +340,151 @@ namespace fork_hooks {
         std::move(cOverlay.stagingBuffer),
         cOverlay.width, cOverlay.height,
         cOverlay.format, cOverlay.opacity);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // registerUiTexture (Phase 1)
+  //
+  // Copies pPixelData into a host-visible staging buffer and queues an upload
+  // record. presentUiFlush hands it to the render thread, which builds the GPU
+  // image. id 0 is reserved for the built-in white texture and rejected here.
+  // ---------------------------------------------------------------------------
+  remixapi_ErrorCode registerUiTexture(
+      D3D9DeviceEx*   remixDevice,
+      uint64_t        id,
+      uint32_t        width,
+      uint32_t        height,
+      remixapi_Format format,
+      const void*     pPixelData,
+      uint64_t        dataSize) {
+    if (id == 0 || width == 0 || height == 0 || !pPixelData) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (!fork_ui::isSupportedFormat(format)) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (dataSize != static_cast<uint64_t>(width) * height * 4) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    DxvkBufferCreateInfo stagingInfo = {};
+    stagingInfo.size   = dataSize;
+    stagingInfo.usage  = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    stagingInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT;
+    stagingInfo.access = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
+
+    Rc<DxvkBuffer> stagingBuffer = remixDevice->GetDXVKDevice()->createBuffer(
+      stagingInfo,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      DxvkMemoryStats::Category::RTXBuffer,
+      "Remix API UI texture staging");
+
+    if (stagingBuffer == nullptr) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    DxvkBufferSlice stagingSlice { stagingBuffer };
+    memcpy(stagingSlice.mapPtr(0), pPixelData, dataSize);
+
+    s_pendingUiUploads.push_back(fork_ui::UiTextureUpload {
+      id, width, height, format, std::move(stagingBuffer)
+    });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // freeUiTexture (Phase 1)
+  //
+  // Queues a texture id for release on the render thread. id 0 (built-in white)
+  // cannot be freed.
+  // ---------------------------------------------------------------------------
+  remixapi_ErrorCode freeUiTexture(uint64_t id) {
+    if (id == 0) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    s_pendingUiFrees.push_back(id);
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // submitUiDrawList (Phase 1)
+  //
+  // Copies the supplied draw list into the pending slot. A null draw list (or
+  // one with no commands) sets an empty pending list, which clears the UI on
+  // the next frame.
+  // ---------------------------------------------------------------------------
+  remixapi_ErrorCode submitUiDrawList(const remixapi_UIDrawList* drawList) {
+    fork_ui::UiDrawList list;
+
+    if (drawList) {
+      if (drawList->sType != REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+      list.displayWidth  = drawList->displayWidth;
+      list.displayHeight = drawList->displayHeight;
+
+      if (drawList->vertexCount && drawList->pVertices) {
+        list.vertices.assign(drawList->pVertices,
+                             drawList->pVertices + drawList->vertexCount);
+      }
+      if (drawList->indexCount && drawList->pIndices) {
+        list.indices.assign(drawList->pIndices,
+                            drawList->pIndices + drawList->indexCount);
+      }
+      if (drawList->commandCount && drawList->pCommands) {
+        list.commands.reserve(drawList->commandCount);
+        for (uint32_t i = 0; i < drawList->commandCount; ++i) {
+          const remixapi_UIDrawCommand& cmd = drawList->pCommands[i];
+          list.commands.push_back(fork_ui::UiDrawCmd {
+            cmd.textureId,
+            cmd.indexCount,
+            cmd.indexOffset,
+            cmd.vertexOffset,
+            cmd.flags
+          });
+        }
+      }
+    }
+
+    s_pendingUiDrawList = std::move(list);
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // presentUiFlush (Phase 1)
+  //
+  // Drains the pending UI texture uploads/frees and draw list onto the render
+  // thread via EmitCs. Called from both remixapi_Present paths alongside
+  // presentScreenOverlayFlush.
+  // ---------------------------------------------------------------------------
+  void presentUiFlush(D3D9DeviceEx* remixDevice) {
+    if (s_pendingUiUploads.empty() &&
+        s_pendingUiFrees.empty() &&
+        !s_pendingUiDrawList.has_value()) {
+      return;
+    }
+
+    std::vector<fork_ui::UiTextureUpload> uploads = std::move(s_pendingUiUploads);
+    std::vector<uint64_t>                 frees   = std::move(s_pendingUiFrees);
+    std::optional<fork_ui::UiDrawList>    list    = std::move(s_pendingUiDrawList);
+    s_pendingUiUploads.clear();
+    s_pendingUiFrees.clear();
+    s_pendingUiDrawList.reset();
+
+    remixDevice->EmitCs([cUploads = std::move(uploads),
+                         cFrees   = std::move(frees),
+                         cList    = std::move(list)](DxvkContext* ctx) mutable {
+      for (uint64_t id : cFrees) {
+        fork_ui::freeTexture(id);
+      }
+      for (fork_ui::UiTextureUpload& up : cUploads) {
+        fork_ui::applyTextureUpload(ctx, up);
+      }
+      if (cList.has_value()) {
+        fork_ui::setCurrentDrawList(std::move(*cList));
+      }
     });
   }
 

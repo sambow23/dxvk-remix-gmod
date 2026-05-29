@@ -71,7 +71,7 @@ check will enforce it if discipline slips.
   *C++ wrapper for the `remixapi_SetGameValue` C API slot introduced in workstream 10 (plugin-injected game-state write). Wrapper guards on nullptr vtable slot before dispatching, matching the `SetConfigVariable` shape. Companion readers are graph components `GameValueReadBool` / `GameValueReadNumber`; backing store lives in `rtx_fork_game_state.h`.*
 
 - **Block** at `remixapi_Interface` static_assert updates (file scope) — ~3 LOC (three separate assert sizes), planned target `N/A (public header)` in `N/A (public header)`.
-  *Updates `sizeof(remixapi_Interface)` static_asserts in the C++ header to match each successive vtable extension, currently 336 bytes for the fork extension slots (`SetGameValue` / `GetGameValue`, VRAM helpers, fog, and screen tint).*
+  *Updates `sizeof(remixapi_Interface)` static_asserts in the C++ header to match each successive vtable extension, currently 360 bytes for the fork extension slots (`SetGameValue` / `GetGameValue`, VRAM helpers, fog, screen tint, and the UI API slots `RegisterUITexture` / `FreeUITexture` / `SubmitUIDrawList`).*
 
 ---
 
@@ -110,6 +110,9 @@ check will enforce it if discipline slips.
 
 - **Block** at `PFN_remixapi_CreateTexture` / `PFN_remixapi_DestroyTexture` typedefs (file scope) — ~6 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Declares function-pointer types for the texture upload/destroy lifecycle.*
+
+- **Block** at `remixapi_StructType::REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST` + UI rendering types (file scope) — ~70 LOC, planned target `N/A (public header)` in `N/A (public header)`.
+  *Declares the screen-space UI rendering API: the `REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST` struct type, the `remixapi_UITextureHandle` handle, the `remixapi_UIVertex` / `remixapi_UIDrawCommand` / `remixapi_UIDrawList` structs, and the `PFN_remixapi_RegisterUITexture` / `PFN_remixapi_FreeUITexture` / `PFN_remixapi_SubmitUIDrawList` function-pointer typedefs, plus the three matching `remixapi_Interface` vtable slots. See [`docs/RemixUIAPI.md`](RemixUIAPI.md).*
 
 - **Block** at `PFN_remixapi_dxvk_GetTextureHash` typedef (file scope) — ~4 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Declares the dxvk-specific extension function to retrieve the GPU image hash from a D3D9 texture object.*
@@ -291,6 +294,9 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `dxvk_src` files list (rtx_render block) — 2-line addition registering weather sources.
   *Registers `'rtx_render/rtx_fork_weather.cpp'` and `'rtx_render/rtx_fork_weather.h'` in the DXVK build source list.*
 
+- **Inline tweak** at `dxvk_src` files list (rtx_render block) — 1-line addition registering the UI source.
+  *Registers `'rtx_render/rtx_fork_ui.cpp'` in the DXVK build source list. The shared header `rtx_render/rtx_fork_ui.h` and the UI shaders (`src/dxvk/shaders/rtx/pass/ui/ui_vertex.vert.slang`, `ui_fragment.frag.slang`, `ui_bindings.h`) are picked up via the header/shader-include globs; no explicit meson.build entry is required.*
+
 ---
 
 ## src/dxvk/rtx_render/graph/rtx_component_list.h
@@ -337,6 +343,9 @@ initializer list and can't be lifted into a separate TU.
 - **Hook** at `RtxContext::dispatchScreenOverlay` (method body + ScreenOverlayShader class) → `fork_hooks::dispatchScreenOverlay` in `rtx_fork_overlay.cpp`
   *`ScreenOverlayShader` lifted to `rtx_fork_overlay.cpp`; `dispatchScreenOverlay` is now a one-line delegate. The hook alpha-composites a plugin-uploaded RGBA buffer over the final tone-mapped image using the compute shader.*
 
+- **Hook** at `RtxContext::dispatchUi` (new method + render-loop call site) → `fork_hooks::dispatchUi` in `rtx_fork_ui.cpp`
+  *New screen-space UI draw-list rasterizer. `dispatchUi` saves/restores the render-target binding and delegates to `fork_hooks::dispatchUi`, which rasterizes the native UI draw list (textured quads, straight-alpha blend) over `m_finalOutput`. Called once per frame after `dispatchScreenOverlay` (post-tonemap, post-tint). Uses only public DxvkContext raster APIs — no friend declaration. The render-side state (UI texture registry + current per-frame draw list) and the render-thread mutators (`fork_ui::applyTextureUpload` / `freeTexture` / `setCurrentDrawList`, declared in `rtx_fork_ui.h`) live in `rtx_fork_ui.cpp`. This TU never instantiates `D3D9DeviceEx::EmitCs` so it stays linkable from the unit-test executables; the EmitCs-using API-thread staging + present flush live separately in `rtx_fork_api_entry.cpp`.*
+
 - **Inline tweak** at `RtxContext::dispatchTonemapping` — removed the `TonemappingMode::Global || TonemappingMode::Direct` dispatch gate; the tonemapper now always runs (always operator-only). The `DxvkLocalToneMapping` dispatch block was removed entirely (2026-05-15).
   *2026-05-13 tonemap refactor: global tone curve removed. 2026-05-15: local tonemapper removed.*
 
@@ -361,6 +370,9 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `RtxContext::setScreenOverlayData` and `dispatchScreenOverlay` declarations — ~5 LOC.
   *Declares the two overlay-path methods. `setScreenOverlayData` remains a standalone public method; `dispatchScreenOverlay` is now a one-line delegate to `fork_hooks::dispatchScreenOverlay`.*
+
+- **Inline tweak** at `RtxContext` class (private `dispatchUi` declaration) — 1 LOC.
+  *Declares `void dispatchUi(Resources::RaytracingOutput&);`, a one-line delegate to `fork_hooks::dispatchUi` (with render-target save/restore). No new members and no friend declaration — the UI pass uses only public APIs.*
 
 - **Inline tweak** at `RtxContext` class (member declarations — screen overlay state) — ~11 LOC.
   *Adds `ScreenOverlayFrame` struct, `m_pendingScreenOverlay`, `m_screenOverlayImage`, `m_screenOverlayView`, `m_screenOverlayWidth`, `m_screenOverlayHeight`, and `m_screenOverlayFormat`. These remain as class members accessed via friend declarations.*
@@ -685,6 +697,15 @@ initializer list and can't be lifted into a separate TU.
 
 - **Hook** at `remixapi_Present` (screen overlay flush — inner namespace path) → `fork_hooks::presentScreenOverlayFlush` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
   *One-liner call to the fork-owned flush hook. State (PendingScreenOverlay + s_pendingScreenOverlay) was unified in the same migration.*
+
+- **Hook** at `remixapi_RegisterUITexture` / `remixapi_FreeUITexture` / `remixapi_SubmitUIDrawList` (new entry functions) → `fork_hooks::registerUiTexture` / `freeUiTexture` / `submitUiDrawList` in `rtx_fork_api_entry.cpp`.
+  *New screen-space UI API entry points. Each acquires `s_mutex` then delegates to the fork-owned hook; `SubmitUIDrawList` validates `sType == REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST` first. The API-thread staging (host-visible staging buffers for texture uploads, pending-free list, pending draw-list copy) and `fork_hooks::presentUiFlush` (drains the pending state to the render thread via `D3D9DeviceEx::EmitCs`, alongside `presentScreenOverlayFlush`) live in `rtx_fork_api_entry.cpp`. The render-thread mutators they invoke are defined in `rtx_fork_ui.cpp`.*
+
+- **Hook** at `remixapi_Present` (UI draw-list flush — both Present paths) → `fork_hooks::presentUiFlush` in `rtx_fork_ui.cpp`.
+  *One-liner call next to each `presentScreenOverlayFlush` call. Drains the pending UI texture uploads/frees and the pending draw list onto the render thread via EmitCs.*
+
+- **Inline tweak** at `remixapi_InitializeLibrary` (vtable population + static_assert) — ~4 LOC.
+  *Assigns `interf.RegisterUITexture`, `interf.FreeUITexture`, `interf.SubmitUIDrawList`, and bumps the `sizeof(interf)` sentinel static_assert from 296 to 320 (three added 8-byte function-pointer slots).*
 
 - **Hook** at `remixapi_Present` (endScene callback, before native Present) → `fork_hooks::presentEndSceneDispatch` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7c).
   *Fires `s_endCallback` if `s_inFrame` is set, immediately before the native `remixDevice->Present()` call.*
