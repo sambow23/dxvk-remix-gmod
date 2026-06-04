@@ -30,5 +30,5 @@ $BuildFlavours = @("release")
 $BuildSubDirs = @("_Comp64Release")
 
 For ($i=0; $i -lt $BuildFlavours.Length; $i++) {
-  PerformBuild -BuildFlavour $BuildFlavours[$i] -BuildSubDir $BuildSubDirs[$i] -Backend ninja -EnableTracy true
+  PerformBuild -BuildFlavour $BuildFlavours[$i] -BuildSubDir $BuildSubDirs[$i] -Backend ninja -EnableTracy false
 }
