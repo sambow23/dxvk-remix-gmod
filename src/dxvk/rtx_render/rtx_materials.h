@@ -172,6 +172,7 @@ struct RtSurface {
     flags1 |= isMotionBlurMaskOut ?           (1 << 28) : 0;
     flags1 |= skipSurfaceInteractionSpritesheetAdjustment ? (1 << 29) : 0;
     flags1 |= ignoreTransparencyLayer ?       (1 << 30) : 0;
+    flags1 |= isPreservePath ?                (1u << 31) : 0;
 
     writeGPUHelper(data, offset, flags1);
 
@@ -330,6 +331,8 @@ struct RtSurface {
   bool isEmissive = false;
   bool isMatte = false;
   bool isStatic = false;
+  // True when SceneManager took the preserve replacement-instance path (usePreservePath); unrelated to motion isStatic.
+  bool isPreservePath = false;
   bool hasMaterialChanged = false;
   bool isAnimatedWater = false;
   bool isClipPlaneEnabled = false;
@@ -400,6 +403,7 @@ struct RtSurface {
       "  isEmissive: ", isEmissive, "\n",
       "  isMatte: ", isMatte, "\n",
       "  isStatic: ", isStatic, "\n",
+      "  isPreservePath: ", isPreservePath, "\n",
       "  hasMaterialChanged: ", hasMaterialChanged, "\n",
       "  isAnimatedWater: ", isAnimatedWater, "\n",
       "  isClipPlaneEnabled: ", isClipPlaneEnabled, "\n",
@@ -726,6 +730,11 @@ struct RtOpaqueSurfaceMaterial {
 
   uint32_t getEmissiveColorTextureIndex() const {
     return m_emissiveColorTextureIndex;
+  }
+
+  // Albedo ManagedTexture stamp; used to associate textures for streaming priority.
+  uint16_t getSamplerFeedbackStamp() const {
+    return m_samplerFeedbackStamp;
   }
 
   float getAnisotropy() const {
@@ -1579,6 +1588,12 @@ struct RtSurfaceMaterial {
     assert(m_type == RtSurfaceMaterialType::RayPortal);
 
     return m_rayPortalSurfaceMaterial;
+  }
+
+  const RtSubsurfaceMaterial& getSubsurfaceMaterial() const {
+    assert(m_type == RtSurfaceMaterialType::Subsurface);
+
+    return m_subsurfaceMaterial;
   }
 
   template<typename Fn>

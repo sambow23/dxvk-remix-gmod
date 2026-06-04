@@ -44,6 +44,8 @@
 #include "rtx_composite.h"
 #include "rtx_debug_view.h"
 
+#include "rtx/pass/sparse_rendering/sparse_rendering.h"
+
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/volume_args.h"
@@ -51,6 +53,7 @@
 #include "rtx/utility/gpu_printing.h"
 #include "rtx_nrd_settings.h"
 #include "rtx_scene_manager.h"
+#include "rtx_sparse_rendering.h"
 
 #include "../d3d9/d3d9_state.h"
 #include "../d3d9/d3d9_spec_constants.h"
@@ -728,13 +731,22 @@ namespace dxvk {
         dust.simulateAndDraw(this, m_state, rtOutput);
 
         dispatchBloom(rtOutput);
-        dispatchPostFx(rtOutput);
 
-        // Tone mapping
-        // WAR for TREX-553 - disable sRGB conversion as NVTT implicitly applies it during dds->png
-        // conversion for 16bit float formats
+        // Motion blur runs before tonemapping while the image is still in linear HDR space.
+        dispatchPostFxMotionBlur(rtOutput);
+
+        dispatchToneMapping(rtOutput);
+
+        // Lens effects (chromatic aberration, vignette) run AFTER tonemapping. They are
+        // display-space artifacts so they operate on post-tonemap LDR data.
+        dispatchPostFxLensEffects(rtOutput);
+
+        // Final output pass converts the linear post-tonemap LDR image to sRGB and applies
+        // dithering as the very last step. SRGB conversion is suppressed for screenshot
+        // captures (WAR for TREX-553: NVTT implicitly applies sRGB during dds->png conversion
+        // for 16bit float formats).
         const bool performSRGBConversion = !captureScreenImage && g_allowSrgbConversionForOutput;
-        dispatchToneMapping(rtOutput, performSRGBConversion);
+        dispatchSRGBDither(rtOutput, performSRGBConversion);
 
         if (captureScreenImage) {
           if (m_common->metaDebugView().debugViewIdx() == DEBUG_VIEW_DISABLED) {
@@ -1144,6 +1156,16 @@ namespace dxvk {
     constants.enableBillboardOrientationCorrection = RtxOptions::enableBillboardOrientationCorrection() && RtxOptions::enableSeparateUnorderedApproximations();
     constants.useIntersectionBillboardsOnPrimaryRays = RtxOptions::useIntersectionBillboardsOnPrimaryRays() && constants.enableBillboardOrientationCorrection;
     constants.enableDirectLightBoilingFilter = m_common->metaDemodulate().enableDirectLightBoilingFilter() && RtxOptions::useRTXDI();
+
+    auto& sparseRendering = m_common->metaSparseRendering();
+    if (constants.enableDirectLightBoilingFilter && sparseRendering.isActive()) {
+      // RR path disables direct light boiling filter, but in case someone manually enables it.
+      // Technically it can be supported if needed in the future - it would need to ensure a spatial locality of remapped pixels to work for the filter
+      // (it may already since it has group based expectations).
+      ONCE(Logger::warn("[RTX] Direct Light Boiling Filter is not supported with Sparse Rendering enabled."));
+      constants.enableDirectLightBoilingFilter = false;
+    }
+
     constants.directLightBoilingThreshold = m_common->metaDemodulate().directLightBoilingThreshold();
     constants.translucentDecalAlbedoFactor = RtxOptions::translucentDecalAlbedoFactor();
     constants.enablePlayerModelInPrimarySpace = RtxOptions::PlayerModel::enableInPrimarySpace();
@@ -1243,6 +1265,9 @@ namespace dxvk {
 
     m_common->metaNeeCache().setRaytraceArgs(constants, m_resetHistory);
     constants.surfaceCount = getSceneManager().getAccelManager().getSurfaceCount();
+
+    m_common->metaSparseRendering().setSparseRenderingArgs(*this, constants.sparseRenderingArgs);
+    constants.sparseRenderingArgs.nrcArgs = constants.nrcArgs;
 
     auto* cameraTeleportDirectionInfo = getSceneManager().getRayPortalManager().getCameraTeleportationRayPortalDirectionInfo();
     constants.teleportationPortalIndex = cameraTeleportDirectionInfo ? cameraTeleportDirectionInfo->entryPortalInfo.portalIndex + 1 : 0;
@@ -1576,6 +1601,10 @@ namespace dxvk {
     // Gbuffer Raytracing
     m_common->metaPathtracerGbuffer().dispatch(this, rtOutput);
 
+    // Sparse Rendering: sampling rates + active-pixel mask + compaction.
+    // Runs after Gbuffer so the active-pixel mask can read current-frame SharedFlags.
+    m_common->metaSparseRendering().dispatch(*this, rtOutput);
+
     // RTXDI
     m_common->metaRtxdiRayQuery().dispatch(this, rtOutput);
 
@@ -1822,40 +1851,42 @@ namespace dxvk {
       rtOutput, settings);
   }
 
-  void RtxContext::dispatchToneMapping(const Resources::RaytracingOutput& rtOutput, bool performSRGBConversion) {
+  void RtxContext::dispatchToneMapping(const Resources::RaytracingOutput& rtOutput) {
     ScopedCpuProfileZone();
 
     if (m_common->metaDebugView().debugViewIdx() == DEBUG_VIEW_PRE_TONEMAP_OUTPUT) {
       return;
     }
 
-    // TODO: I think these are unnecessary, and/or should be automatically done within DXVK 
+    // TODO: I think these are unnecessary, and/or should be automatically done within DXVK
     this->spillRenderPass(false);
     this->unbindComputePipeline();
 
-    DxvkAutoExposure& autoExposure = m_common->metaAutoExposure();    
-    autoExposure.dispatch(this, 
+    DxvkAutoExposure& autoExposure = m_common->metaAutoExposure();
+    autoExposure.dispatch(this,
       getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
-      rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion);
+      rtOutput, GlobalTime::get().deltaTimeMs());
 
-    // We don't reset history for tonemapper on m_resetHistory for easier comparison when toggling raytracing modes.
-    // The tone curve shouldn't be too different between raytracing modes, 
-    // but the reset of denoised buffers causes wide tone curve differences
-    // until it converges and thus making comparison of raytracing mode outputs more difficult
+    const bool resetToneMapperHistory = m_resetHistory || getSceneManager().getCamera().isCameraCut();
     setFramePassStage(RtxFramePassStage::ToneMapping);
     if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
       DxvkToneMapping& toneMapper = m_common->metaToneMapping();
-      toneMapper.dispatch(this, 
+      toneMapper.dispatch(this,
         getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
         autoExposure.getExposureTexture().view,
-        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+        rtOutput,
+        GlobalTime::get().deltaTimeMs(),
+        resetToneMapperHistory,
+        autoExposure.enabled());
     }
     DxvkLocalToneMapping& localTonemapper = m_common->metaLocalToneMapping();
     if (localTonemapper.isActive()) {
       localTonemapper.dispatch(this,
         getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
         autoExposure.getExposureTexture().view,
-        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+        rtOutput,
+        GlobalTime::get().deltaTimeMs(),
+        autoExposure.enabled());
     }
   }
 
@@ -1875,21 +1906,42 @@ namespace dxvk {
       rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite));
   }
 
-  void RtxContext::dispatchPostFx(Resources::RaytracingOutput& rtOutput) {
+  void RtxContext::dispatchPostFxMotionBlur(Resources::RaytracingOutput& rtOutput) {
     ScopedCpuProfileZone();
     DxvkPostFx& postFx = m_common->metaPostFx();
-    RtCamera& mainCamera = getSceneManager().getCamera();
+    const RtCamera& mainCamera = getSceneManager().getCamera();
     if (!postFx.enable()) {
       return;
     }
 
-    postFx.dispatch(this,
+    postFx.dispatchMotionBlur(this,
       getResourceManager().getSampler(VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
       getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
       mainCamera.getShaderConstants().resolution,
       RtxOptions::rngSeedWithFrameIndex() ? m_device->getCurrentFrameId() : 0,
       rtOutput,
       mainCamera.isViewHistoryInvalidated(m_device->getCurrentFrameId()));
+  }
+
+  void RtxContext::dispatchPostFxLensEffects(Resources::RaytracingOutput& rtOutput) {
+    ScopedCpuProfileZone();
+    DxvkPostFx& postFx = m_common->metaPostFx();
+    const RtCamera& mainCamera = getSceneManager().getCamera();
+    if (!postFx.enable()) {
+      return;
+    }
+
+    postFx.dispatchLensEffects(this,
+      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
+      mainCamera.getShaderConstants().resolution,
+      RtxOptions::rngSeedWithFrameIndex() ? m_device->getCurrentFrameId() : 0,
+      rtOutput);
+  }
+
+  void RtxContext::dispatchSRGBDither(const Resources::RaytracingOutput& rtOutput, bool performSRGBConversion) {
+    ScopedCpuProfileZone();
+
+    m_common->metaSRGBDither().dispatch(this, rtOutput, performSRGBConversion);
   }
 
   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {

@@ -21,10 +21,6 @@
 */
 #include "rtx/pass/local_tonemap/local_tonemapping.slangh"
 #include "rtx/pass/tonemap/tonemapping.slangh"
-#include "rtx/pass/tonemap/tonemapping_noise.slangh"
-
-[[vk::binding(FINAL_COMBINE_BLUE_NOISE_TEXTURE_INPUT)]]
-Texture2DArray BlueNoise;
 
 [[vk::binding(FINAL_COMBINE_MIP_ASSEMBLE)]]
 Sampler2D MipAssembleTexture;
@@ -110,20 +106,9 @@ void main(uint2 threadId : SV_DispatchThreadID)
     texelFinal = applyToneMapping(texelFinal, cb.useAgX, cb.useLegacyACES, cb.agxGamma, cb.agxSaturation, cb.agxExposureOffset,
                                   cb.agxLook, cb.agxContrast, cb.agxSlope, cb.agxPower);
   }
-  if (cb.performSRGBConversion)
-  {
-    texelFinal = linearToGamma(texelFinal);
-  }
 
-  // Dither as a last step before final output to avoid banding artifacts.
-  texelFinal = ditherTo8Bit(
-    texelFinal,
-    threadId,
-    cb.frameIndex,
-    cb.ditherMode != ditherModeNone,
-    cb.ditherMode == ditherModeSpatialTemporal
-  );
-
+  // sRGB conversion and dithering are now performed by the final output pass,
+  // which runs after all post-process effects (lens effects, etc.).
   OutputTexture[threadId] = vec4(texelFinal, 1.0);
 
   if (cb.debugView == DEBUG_VIEW_LOCAL_TONEMAPPER_FINAL_COMBINE_OUTPUT)

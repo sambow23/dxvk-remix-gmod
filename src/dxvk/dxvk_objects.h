@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2023-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -53,6 +53,7 @@
 #include "rtx_render/rtx_image_utils.h"
 #include "rtx_render/rtx_postFx.h"
 #include "rtx_render/rtx_rcas.h"
+#include "rtx_render/rtx_srgb_dither.h"
 #include "rtx_render/rtx_initializer.h"
 #include "rtx_render/rtx_scene_manager.h"
 #include "rtx_render/rtx_reflex.h"
@@ -78,11 +79,14 @@ namespace dxvk {
   class CompositePass;
   class DebugView;
   class DxvkPostFx;
+  class DxvkRCAS;
+  class DxvkSRGBDither;
   class OpacityMicromapManager;
   class ImGUI;
   class RtxTextureManager;
   class NeuralRadianceCache;
   class DxvkXeSS;
+  class SparseRendering;
 
   class NGXContext;
 
@@ -138,6 +142,10 @@ namespace dxvk {
 
     RtxGlobalVolumetrics& metaGlobalVolumetrics() {
       return m_globalVolumetrics.get();
+    }
+
+    SparseRendering& metaSparseRendering() {
+      return m_sparseRendering.get();
     }
 
     DxvkPathtracerGbuffer& metaPathtracerGbuffer() {
@@ -267,7 +275,10 @@ namespace dxvk {
     DxvkRCAS& metaRCAS() {
       return m_rcas.get();
     }
-    
+
+    DxvkSRGBDither& metaSRGBDither() {
+      return m_srgbDither.get();
+    }
     RtxReflex& metaReflex() {
       return m_reflex.get(m_device);
     }
@@ -360,6 +371,7 @@ namespace dxvk {
 
     // RTX Shaders
     Active<RtxGlobalVolumetrics>            m_globalVolumetrics;
+    Active<SparseRendering>                 m_sparseRendering;
     Active<DxvkPathtracerGbuffer>           m_pathtracerGbuffer;
     Active<DxvkRtxdiRayQuery>               m_rtxdiRayQuery;
     Active<DxvkReSTIRGIRayQuery>            m_restirgiRayQuery;
@@ -393,6 +405,7 @@ namespace dxvk {
     Active<RtxImageUtils>                   m_imageUtils;
     Active<DxvkPostFx>                      m_postFx;
     Active<DxvkRCAS>                        m_rcas;
+    Active<DxvkSRGBDither>                  m_srgbDither;
     Lazy<RtxReflex>                         m_reflex;
     Lazy<RtxDustParticles>                  m_dustParticles;
     Lazy<RtxParticleSystemManager>          m_particleSystem;

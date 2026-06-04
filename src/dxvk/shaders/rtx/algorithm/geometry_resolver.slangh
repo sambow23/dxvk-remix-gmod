@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -188,6 +188,10 @@ void geometryResolverOutputMiss<
       SecondaryVirtualWorldShadingNormalPerceptualRoughnessDenoising,
       SecondaryAlbedo, SecondaryBaseReflectivity, SecondaryWorldPositionWorldTriangleNormal);
   }
+
+#if ENABLE_NRC
+  Nrc::invalidateNrcQueryData(pixelCoordinate);
+#endif
 }
 
 void geometryResolverOutputMissDynamic(
@@ -657,6 +661,11 @@ void geometryResolverVertexOutputDebugView(
     storeInDebugView(pixelCoordinate, surface.isStatic ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0));
 
     break;
+  case DEBUG_VIEW_PRESERVE_PATH:
+    // Red if any contributing hit is dynamic; green only when all hits took the preserve path.
+    accumulatePreservePathDebugView(pixelCoordinate, surface.isPreservePath);
+
+    break;
   case DEBUG_VIEW_IS_OPAQUE:
     // Green = opaque, Red = not opaque
     storeInDebugView(pixelCoordinate, surface.isFullyOpaque ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0));
@@ -1021,6 +1030,7 @@ void geometryResolverVertexOutputDebugView(
       // Skipped
       // DEBUG_VIEW_IS_FRONT_HIT
       // DEBUG_VIEW_IS_STATIC
+      // DEBUG_VIEW_PRESERVE_PATH
       // DEBUG_VIEW_IS_OPAQUE
       // DEBUG_VIEW_IS_DIRECTION_ALTERED
       // DEBUG_VIEW_IS_EMISSIVE_BLEND
@@ -1807,7 +1817,8 @@ void geometryResolverVertex(
     {
       particleEmissive = emissiveRadiance;
     }
-    // RayPortal ring contribution is routed to the particle buffer since it's noiseless signal for best reconstruction. This avoids leaking the outline onto primary surface.
+    // RayPortal ring contribution is routed to the particle buffer regardless of opacity
+    // so it is denoised + composited as a stable overlay (avoids silhouette shimmer in sparse modes).
     accumulateParticleBuffer(geometryResolverState.pixelCoordinate, (particleEmissive + transparencyLayerEmissive) * geometryResolverState.attenuation);
     emissiveRadiance -= particleEmissive;
   }
@@ -3395,6 +3406,14 @@ void geometryResolverApplyUnorderedDecalsPass(ivec2 pixelCoordinate) {
   if (!decalEncountered)
   {
     return;
+  }
+
+  if (GBUFFER_FEATURE_OBJECT_PICKING && cb.enableObjectPicking != 0 && surfaceIndex >= 0)
+  {
+    // The main GBuffer pass has already written the base surface by the time
+    // deferred decals run. Publish the selected decal explicitly so picking
+    // still reports the visible unordered decal rather than the surface below.
+    PrimaryObjectPicking[pixelCoordinate] = surfaces[uint(surfaceIndex)].objectPickingValue;
   }
 
   GBufferMemoryPolymorphicSurfaceMaterialInteraction materialMemory;

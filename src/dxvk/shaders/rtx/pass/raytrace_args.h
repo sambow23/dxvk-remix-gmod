@@ -39,6 +39,7 @@
 #include "rtx/concept/light/light_types.h"
 #include "rtx/concept/surface/surface_shared.h"
 #include "rtx/algorithm/nee_cache_data.h"
+#include "rtx/pass/sparse_rendering/sparse_rendering.h"
 
 struct LightRangeInfo {
   uint offset;
@@ -166,6 +167,8 @@ struct RaytraceArgs {
   ShadowTerminatorArgs shadowTerminatorArgs;
 
   Camera renderTargetCamera;
+
+  SparseRenderingArgs sparseRenderingArgs;
 
   // ------------------------- Structs above this line, non structs below this line -----------------------------------
 

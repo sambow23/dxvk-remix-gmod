@@ -791,7 +791,6 @@ namespace dxvk {
     light->setFrameLastTouched(m_device->getCurrentFrameId());
   }
 
-
   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
     auto found = m_externalLights.find(handle);
     if (found != m_externalLights.end()) {

@@ -56,6 +56,7 @@
 #include "rtx_render/rtx_restir_gi_rayquery.h"
 #include "rtx_render/rtx_debug_view.h"
 #include "rtx_render/rtx_composite.h"
+#include "rtx_render/rtx_sparse_rendering.h"
 #include "dxvk_image.h"
 #include "../util/rc/util_rc_ptr.h"
 #include "../util/util_math.h"
@@ -390,6 +391,7 @@ namespace dxvk {
   RemixGui::ComboWithKey<dxvk::RtxFramePassStage>::ComboEntries aliasingPassComboEntries = { {
       { RtxFramePassStage::FrameBegin, "FrameBegin" },
       { RtxFramePassStage::Volumetrics, "Volumetrics" },
+      { RtxFramePassStage::SparseRendering, "SparseRendering" },
       { RtxFramePassStage::VolumeIntegrateRestirInitial, "VolumeIntegrateRestirInitial" },
       { RtxFramePassStage::VolumeIntegrateRestirVisible, "VolumeIntegrateRestirVisible" },
       { RtxFramePassStage::VolumeIntegrateRestirTemporal, "VolumeIntegrateRestirTemporal" },
@@ -1653,6 +1655,7 @@ namespace dxvk {
 
     if (RemixGui::CollapsingHeader("Developer Options", collapsingHeaderFlags)) {
       ImGui::Indent();
+      RemixGui::Checkbox("Enable Preserve Path", &RtxOptions::enablePreservePathObject());
       RemixGui::Checkbox("Enable Instance Debugging", &RtxOptions::enableInstanceDebuggingToolsObject());
       RemixGui::Checkbox("Disable Draw Calls Post RTX Injection", &RtxOptions::skipDrawCallsPostRTXInjectionObject());
       RemixGui::Checkbox("Break into Debugger On Press of Key 'B'", &RtxOptions::enableBreakIntoDebuggerOnPressingBObject());
@@ -2677,8 +2680,6 @@ namespace dxvk {
     ImGui::EndDisabled();
     RemixGui::Separator();
     RemixGui::Checkbox("Highlight Legacy Materials (flash red)", &RtxOptions::useHighlightLegacyModeObject());
-    RemixGui::Checkbox("Highlight Legacy Meshes with Shared Vertex Buffers (dull purple)", &RtxOptions::useHighlightUnsafeAnchorModeObject());
-    RemixGui::Checkbox("Highlight Replacements with Unstable Anchors (flash red)", &RtxOptions::useHighlightUnsafeReplacementModeObject());
 
     // Display loaded USD files
     ImGui::Separator();
@@ -4216,6 +4217,12 @@ namespace dxvk {
       ImGui::Unindent();
     }
 
+    if (RemixGui::CollapsingHeader("Sparse Rendering", collapsingHeaderClosedFlags)) {
+      ImGui::Indent();
+      common->metaSparseRendering().showImguiSettings();
+      ImGui::Unindent();
+    }
+
     RtxParticleSystemManager::showImguiSettings();
 
     RtxPointInstancerSystem::showImguiSettings();
@@ -4413,7 +4420,10 @@ namespace dxvk {
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))
         common->metaPostFx().showImguiSettings();
-      
+
+      if (RemixGui::CollapsingHeader("sRGB + Dither", collapsingHeaderClosedFlags))
+        common->metaSRGBDither().showImguiSettings();
+
       ImGui::Unindent();
     }
 
