@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -60,12 +60,19 @@
 #define COMPOSITE_BLUE_NOISE_TEXTURE                                24
 #define COMPOSITE_VALUE_NOISE_SAMPLER                               25
 #define COMPOSITE_SKY_LIGHT_TEXTURE                                 26
+#define COMPOSITE_ACTIVE_PIXEL_MASK_INPUT                           27
+#define COMPOSITE_ACTIVE_LOCAL_PIXEL_COORDS_INPUT                   28
+#define COMPOSITE_DIRECT_ACTIVE_PIXEL_MASK_INPUT                    33
+#define COMPOSITE_INDIRECT_ACTIVE_PIXEL_MASK_INPUT                  34
+#define COMPOSITE_DIRECT_PIXEL_SAMPLING_RATE_INPUT                  58
+#define COMPOSITE_INDIRECT_PIXEL_SAMPLING_RATE_INPUT                59
 
-// Inputs/Outputs                                                   
+// Inputs/Outputs
+
 #define COMPOSITE_PRIMARY_ALBEDO_INPUT_OUTPUT                       30
 #define COMPOSITE_ACCUMULATED_FINAL_OUTPUT_INPUT_OUTPUT             31
 
-// Outputs                                                          
+// Outputs
 
 #define COMPOSITE_FINAL_OUTPUT                                      51
 #define COMPOSITE_LAST_FINAL_OUTPUT                                 52
@@ -73,3 +80,4 @@
 
 #define COMPOSITE_RAY_RECONSTRUCTION_PARTICLE_BUFFER_OUTPUT         54
 #define COMPOSITE_DEBUG_VIEW_OUTPUT                                 55
+#define COMPOSITE_RAY_RECONSTRUCTION_HIT_DISTANCE_OUTPUT            57

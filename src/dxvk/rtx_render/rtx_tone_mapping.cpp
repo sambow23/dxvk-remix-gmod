@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2023-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -31,32 +31,32 @@
 #include <rtx_shaders/auto_exposure_histogram.h>
 #include <rtx_shaders/tonemapping_apply_tonemapping.h>
 #include "rtx_imgui.h"
-#include "rtx/utility/debug_view_indices.h"
 
 namespace dxvk {
-  // Defined within an unnamed namespace to ensure unique definition across binary.
   namespace {
-    class ApplyTonemappingShader : public ManagedShader
-    {
+    class ApplyTonemappingShader : public ManagedShader {
       SHADER_SOURCE(ApplyTonemappingShader, VK_SHADER_STAGE_COMPUTE_BIT, tonemapping_apply_tonemapping)
 
       PUSH_CONSTANTS(ToneMappingApplyToneMappingArgs)
 
       BEGIN_PARAMETER()
-        TEXTURE2DARRAY(TONEMAPPING_APPLY_BLUE_NOISE_TEXTURE_INPUT)
         RW_TEXTURE2D(TONEMAPPING_APPLY_TONEMAPPING_COLOR_INPUT)
         RW_TEXTURE1D_READONLY(TONEMAPPING_APPLY_TONEMAPPING_EXPOSURE_INPUT)
         RW_TEXTURE2D(TONEMAPPING_APPLY_TONEMAPPING_COLOR_OUTPUT)
       END_PARAMETER()
     };
-
-    PREWARM_SHADER_PIPELINE(ApplyTonemappingShader);
   }
 
   DxvkToneMapping::DxvkToneMapping(DxvkDevice* device)
-  : CommonDeviceObject(device), m_vkd(device->vkd()) { }
+  : CommonDeviceObject(device), m_vkd(device->vkd()) {
+  }
 
-  DxvkToneMapping::~DxvkToneMapping() { }
+  DxvkToneMapping::~DxvkToneMapping() {
+  }
+
+  void DxvkToneMapping::prewarmShaders(DxvkPipelineManager& pipelineManager) const {
+    ApplyTonemappingShader::getShader();
+  }
 
   void DxvkToneMapping::showImguiSettings() {
     RemixGui::DragFloat("Global Exposure", &exposureBiasObject(), 0.01f, -4.f, 4.f);
@@ -75,9 +75,6 @@ namespace dxvk {
     if (tonemappingEnabled()) {
       ImGui::Indent();
       fork_hooks::showTonemapOperatorUI();
-
-      RemixGui::Combo("Dither Mode", &ditherModeObject(), "Disabled\0Spatial\0Spatial + Temporal\0");
-
       RemixGui::Separator();
       ImGui::Unindent();
     }
@@ -88,37 +85,24 @@ namespace dxvk {
     Rc<DxvkImageView> exposureView,
     const Resources::Resource& inputBuffer,
     const Resources::Resource& colorBuffer,
-    bool performSRGBConversion,
     bool autoExposureEnabled) {
 
     ScopedGpuProfileZone(ctx, "Apply Tone Mapping");
 
-    const VkExtent3D workgroups = util::computeBlockCount(colorBuffer.view->imageInfo().extent, VkExtent3D{ 16 , 16, 1 });
+    const VkExtent3D workgroups = util::computeBlockCount(colorBuffer.view->imageInfo().extent, VkExtent3D { 16, 16, 1 });
 
-    // Prepare shader arguments.
     ToneMappingApplyToneMappingArgs pushArgs = {};
-    pushArgs.toneMappingEnabled    = tonemappingEnabled();
-    pushArgs.colorGradingEnabled   = colorGradingEnabled();
-    pushArgs.performSRGBConversion = performSRGBConversion;
-    pushArgs.enableAutoExposure    = autoExposureEnabled;
-    pushArgs.exposureFactor        = exp2f(exposureBias()); // ev100
+    pushArgs.toneMappingEnabled = tonemappingEnabled();
+    pushArgs.enableAutoExposure = autoExposureEnabled;
+    pushArgs.colorGradingEnabled = colorGradingEnabled();
+    pushArgs.exposureFactor = exp2f(exposureBias());
 
     fork_hooks::populateTonemapOperatorArgs(pushArgs);
 
-    // Color grading args.
     pushArgs.colorBalance = colorBalance();
-    pushArgs.contrast     = contrast();
-    pushArgs.saturation   = saturation();
+    pushArgs.contrast = contrast();
+    pushArgs.saturation = saturation();
 
-    // Dither args.
-    switch (ditherMode()) {
-    case DitherMode::None:            pushArgs.ditherMode = ditherModeNone;            break;
-    case DitherMode::Spatial:         pushArgs.ditherMode = ditherModeSpatialOnly;     break;
-    case DitherMode::SpatialTemporal: pushArgs.ditherMode = ditherModeSpatialTemporal; break;
-    }
-    pushArgs.frameIndex = ctx->getDevice()->getCurrentFrameId();
-
-    ctx->bindResourceView(TONEMAPPING_APPLY_BLUE_NOISE_TEXTURE_INPUT, ctx->getResourceManager().getBlueNoiseTexture(ctx), nullptr);
     ctx->bindResourceView(TONEMAPPING_APPLY_TONEMAPPING_COLOR_INPUT, inputBuffer.view, nullptr);
     ctx->bindResourceView(TONEMAPPING_APPLY_TONEMAPPING_EXPOSURE_INPUT, exposureView, nullptr);
     ctx->bindResourceView(TONEMAPPING_APPLY_TONEMAPPING_COLOR_OUTPUT, colorBuffer.view, nullptr);
@@ -131,7 +115,6 @@ namespace dxvk {
     Rc<RtxContext> ctx,
     Rc<DxvkImageView> exposureView,
     const Resources::RaytracingOutput& rtOutput,
-    bool performSRGBConversion,
     bool autoExposureEnabled) {
 
     ScopedGpuProfileZone(ctx, "Tone Mapping");
@@ -139,8 +122,11 @@ namespace dxvk {
     ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
 
     const Resources::Resource& inputColorBuffer = rtOutput.m_finalOutput.resource(Resources::AccessType::Read);
-    dispatchApplyToneMapping(ctx, exposureView, inputColorBuffer,
-                             rtOutput.m_finalOutput.resource(Resources::AccessType::Write),
-                             performSRGBConversion, autoExposureEnabled);
+    dispatchApplyToneMapping(
+      ctx,
+      exposureView,
+      inputColorBuffer,
+      rtOutput.m_finalOutput.resource(Resources::AccessType::Write),
+      autoExposureEnabled);
   }
 }

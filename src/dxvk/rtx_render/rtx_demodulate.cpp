@@ -55,6 +55,10 @@ namespace dxvk {
         TEXTURE2D(DEMODULATE_BINDING_SECONDARY_LINEAR_VIEW_Z_INPUT)
         TEXTURE2D(DEMODULATE_BINDING_SECONDARY_ALBEDO_INPUT)
         TEXTURE2D(DEMODULATE_BINDING_INDIRECT_RADIANCE_HIT_DISTANCE_INPUT)
+        TEXTURE2D(DEMODULATE_BINDING_DIRECT_ACTIVE_PIXEL_MASK_INPUT)
+        TEXTURE2D(DEMODULATE_BINDING_INDIRECT_ACTIVE_PIXEL_MASK_INPUT)
+        TEXTURE2D(DEMODULATE_BINDING_DIRECT_PIXEL_SAMPLING_RATE_INPUT)
+        TEXTURE2D(DEMODULATE_BINDING_INDIRECT_PIXEL_SAMPLING_RATE_INPUT)
         TEXTURE2D(DEMODULATE_BINDING_PRIMARY_BASE_REFLECTIVITY_INPUT)
         TEXTURE2D(DEMODULATE_BINDING_SECONDARY_BASE_REFLECTIVITY_INPUT)
         RW_TEXTURE2D(DEMODULATE_BINDING_PRIMARY_DIRECT_DIFFUSE_RADIANCE_INPUT_OUTPUT)
@@ -100,7 +104,12 @@ namespace dxvk {
     // Note: Base reflectivity rewritten to be specular albedo at this point, hence the dual-purpose
     // input/output bindings for both quantities.
 
+    // Constants
+
     ctx->bindResourceBuffer(DEMODULATE_BINDING_CONSTANTS, DxvkBufferSlice(constantsBuffer, 0, constantsBuffer->info().size));
+
+    // Inputs
+
     ctx->bindResourceView(DEMODULATE_BINDING_SHARED_FLAGS_INPUT, rtOutput.m_sharedFlags.view, nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_PRIMARY_VIRTUAL_WORLD_SHADING_NORMAL_INPUT, rtOutput.m_primaryVirtualWorldShadingNormalPerceptualRoughness.view, nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_PRIMARY_LINEAR_VIEW_Z_INPUT, rtOutput.m_primaryLinearViewZ.view, nullptr);
@@ -118,9 +127,15 @@ namespace dxvk {
     const bool suppressIndirectRadianceAliasCheck = isPrimaryIndirectRadianceResourceRead;
 
     ctx->bindResourceView(DEMODULATE_BINDING_INDIRECT_RADIANCE_HIT_DISTANCE_INPUT, rtOutput.m_indirectRadianceHitDistance.view(Resources::AccessType::Read, !suppressIndirectRadianceAliasCheck), nullptr);
+    ctx->bindResourceView(DEMODULATE_BINDING_DIRECT_ACTIVE_PIXEL_MASK_INPUT, rtOutput.m_sparseRenderingDirectActivePixelMask.view, nullptr);
+    ctx->bindResourceView(DEMODULATE_BINDING_INDIRECT_ACTIVE_PIXEL_MASK_INPUT, rtOutput.m_sparseRenderingIndirectActivePixelMask.view, nullptr);
+    ctx->bindResourceView(DEMODULATE_BINDING_DIRECT_PIXEL_SAMPLING_RATE_INPUT, rtOutput.m_sparseRenderingDirectPixelSamplingRate.view, nullptr);
+    ctx->bindResourceView(DEMODULATE_BINDING_INDIRECT_PIXEL_SAMPLING_RATE_INPUT, rtOutput.m_sparseRenderingIndirectPixelSamplingRate.view, nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_PRIMARY_BASE_REFLECTIVITY_INPUT, rtOutput.m_primaryBaseReflectivity.view(Resources::AccessType::Read), nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_SECONDARY_BASE_REFLECTIVITY_INPUT, rtOutput.m_secondaryBaseReflectivity.view(Resources::AccessType::Read), nullptr);
     
+    // Inputs/Outputs
+
     ctx->bindResourceView(DEMODULATE_BINDING_PRIMARY_DIRECT_DIFFUSE_RADIANCE_INPUT_OUTPUT, rtOutput.m_primaryDirectDiffuseRadiance.view(Resources::AccessType::ReadWrite), nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_PRIMARY_DIRECT_SPECULAR_RADIANCE_INPUT_OUTPUT, rtOutput.m_primaryDirectSpecularRadiance.view(Resources::AccessType::ReadWrite), nullptr);
 
@@ -141,6 +156,9 @@ namespace dxvk {
 
     ctx->bindResourceView(DEMODULATE_BINDING_SECONDARY_COMBINED_DIFFUSE_RADIANCE_INPUT_OUTPUT, rtOutput.m_secondaryCombinedDiffuseRadiance.view(Resources::AccessType::ReadWrite), nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_SECONDARY_COMBINED_SPECULAR_RADIANCE_INPUT_OUTPUT, rtOutput.m_secondaryCombinedSpecularRadiance.view(Resources::AccessType::ReadWrite), nullptr);
+
+    // Outputs
+
     ctx->bindResourceView(DEMODULATE_BINDING_PRIMARY_SPECULAR_ALBEDO_OUTPUT, rtOutput.m_primarySpecularAlbedo.view(Resources::AccessType::Write), nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_SECONDARY_SPECULAR_ALBEDO_OUTPUT, rtOutput.m_secondarySpecularAlbedo.view(Resources::AccessType::Write), nullptr);
     ctx->bindResourceView(DEMODULATE_BINDING_DEBUG_VIEW_OUTPUT, debugView.getDebugOutput(), nullptr);

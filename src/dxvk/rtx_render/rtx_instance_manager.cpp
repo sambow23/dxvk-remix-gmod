@@ -19,9 +19,11 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
+#include <assert.h>
+#include <atomic>
+#include <cstring>
 #include <mutex>
 #include <vector>
-#include <assert.h>
 
 #include "rtx_context.h"
 #include "rtx_scene_manager.h"
@@ -29,6 +31,7 @@
 #include "rtx_camera_manager.h"
 #include "rtx_options.h"
 #include "rtx_materials.h"
+#include "rtx_ray_portal_manager.h"
 #include "rtx_terrain_baker.h"
 
 #include "../d3d9/d3d9_state.h"
@@ -40,6 +43,18 @@
 #include "rtx/pass/instance_definitions.h"
 
 namespace dxvk {
+
+  namespace {
+    std::atomic<uint64_t> s_nextRtInstanceCacheIdentity { 1 };
+
+    uint64_t nextRtInstanceCacheIdentity() {
+      return s_nextRtInstanceCacheIdentity.fetch_add(1, std::memory_order_relaxed);
+    }
+
+#ifndef NDEBUG
+    constexpr int kDestroyedRtInstanceMemoryPattern = 0xDD;
+#endif
+  }
   
   static bool isMirrorTransform(const Matrix4& m) {
     // Note: Identify if the winding is inverted by checking if the z axis is ever flipped relative to what it's expected to be for clockwise vertices in a lefthanded space
@@ -102,6 +117,7 @@ namespace dxvk {
   RtInstance::RtInstance(const uint64_t id, uint32_t instanceVectorId)
     : m_id(id)
     , m_instanceVectorId(instanceVectorId)
+    , m_cacheIdentity(nextRtInstanceCacheIdentity())
     , m_surfaceIndex(SURFACE_INDEX_INVALID)
     , m_previousSurfaceIndex(SURFACE_INDEX_INVALID) { }
 
@@ -109,10 +125,26 @@ namespace dxvk {
   RtInstance::RtInstance(const RtInstance& src, uint64_t id, uint32_t instanceVectorId)
     : m_id(id)
     , m_instanceVectorId(instanceVectorId)
+    , m_cacheIdentity(nextRtInstanceCacheIdentity())
     , m_surfaceIndex(SURFACE_INDEX_INVALID)
     , m_previousSurfaceIndex(SURFACE_INDEX_INVALID) {
     copyInstanceDataFrom(src);
   }
+
+#ifndef NDEBUG
+  void RtInstance::operator delete(void* ptr) noexcept {
+    if (ptr != nullptr) {
+      std::memset(ptr, kDestroyedRtInstanceMemoryPattern, sizeof(RtInstance));
+    }
+
+    ::operator delete(ptr);
+  }
+
+  void RtInstance::operator delete(void* ptr, std::size_t) noexcept {
+    RtInstance::operator delete(ptr);
+  }
+#endif
+
   // Ensure copyInstanceDataFrom copies all needed members when size changes, and update the object size check.
   // Note: The object has a different size on Debug builds. 
   //       Checking the non-Debug flavors is good enough for the sake of convenience of tracking just a single size.
@@ -120,7 +152,7 @@ namespace dxvk {
   namespace {
     template<int RtInstanceSize> struct CheckRtInstanceSize {
       // The second line of the build error should contain the new size of RtInstance in the template argument, i.e. `dxvk::CheckRtInstanceSize<newSize>`
-      static_assert(RtInstanceSize == 760, "RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
+      static_assert(RtInstanceSize == 768, "RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
     };
     CheckRtInstanceSize<sizeof(RtInstance)> _rtInstanceSizeTest;
   }
@@ -141,6 +173,7 @@ namespace dxvk {
     m_secondarySamplerIndex = src.m_secondarySamplerIndex;
     m_isAnimated = src.m_isAnimated;
     m_opacityMicromapInstanceData = src.m_opacityMicromapInstanceData;
+    m_opacityMicromapInstanceData.resetCopiedRequestState();
     m_surfaceIndex = src.m_surfaceIndex;
     m_previousSurfaceIndex = src.m_previousSurfaceIndex;
     m_isHidden = src.m_isHidden;
@@ -161,9 +194,10 @@ namespace dxvk {
     m_categoryFlags = src.m_categoryFlags;
 
     // Intentionally NOT synced (identity / lifecycle / per-build state):
-    //   m_id, m_instanceVectorId, m_isMarkedForGC, m_isUnlinkedForGC,
+    //   m_id, m_instanceVectorId, m_cacheIdentity, m_isMarkedForGC, m_isUnlinkedForGC,
     //   m_isInsideFrustum, m_frameLastUpdated, m_frameCreated,
     //   m_isCreatedByRenderer, m_spatialCacheHash,
+    //   OMM request registration state,
     //   m_primInstanceOwner, buildGeometries, buildRanges,
     //   billboardIndices, indexOffsets, m_blasDirty,
     //   m_billboardGeometryDirty
@@ -467,6 +501,9 @@ namespace dxvk {
   }
 
   InstanceManager::~InstanceManager() {
+#ifndef NDEBUG
+    releaseDestroyedInstanceQuarantine();
+#endif
   }
 
   void InstanceManager::removeEventHandler(void* eventHandlerOwnerAddress) {
@@ -482,7 +519,7 @@ namespace dxvk {
     notifySceneChanged();
     for (RtInstance* instance : m_instances) {
       removeInstance(instance);
-      delete instance;
+      destroyInstanceAllocation(instance);
     }
 
     m_instances.clear();
@@ -534,6 +571,25 @@ namespace dxvk {
     eraseFromMap(m_persistentPlayerModelClones);
   }
 
+#ifndef NDEBUG
+  void InstanceManager::releaseDestroyedInstanceQuarantine() {
+    while (!m_destroyedInstanceQuarantine.empty()) {
+      ::operator delete(m_destroyedInstanceQuarantine.front());
+      m_destroyedInstanceQuarantine.pop_front();
+    }
+  }
+#endif
+
+  void InstanceManager::destroyInstanceAllocation(RtInstance* instance) {
+#ifndef NDEBUG
+    instance->~RtInstance();
+    std::memset(instance, kDestroyedRtInstanceMemoryPattern, sizeof(RtInstance));
+    m_destroyedInstanceQuarantine.push_back(instance);
+#else
+    delete instance;
+#endif
+  }
+
   void InstanceManager::garbageCollection() {
     // All instance lifetimes are managed externally: tracked instances are marked
     // for GC by ReplacementInstance::clear(), ephemeral copies are marked on creation.
@@ -552,7 +608,7 @@ namespace dxvk {
         // NOTE: pInstance is now the (previously) last element
         std::swap(pInstance, m_instances.back());
         m_instances[i]->m_instanceVectorId = i;
-        delete m_instances.back();
+        destroyInstanceAllocation(m_instances.back());
         m_instances.pop_back();
         continue;
       }
@@ -586,6 +642,8 @@ namespace dxvk {
       }
       currentInstance->setBlas(blas);
       blas.linkInstance(currentInstance);
+      currentInstance->m_blasDirty = true;
+      notifySceneChanged();
     }
 
     updateInstance(*currentInstance, cameraManager, blas, drawCall, materialData);
@@ -723,9 +781,9 @@ namespace dxvk {
           blendType = RtxOptions::enableEmissiveBlendModeTranslation() ? BlendType::kReverseColorEmissive : BlendType::kReverseColor;
           invertedBlend = false;
         } else if (srcColorBlendFactor == VkBlendFactor::VK_BLEND_FACTOR_ONE && dstColorBlendFactor == VkBlendFactor::VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR) {
-          // Inverted Reverse Emissive Color Blending
-          blendType = RtxOptions::enableEmissiveBlendModeTranslation() ? BlendType::kReverseColorEmissive : BlendType::kReverseColor;
-          invertedBlend = true;
+          // Emissive Color Blending: Src + Dst*(1-SrcColor) — bright source is emissive, dark is transparent
+          blendType = RtxOptions::enableEmissiveBlendModeTranslation() ? BlendType::kColorEmissive : BlendType::kColor;
+          invertedBlend = false;
         } else if (srcColorBlendFactor == VkBlendFactor::VK_BLEND_FACTOR_ONE && dstColorBlendFactor == VkBlendFactor::VK_BLEND_FACTOR_ONE) {
           // Emissive Blending
           blendType = RtxOptions::enableEmissiveBlendModeTranslation() ? BlendType::kEmissive : BlendType::kColor;
@@ -918,11 +976,25 @@ namespace dxvk {
                                        const BlasEntry& blas,
                                        const DrawCallState& drawCall,
                                        MaterialData& materialData) {
+    const CategoryFlags previousCategoryFlags = currentInstance.m_categoryFlags;
+    const uint8_t previousInstanceMask = currentInstance.m_vkInstance.mask;
+    const uint32_t previousCustomIndexFlags = currentInstance.m_vkInstance.instanceCustomIndex & ~uint32_t(CUSTOM_INDEX_SURFACE_MASK);
+    const uint32_t previousInstanceShaderBindingTableRecordOffset = currentInstance.m_vkInstance.instanceShaderBindingTableRecordOffset;
+    const VkGeometryInstanceFlagsKHR previousInstanceFlags = currentInstance.m_vkInstance.flags;
+    const bool previousUsesUnorderedApproximations = currentInstance.m_isUnordered;
+    const bool previousIsSubsurface = currentInstance.m_isSubsurface;
+    const VkGeometryFlagsKHR previousGeometryFlags = currentInstance.m_geometryFlags;
+    const auto previousInstancesToObject = currentInstance.surface.instancesToObject;
+    const size_t previousInstancesToObjectSize = previousInstancesToObject ? previousInstancesToObject->size() : 0;
+
     currentInstance.m_categoryFlags = drawCall.getCategoryFlags();
     currentInstance.surface.instancesToObject = drawCall.getTransformData().instancesToObject;
 
     // setFrameLastUpdated() must be called first as it resets instance's state on a first call in a frame
     const bool isFirstUpdateThisFrame = currentInstance.setFrameLastUpdated(m_device->getCurrentFrameId());
+
+    // Full instance processing always goes through the dynamic draw path this frame.
+    currentInstance.surface.isPreservePath = false;
 
     // These can change in the Runtime UI so need to check during update
     currentInstance.m_isHidden = currentInstance.testCategoryFlags(InstanceCategories::Hidden);
@@ -938,8 +1010,10 @@ namespace dxvk {
       currentInstance.m_isHidden = true;
     }
 
-    // Register camera
-    bool isNewCameraSet = currentInstance.registerCamera(drawCall.cameraType, m_device->getCurrentFrameId());
+    // Snapshot whether this is a brand-new camera before the call to preserveInstance() at the
+    // bottom (which always re-registers via RtInstance::registerCamera) so the override logic
+    // below sees the "is this the first time we've seen this camera type?" state.
+    const bool isNewCameraSet = !currentInstance.isCameraRegistered(drawCall.cameraType);
 
     const bool overridePreviousCameraUpdate = isNewCameraSet &&
       (drawCall.cameraType == CameraType::Main ||
@@ -1186,13 +1260,7 @@ namespace dxvk {
 
       if (currentInstance.m_isPlayerModel && drawCall.cameraType != CameraType::ViewModel) {
         mask |= OBJECT_MASK_PLAYER_MODEL;
-        // Lazy-clear stale instances if onFrameEnd() was skipped last frame (e.g. device loss on alt+tab)
-        const uint32_t currentFrameId = m_device->getCurrentFrameId();
-        if (m_playerModelInstancesFrameId != currentFrameId) {
-          m_playerModelInstances.clear();
-          m_playerModelInstancesFrameId = currentFrameId;
-        }
-        m_playerModelInstances.push_back(&currentInstance);
+        // m_playerModelInstances re-registration is handled by preserveInstance() below.
       } else {
         currentInstance.m_isPlayerModel = false;
         if (currentInstance.m_isUnordered && RtxOptions::enableSeparateUnorderedApproximations()) {
@@ -1233,46 +1301,101 @@ namespace dxvk {
     // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkGeometryInstanceFlagBitsNV.html 
     currentInstance.m_isObjectToWorldMirrored = isMirrorTransform(drawCall.getTransformData().objectToWorld);
 
-    bool billboardsGotGenerated = false;
-    const uint32_t previousBillboardCount = currentInstance.m_billboardCount;
-    currentInstance.m_billboardCount = 0;
-    
-    if (drawCall.cameraType == CameraType::ViewModel && !currentInstance.m_isHidden && isFirstUpdateThisFrame) {
-      // Lazy-clear stale candidates if onFrameEnd() was skipped last frame (e.g. device loss on alt+tab)
-      const uint32_t currentFrameId = m_device->getCurrentFrameId();
-      if (m_viewModelCandidatesFrameId != currentFrameId) {
-        m_viewModelCandidates.clear();
-        m_viewModelCandidatesFrameId = currentFrameId;
-      }
-      m_viewModelCandidates.push_back(&currentInstance);
-    }
+    refreshBillboardsForCurrentFrame(currentInstance,
+                                     drawCall.cameraType,
+                                     cameraManager.getMainCamera().getDirection(false));
+    const bool billboardsGotGenerated = currentInstance.m_billboardCount != 0;
 
-    if (RtxOptions::enableSeparateUnorderedApproximations() &&
-        (drawCall.cameraType == CameraType::Main || drawCall.cameraType == CameraType::ViewModel) &&
-        currentInstance.m_isUnordered &&
-        !currentInstance.m_isHidden &&
-        currentInstance.getVkInstance().mask != 0) {
+    const auto currentInstancesToObject = currentInstance.surface.instancesToObject;
+    const size_t currentInstancesToObjectSize = currentInstancesToObject ? currentInstancesToObject->size() : 0;
+    const uint32_t currentCustomIndexFlags = currentInstance.m_vkInstance.instanceCustomIndex & ~uint32_t(CUSTOM_INDEX_SURFACE_MASK);
+    const bool accelerationStructureKeyChanged =
+      previousCategoryFlags.raw() != currentInstance.m_categoryFlags.raw() ||
+      previousInstanceMask != currentInstance.m_vkInstance.mask ||
+      previousCustomIndexFlags != currentCustomIndexFlags ||
+      previousInstanceShaderBindingTableRecordOffset != currentInstance.m_vkInstance.instanceShaderBindingTableRecordOffset ||
+      previousInstanceFlags != currentInstance.m_vkInstance.flags ||
+      previousUsesUnorderedApproximations != currentInstance.m_isUnordered ||
+      previousIsSubsurface != currentInstance.m_isSubsurface ||
+      previousGeometryFlags != currentInstance.m_geometryFlags ||
+      previousInstancesToObject.get() != currentInstancesToObject.get() ||
+      previousInstancesToObjectSize != currentInstancesToObjectSize;
 
-      if (currentInstance.testCategoryFlags(InstanceCategories::Beam)) {
-        createBeams(currentInstance);
-      } else if(!currentInstance.surface.alphaState.isDecal) {
-        createBillboards(currentInstance, cameraManager.getMainCamera().getDirection(false));
-      }
-
-      billboardsGotGenerated = currentInstance.m_billboardCount != 0;
-
-      if (currentInstance.m_billboardCount != previousBillboardCount) {
-        currentInstance.m_blasDirty = true;
-        currentInstance.m_billboardGeometryDirty = true;
-      }
+    if (accelerationStructureKeyChanged) {
+      notifySceneChanged();
+      currentInstance.m_blasDirty = true;
     }
 
     // Updates done only once a frame unless overriden due to an explicit state
-    if (isFirstUpdateThisFrame || overridePreviousCameraUpdate ||
-        (billboardsGotGenerated && RtxOptions::getEnableOpacityMicromap())) {
-      // Inform the listeners
+    const bool fireEvents = isFirstUpdateThisFrame || overridePreviousCameraUpdate ||
+                            (billboardsGotGenerated && RtxOptions::getEnableOpacityMicromap());
+
+    // Hand off to the shared per-frame finalization (registers view-model / player-model
+    // candidates and invokes onInstanceUpdated listeners). The preserve path calls this
+    // directly with hasTransformChanged / hasPreviousPositions == false and a null materialData.
+    preserveInstance(currentInstance, drawCall, &materialData,
+                     hasTransformChanged, hasPreviousPositions, isFirstUpdateThisFrame, fireEvents);
+  }
+
+  void InstanceManager::registerViewModelCandidate(RtInstance& instance) {
+    // Lazy-clear stale candidates if onFrameEnd() was skipped last frame (e.g. device loss on alt+tab).
+    const uint32_t currentFrameId = m_device->getCurrentFrameId();
+    if (m_viewModelCandidatesFrameId != currentFrameId) {
+      m_viewModelCandidates.clear();
+      m_viewModelCandidatesFrameId = currentFrameId;
+    }
+    m_viewModelCandidates.push_back(&instance);
+  }
+
+  void InstanceManager::registerPlayerModelInstance(RtInstance& instance) {
+    // Lazy-clear stale instances if onFrameEnd() was skipped last frame (e.g. device loss on alt+tab).
+    const uint32_t currentFrameId = m_device->getCurrentFrameId();
+    if (m_playerModelInstancesFrameId != currentFrameId) {
+      m_playerModelInstances.clear();
+      m_playerModelInstancesFrameId = currentFrameId;
+    }
+    m_playerModelInstances.push_back(&instance);
+  }
+
+  void InstanceManager::preserveInstance(
+      RtInstance& instance,
+      const DrawCallState& drawCall,
+      const MaterialData* materialData,
+      bool hasTransformChanged,
+      bool hasPreviousPositions,
+      bool isFirstUpdateThisFrame,
+      bool fireEvents) {
+    // Camera registration. Idempotent (RtInstance::m_seenCameraTypes is cumulative and never
+    // cleared), so calling it from updateInstance and again here is harmless. We need it on
+    // the preserve path because that path bypasses updateInstance entirely.
+    instance.registerCamera(drawCall.cameraType, m_device->getCurrentFrameId());
+
+    // Re-register view-model candidates every frame; m_viewModelCandidates is cleared in
+    // onFrameEnd, and createViewModelInstances() iterates the list later in the frame.
+    if (drawCall.cameraType == CameraType::ViewModel && !instance.isHidden() && isFirstUpdateThisFrame) {
+      registerViewModelCandidate(instance);
+    }
+
+    // Re-register player-model instances every frame. m_playerModelInstances is cleared
+    // in onFrameEnd(), and filterPlayerModelInstances() / createPlayerModelVirtualInstances()
+    // (run from SceneManager later in the frame) iterate this list to mask the geometric
+    // instance and produce billboard intersection primitives + portal-space virtual clones.
+    // Without this re-registration, the preserve path's player-model particles would lose
+    // their billboard mask and never bind their cached OMM.
+    if (instance.m_isPlayerModel && drawCall.cameraType != CameraType::ViewModel) {
+      registerPlayerModelInstance(instance);
+    }
+
+    // Fire onInstanceUpdated so listeners with delayed per-instance work get a chance to run.
+    // The OMM manager's needsToCalculateNumTexelsPerMicroTriangle path is only driven from
+    // this callback, so without this dispatch instances that settle into the preserve path
+    // before their OMM finishes baking would stall the OMM pipeline indefinitely.
+    // hasTransformChanged / hasPreviousPositions default to false because on the preserve path
+    // the RtInstance's transform and vertex buffers are reused as-is from the last dynamic update.
+    if (fireEvents) {
       for (auto& event : m_eventHandlers) {
-        event.onInstanceUpdatedCallback(currentInstance, drawCall, materialData, hasTransformChanged, hasPreviousPositions, isFirstUpdateThisFrame);
+        event.onInstanceUpdatedCallback(instance, drawCall, materialData,
+                                        hasTransformChanged, hasPreviousPositions, isFirstUpdateThisFrame);
       }
     }
   }
@@ -1358,6 +1481,7 @@ namespace dxvk {
 
     // ViewModel should never be considered static
     viewModelInstance->surface.isStatic = false;
+    viewModelInstance->surface.isPreservePath = false;
 
     return viewModelInstance;
   }
@@ -1915,6 +2039,56 @@ namespace dxvk {
     return (u & 0x7f800000) == 0x7f800000;
   }
 
+  uint32_t InstanceManager::computeBillboardIntersectionPrimitiveMask(const RtInstance& instance) {
+    // Player-model intersection primitives live in OBJECT_MASK_PLAYER_MODEL (and
+    // OBJECT_MASK_PLAYER_MODEL_VIRTUAL on portal clones — overwritten later in
+    // createPlayerModelVirtualInstances). See instance_definitions.h for the mask layout.
+    if (instance.m_isPlayerModel) {
+      return OBJECT_MASK_PLAYER_MODEL;
+    }
+    // Pick the _INTERSECTION_PRIMITIVE half of the BLENDED / EMISSIVE pair that matches
+    // the instance's blend mode.
+    if (instance.surface.alphaState.isDecal) {
+      return OBJECT_MASK_UNORDERED_BLENDED_INTERSECTION_PRIMITIVE;
+    }
+    if (instance.surface.alphaState.emissiveBlend) {
+      return OBJECT_MASK_UNORDERED_EMISSIVE_INTERSECTION_PRIMITIVE;
+    }
+    return OBJECT_MASK_UNORDERED_BLENDED_INTERSECTION_PRIMITIVE;
+  }
+
+  void InstanceManager::refreshBillboardsForCurrentFrame(RtInstance& currentInstance,
+                                                         CameraType::Enum cameraType,
+                                                         const Vector3& cameraViewDirection) {
+    // m_billboards is cleared every frame in onFrameEnd, so reset the per-instance
+    // count and let createBeams / createBillboards re-populate m_billboards and
+    // re-stamp m_firstBillboard / m_billboardCount for this frame.
+    const uint32_t previousBillboardCount = currentInstance.m_billboardCount;
+    currentInstance.m_billboardCount = 0;
+
+    // Note: instance.mask is not part of this guard. createBillboards() and createBeams()
+    // intentionally clear bits from the mask (for player-model particles the mask ends up
+    // at 0), so re-checking mask on the next frame would skip the very instances that
+    // still need their billboards re-populated on the preserve path.
+    if (!(RtxOptions::enableSeparateUnorderedApproximations() &&
+          (cameraType == CameraType::Main || cameraType == CameraType::ViewModel) &&
+          currentInstance.m_isUnordered &&
+          !currentInstance.m_isHidden)) {
+      return;
+    }
+
+    if (currentInstance.testCategoryFlags(InstanceCategories::Beam)) {
+      createBeams(currentInstance);
+    } else if (!currentInstance.surface.alphaState.isDecal) {
+      createBillboards(currentInstance, cameraViewDirection);
+    }
+
+    if (currentInstance.m_billboardCount != previousBillboardCount) {
+      currentInstance.m_blasDirty = true;
+      currentInstance.m_billboardGeometryDirty = true;
+    }
+  }
+
   void InstanceManager::createBillboards(RtInstance& instance, const Vector3& cameraViewDirection)
   {
     const RasterGeometry& geometryData = instance.getBlas()->input.getGeometryData();
@@ -2042,7 +2216,7 @@ namespace dxvk {
       billboard.centerUV = centerUV;
       billboard.instance = &instance;
       billboard.vertexColor = vertexColor;
-      billboard.instanceMask = instance.getVkInstance().mask & OBJECT_MASK_UNORDERED_ALL_INTERSECTION_PRIMITIVE;
+      billboard.instanceMask = computeBillboardIntersectionPrimitiveMask(instance);
       billboard.texCoordHash = XXH64(texcoords, sizeof(texcoords), kEmptyHash);
       billboard.vertexOpacityHash = XXH64(vertexOpacities8bit, sizeof(vertexOpacities8bit), kEmptyHash);
       billboard.allowAsIntersectionPrimitive = true;
@@ -2065,6 +2239,10 @@ namespace dxvk {
           IntersectionBillboard& billboard = m_billboards[i];
           billboard.allowAsIntersectionPrimitive = false;
         }
+        // Triangle catches intersection-primitive rays as the fallback (since the billboards
+        // can't this frame). OR in the matching _INTERSECTION_PRIMITIVE bits so the triangle
+        // mask ends in the canonical "_GEOMETRY | _INTERSECTION_PRIMITIVE" state.
+        instance.getVkInstance().mask |= computeBillboardIntersectionPrimitiveMask(instance);
       }
     } else {
       // Revert the billboards that were created successfully before the first failure,
@@ -2147,7 +2325,7 @@ namespace dxvk {
       billboard.yAxisUV = (texcoords[2] - texcoords[0]) * 0.5f;
       billboard.centerUV = (texcoords[0] + texcoords[3]) * 0.5f;
       billboard.vertexColor = vertexColor;
-      billboard.instanceMask = instance.getVkInstance().mask & OBJECT_MASK_UNORDERED_ALL_INTERSECTION_PRIMITIVE;
+      billboard.instanceMask = computeBillboardIntersectionPrimitiveMask(instance);
       billboard.instance = &instance;
       billboard.texCoordHash = 0;
       billboard.vertexOpacityHash = 0;

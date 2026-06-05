@@ -32,7 +32,7 @@
 #include "rtx_dlss.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_ngx_wrapper.h"
-#include "rtx_render/rtx_shader_manager.h"
+#include "rtx_shader_manager.h"
 #include "rtx_imgui.h"
 #include "rtx_debug_view.h"
 
@@ -42,8 +42,8 @@
 
 #include "rtx_shaders/prepare_ray_reconstruction.h"
 #include "rtx_shader_manager.h"
-#include "rtx_dlss.h"
 #include "rtx_ray_reconstruction.h"
+#include "rtx_restir_gi_rayquery.h"
 
 namespace dxvk {
 
@@ -67,7 +67,6 @@ namespace dxvk {
         TEXTURE2D(RAY_RECONSTRUCTION_SECONDARY_VIRTUAL_WORLD_SHADING_NORMAL_INPUT)
 
         TEXTURE2D(RAY_RECONSTRUCTION_SHARED_FLAGS_INPUT)
-        TEXTURE2D(RAY_RECONSTRUCTION_COMBINED_INPUT)
         TEXTURE2D(RAY_RECONSTRUCTION_NORMALS_DLSSRR_INPUT)
         TEXTURE2D(RAY_RECONSTRUCTION_DEPTHS_INPUT)
         TEXTURE2D(RAY_RECONSTRUCTION_MOTION_VECTOR_INPUT)
@@ -75,13 +74,11 @@ namespace dxvk {
         RW_TEXTURE2D(RAY_RECONSTRUCTION_PRIMARY_ALBEDO_INPUT_OUTPUT)
         RW_TEXTURE2D(RAY_RECONSTRUCTION_PRIMARY_SPECULAR_ALBEDO_INPUT_OUTPUT)
 
-        RW_TEXTURE2D(RAY_RECONSTRUCTION_HIT_DISTANCE_OUTPUT)
         RW_TEXTURE2D(RAY_RECONSTRUCTION_DEBUG_VIEW_OUTPUT)
         RW_TEXTURE2D(RAY_RECONSTRUCTION_PRIMARY_DISOCCLUSION_MASK_OUTPUT)
 
         END_PARAMETER()
     };
-    PREWARM_SHADER_PIPELINE(PrepareRayReconstructionShader);
   }
 
   DxvkRayReconstruction::DxvkRayReconstruction(DxvkDevice* device)
@@ -95,6 +92,14 @@ namespace dxvk {
     info.access = VK_ACCESS_TRANSFER_WRITE_BIT;
     info.size = sizeof(RayReconstructionArgs);
     m_constants = device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "DLSS-RR constant buffer");
+  }
+
+  void DxvkRayReconstruction::prewarmShaders(DxvkPipelineManager& pipelineManager) const {
+    if (!RtxOptions::enableRayReconstruction()) {
+      return;
+    }
+
+    PrepareRayReconstructionShader::getShader();
   }
 
   bool DxvkRayReconstruction::supportsRayReconstruction() const {
@@ -152,8 +157,7 @@ namespace dxvk {
     DebugView& debugView = ctx->getDevice()->getCommon()->metaDebugView();
 
     // prepare DLSS-RR inputs
-    VkExtent3D workgroups = util::computeBlockCount(
-      rtOutput.m_primaryLinearViewZ.view->imageInfo().extent, VkExtent3D { 16, 16, 1 });
+    VkExtent3D workgroups = util::computeBlockCount(rtOutput.m_compositeOutputExtent, VkExtent3D { 16, 16, 1 });
 
     // Use DLSS-RR surface replacement. Translucent surfaces with significant refraction are excluded 
     // from surface replacement and its surface motion vector will be used.
@@ -166,17 +170,18 @@ namespace dxvk {
       RayReconstructionArgs constants = { };
       constants.camera = sceneManager.getCamera().getShaderConstants();
       constants.combineSpecularAlbedo = combineSpecularAlbedo() ? 1 : 0;
-      constants.debugViewIdx = rtOutput.m_raytraceArgs.debugView;
+      constants.debugView = rtOutput.m_raytraceArgs.debugView;
       constants.debugKnob = rtOutput.m_raytraceArgs.debugKnob;
       constants.enableDemodulateRoughness = demodulateRoughness() ? 1 : 0;
-      constants.enableDemodulateAttenuation = demodulateAttenuation() ? 1 : 0;
-      constants.upscalerRoughnessDemodulationOffset = upscalerRoughnessDemodulationOffset();
       constants.upscalerRoughnessDemodulationMultiplier = upscalerRoughnessDemodulationMultiplier();
+      constants.upscalerRoughnessDemodulationOffset = upscalerRoughnessDemodulationOffset();
       constants.particleBufferMode = (uint32_t)getParticleBufferMode();
       constants.frameIdx = rtOutput.m_raytraceArgs.frameIdx;
       constants.enableDisocclusionMaskBlur = enableDisocclusionMaskBlur();
       constants.disocclusionMaskBlurRadius = disocclusionMaskBlurRadius();
       constants.rcpSquaredDisocclusionMaskBlurGaussianWeightSigma = 1.0f / (disocclusionMaskBlurNormalizedGaussianWeightSigma() * disocclusionMaskBlurNormalizedGaussianWeightSigma());
+      constants.enableReSTIRGI = RtxOptions::useReSTIRGI();
+
       ctx->updateBuffer(m_constants, 0, sizeof(constants), &constants);
       ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constants);
 
@@ -198,7 +203,6 @@ namespace dxvk {
       ctx->bindResourceView(RAY_RECONSTRUCTION_PRIMARY_CONE_RADIUS_INPUT, rtOutput.m_primaryConeRadius.view, nullptr);
 
       ctx->bindResourceView(RAY_RECONSTRUCTION_SHARED_FLAGS_INPUT, rtOutput.m_sharedFlags.view, nullptr);
-      ctx->bindResourceView(RAY_RECONSTRUCTION_COMBINED_INPUT, rtOutput.m_compositeOutput.view(Resources::AccessType::Read), nullptr);
       // DLSSRR data
       ctx->bindResourceView(RAY_RECONSTRUCTION_NORMALS_DLSSRR_INPUT, rtOutput.m_primaryWorldShadingNormalDLSSRR.view(Resources::AccessType::Read), nullptr);
       ctx->bindResourceView(RAY_RECONSTRUCTION_DEPTHS_INPUT, depthInput->view, nullptr);
@@ -207,11 +211,11 @@ namespace dxvk {
       // Inputs/Outputs
 
       ctx->bindResourceView(RAY_RECONSTRUCTION_PRIMARY_ALBEDO_INPUT_OUTPUT, rtOutput.m_primaryAlbedo.view, nullptr);
-      ctx->bindResourceView(RAY_RECONSTRUCTION_PRIMARY_SPECULAR_ALBEDO_INPUT_OUTPUT, rtOutput.m_primarySpecularAlbedo.view(Resources::AccessType::ReadWrite), nullptr);
+      ctx->bindResourceView(RAY_RECONSTRUCTION_PRIMARY_SPECULAR_ALBEDO_INPUT_OUTPUT,
+        rtOutput.m_primarySpecularAlbedo.view(Resources::AccessType::ReadWrite), nullptr);
 
       // Outputs
 
-      ctx->bindResourceView(RAY_RECONSTRUCTION_HIT_DISTANCE_OUTPUT, rtOutput.m_rayReconstructionHitDistance.view(Resources::AccessType::Write), nullptr);
       ctx->bindResourceView(RAY_RECONSTRUCTION_DEBUG_VIEW_OUTPUT, debugView.getDebugOutput(), nullptr);
       ctx->bindResourceView(RAY_RECONSTRUCTION_PRIMARY_DISOCCLUSION_MASK_OUTPUT, rtOutput.m_primaryDisocclusionMaskForRR.view(Resources::AccessType::Write), nullptr);
 
@@ -227,7 +231,7 @@ namespace dxvk {
       camera.getJittering(jitterOffset);
       mMotionVectorScale = MotionVectorScale::Absolute;
 
-      float motionVectorScale[2] = { 1.f,1.f };
+      float motionVectorScale[2] = { 1.f, 1.f };
 
       std::vector<Rc<DxvkImageView>> pInputs = {
         rtOutput.m_compositeOutput.view(Resources::AccessType::Read),

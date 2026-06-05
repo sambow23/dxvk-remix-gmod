@@ -55,6 +55,7 @@
 #include "rtx_render/rtx_restir_gi_rayquery.h"
 #include "rtx_render/rtx_debug_view.h"
 #include "rtx_render/rtx_composite.h"
+#include "rtx_render/rtx_sparse_rendering.h"
 #include "dxvk_image.h"
 #include "../util/rc/util_rc_ptr.h"
 #include "../util/util_math.h"
@@ -362,6 +363,8 @@ namespace dxvk {
         {1, "2x"},
         {2, "3x"},
         {3, "4x"},
+        {4, "5x"},
+        {5, "6x"},
     } }
   };
 
@@ -378,6 +381,7 @@ namespace dxvk {
   RemixGui::ComboWithKey<dxvk::RtxFramePassStage>::ComboEntries aliasingPassComboEntries = { {
       { RtxFramePassStage::FrameBegin, "FrameBegin" },
       { RtxFramePassStage::Volumetrics, "Volumetrics" },
+      { RtxFramePassStage::SparseRendering, "SparseRendering" },
       { RtxFramePassStage::VolumeIntegrateRestirInitial, "VolumeIntegrateRestirInitial" },
       { RtxFramePassStage::VolumeIntegrateRestirVisible, "VolumeIntegrateRestirVisible" },
       { RtxFramePassStage::VolumeIntegrateRestirTemporal, "VolumeIntegrateRestirTemporal" },
@@ -1644,6 +1648,7 @@ namespace dxvk {
 
     if (RemixGui::CollapsingHeader("Developer Options", collapsingHeaderFlags)) {
       ImGui::Indent();
+      RemixGui::Checkbox("Enable Preserve Path", &RtxOptions::enablePreservePathObject());
       RemixGui::Checkbox("Enable Instance Debugging", &RtxOptions::enableInstanceDebuggingToolsObject());
       RemixGui::Checkbox("Disable Draw Calls Post RTX Injection", &RtxOptions::skipDrawCallsPostRTXInjectionObject());
       RemixGui::Checkbox("Break into Debugger On Press of Key 'B'", &RtxOptions::enableBreakIntoDebuggerOnPressingBObject());
@@ -2550,8 +2555,6 @@ namespace dxvk {
     ImGui::EndDisabled();
     RemixGui::Separator();
     RemixGui::Checkbox("Highlight Legacy Materials (flash red)", &RtxOptions::useHighlightLegacyModeObject());
-    RemixGui::Checkbox("Highlight Legacy Meshes with Shared Vertex Buffers (dull purple)", &RtxOptions::useHighlightUnsafeAnchorModeObject());
-    RemixGui::Checkbox("Highlight Replacements with Unstable Anchors (flash red)", &RtxOptions::useHighlightUnsafeReplacementModeObject());
 
   }
 
@@ -2769,6 +2772,9 @@ namespace dxvk {
     if (ImGui::BeginTabItem("Step 2: Parameter Tuning", nullptr, tab_item_flags)) {
       spacing();
       RemixGui::DragFloat("Scene Unit Scale", &RtxOptions::sceneScaleObject(), 0.00001f, 0.00001f, FLT_MAX, "%.5f", sliderFlags);
+      ImGui::Indent();
+      ImGui::TextWrapped("1 cm  =  %.2f game units", RtxOptions::sceneScale());
+      ImGui::Unindent();
       RemixGui::Checkbox("Scene Z-Up", &RtxOptions::zUpObject());
       RemixGui::Checkbox("Scene Left-Handed Coordinate System", &RtxOptions::leftHandedCoordinateSystemObject());
       fusedWorldViewModeCombo.getKey(&RtxOptions::fusedWorldViewModeObject());
@@ -3669,6 +3675,7 @@ namespace dxvk {
           ImGui::Unindent();
         }
       }
+
       ImGui::Unindent();
     }
 
@@ -3747,6 +3754,12 @@ namespace dxvk {
         ImGui::Unindent();
       }
 
+      ImGui::Unindent();
+    }
+
+    if (RemixGui::CollapsingHeader("Sparse Rendering", collapsingHeaderClosedFlags)) {
+      ImGui::Indent();
+      common->metaSparseRendering().showImguiSettings();
       ImGui::Unindent();
     }
 
@@ -3929,7 +3942,10 @@ namespace dxvk {
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))
         common->metaPostFx().showImguiSettings();
-      
+
+      if (RemixGui::CollapsingHeader("sRGB + Dither", collapsingHeaderClosedFlags))
+        common->metaSRGBDither().showImguiSettings();
+
       ImGui::Unindent();
     }
 
@@ -3952,6 +3968,23 @@ namespace dxvk {
       RemixGui::Separator();
       RemixGui::Checkbox("Portals: Virtual Instance Matching", &RtxOptions::useRayPortalVirtualInstanceMatchingObject());
       RemixGui::Checkbox("Portals: Fade In Effect", &RtxOptions::enablePortalFadeInEffectObject());
+      ImGui::Unindent();
+    }
+
+    if (RemixGui::CollapsingHeader("Shadow Terminator Fix", collapsingHeaderClosedFlags)) {
+      ImGui::Indent();
+      RemixGui::Checkbox("Enable Terminator Offset", &RtxOptions::ShadowTerminator::enableOffsetObject());
+      ImGui::Indent();
+      ImGui::BeginDisabled(!RtxOptions::ShadowTerminator::enableOffset());
+      ImGui::TextWrapped("NOTE: The options below are metric (ensure a correct scene scale).");
+      RemixGui::DragFloat("Area Threshold (in meters^2)", &RtxOptions::ShadowTerminator::maxAreaObject(), 0.01f, 0.f, 100.f);
+      RemixGui::DragFloat("Max Offset Length (in meters)", &RtxOptions::ShadowTerminator::maxLengthObject(), 0.01f, 0.f, 1.f);
+      ImGui::EndDisabled();
+      ImGui::Unindent();
+
+      RemixGui::Separator();
+      RemixGui::Checkbox("Terminator Transition Softening", &RtxOptions::ShadowTerminator::softenObject());
+
       ImGui::Unindent();
     }
 

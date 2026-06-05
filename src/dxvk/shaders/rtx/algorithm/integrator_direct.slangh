@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -245,6 +245,41 @@ bool evalAtmosphereMoonNEE(
   return true;
 }
 
+// From 'Predictable and Targeted Softening of the Shadow Terminator'.
+// Returns a [0,1] weight to smooth the shadow terminator on the diffuse lobe.
+//
+// Softens the abrupt shadow terminator by
+// 1) applying a general falloff on terminator angles
+// 2) the falloff is more drastic if a shading normal (normal maps) mismatches geometry normal,
+//    to eliminate the abrupt terminator caused by directions that are in a shading normal hemisphere,
+//    but are NOT valid in a geometry normal hemisphere. (see the red area in Figure 2 of the paper).
+// The paper suggests a heuristic to apply a falloff on a diffuse term
+// when the given ray direction approaches such a range.
+// NOTE: rayDirection points from the surface to a light / sample position.
+// NOTE: this is a separate technique from the shadow terminator offset, 
+//       as this function mostly solves a problem on surfaces with a normal map, as they perturb the shading normal.
+float softenShadowTerminator(const vec3 geometryNormal, const vec3 shadingNormal, const vec3 rayDirection)
+{
+  // Softening is applied up to this angle threshold (in radians). Default ~3 degrees.
+  const float softeningThresholdAngle = 0.05;
+  
+  // Apply more softening the larger the deviation of shading normal (normal map) from geometry normal.
+  // Note: if shading / geometry normals are the same, a constant softening is still applied, so the terminator is always smoother.
+  float softeningThreshold = lerp(
+    sin(softeningThresholdAngle + 0.1),
+    sin(softeningThresholdAngle),
+    saturate(dot(shadingNormal, geometryNormal))
+  );
+
+  // Shadowing factor: closer to 0 when the ray is at grazing angle from geometry normal (i.e. at terminator),
+  // and reaches 0 sooner if the shading normal deviates more from the geometry normal.
+  float shadowing = saturate(dot(geometryNormal, rayDirection) / softeningThreshold);
+
+  // Smoothstep function, for a gradual falloff
+  float G = shadowing * shadowing * (3.0 - 2.0 * shadowing);
+  return saturate(G);
+}
+
 void evalNEEPrimary(
   vec3 throughput,
   ivec2 pixelCoordinate,
@@ -345,6 +380,16 @@ void evalNEEPrimary(
     emptyWeight;
 
   const float lightSampleThroughput = isValidLightSample ? invSelectionPdf / lightSample.solidAnglePdf : 0.0f;
+
+  if (cb.shadowTerminatorArgs.soften)
+  {
+    // soften the abrupt edge between light and shadow, see function description
+    splitWeight.diffuseReflectionWeight *= softenShadowTerminator(
+      minimalSurfaceInteraction.geometryNormal,
+      opaqueSurfaceMaterialInteraction.shadingNormal,
+      visibility.rayDirection
+    );
+  }
 
   // Determine the weight for the lobes lobe
 
@@ -565,8 +610,7 @@ void sampleAndStoreIndirectRayPathSample(
  }
 
 void integrateDirectPath(
-  inout RNG randomState, ivec2 pixelCoordinate,
-  DirectPathTextures directPathTextures,
+  inout RNG randomState, uvec2 pixelCoordinate,
   GeometryFlags geometryFlags, float integrationSurfacePdf,
   Ray primaryRay, MinimalRayInteraction primaryMinimalRayInteraction, MinimalSurfaceInteraction primarySurfaceInteraction,
   PolymorphicSurfaceMaterialInteraction primaryPolymorphicSurfaceMaterialInteraction)
@@ -687,12 +731,12 @@ void integrateDirectPath(
   {
     // Note: Output split direct lighting contribution only if the selected integration surface is primary,
     // the secondary surface uses a combined lighting contribution.
-    directPathTextures.PrimaryDirectDiffuseLobeRadianceHitDistance[pixelCoordinate] =
+    PrimaryDirectDiffuseLobeRadianceHitDistance[pixelCoordinate] =
       sanitizeRadianceHitDistance(diffuseLobeRadiance, lightHitDistance);
-    directPathTextures.PrimaryDirectSpecularLobeRadianceHitDistance[pixelCoordinate] =
+    PrimaryDirectSpecularLobeRadianceHitDistance[pixelCoordinate] =
       sanitizeRadianceHitDistance(specularLobeRadiance, lightHitDistance);
     // Store the surface illuminance for gradient computation.
-    directPathTextures.PrimaryRtxdiIlluminance[pixelCoordinate] = illuminance;
+    PrimaryRtxdiIlluminance[pixelCoordinate] = illuminance;
   }
   else
   {
@@ -714,17 +758,16 @@ void integrateDirectPath(
       secondaryCombinedSpecularLobeRadianceHitDistance = sanitizeRadianceHitDistance(specularLobeRadiance, lightHitDistance); 
     }
 
-    directPathTextures.SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate] = secondaryCombinedDiffuseLobeRadianceHitDistance;
-    directPathTextures.SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate] = secondaryCombinedSpecularLobeRadianceHitDistance;
-    directPathTextures.PrimaryRtxdiIlluminance[pixelCoordinate] = 0;
+    SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate] = secondaryCombinedDiffuseLobeRadianceHitDistance;
+    SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate] = secondaryCombinedSpecularLobeRadianceHitDistance;
+    PrimaryRtxdiIlluminance[pixelCoordinate] = 0;
   }
   
-  integratorDirectPathOutputDebugView(pixelCoordinate, directPathTextures, geometryFlags);
+  integratorDirectPathOutputDebugView(pixelCoordinate, geometryFlags);
 }
 
 void integratorDirectPathOutputDebugView(
   uvec2 pixelCoordinate,
-  DirectPathTextures directPathTextures,
   GeometryFlags geometryFlags)
 {
   IndirectSampleData indirectSampleData;
@@ -737,7 +780,7 @@ void integratorDirectPathOutputDebugView(
   case DEBUG_VIEW_NOISY_SECONDARY_DIRECT_DIFFUSE_RADIANCE:
   {
     if (!geometryFlags.primarySelectedIntegrationSurface)  
-      storeInDebugView(pixelCoordinate, directPathTextures.SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate].xyz);
+      storeInDebugView(pixelCoordinate, SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate].xyz);
     else
       storeInDebugView(pixelCoordinate, 0);
     break;
@@ -745,7 +788,7 @@ void integratorDirectPathOutputDebugView(
   case DEBUG_VIEW_NOISY_SECONDARY_DIRECT_SPECULAR_RADIANCE:
   {
     if (!geometryFlags.primarySelectedIntegrationSurface)  
-      storeInDebugView(pixelCoordinate, directPathTextures.SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate].xyz);
+      storeInDebugView(pixelCoordinate, SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate].xyz);
     else
       storeInDebugView(pixelCoordinate, 0);
     break;
@@ -755,16 +798,16 @@ void integratorDirectPathOutputDebugView(
     if (!geometryFlags.primarySelectedIntegrationSurface)  
     {
       storeInDebugView(pixelCoordinate, 
-        directPathTextures.SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate].xyz +
-        directPathTextures.SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate].xyz);
+        SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate].xyz +
+        SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate].xyz);
     }
     break;
   }
-  case DEBUG_VIEW_PERCEPTUAL_ROUGHNESS:
-    storeInDebugView(pixelCoordinate, directPathTextures.IndirectFirstHitPerceptualRoughness[pixelCoordinate]);
+  case DEBUG_VIEW_INDIRECT_FIRST_HIT_PERCEPTUAL_ROUGHNESS:
+    storeInDebugView(pixelCoordinate, aliasedData1.IndirectFirstHitPerceptualRoughness[pixelCoordinate]);
     break;
   case DEBUG_VIEW_INTEGRATE_INDIRECT_FIRST_RAY_THROUGHPUT:
-    storeInDebugView(pixelCoordinate, directPathTextures.IndirectThroughputConeRadius[pixelCoordinate].xyz);
+    storeInDebugView(pixelCoordinate, IndirectThroughputConeRadius[pixelCoordinate].xyz);
     break;
   case DEBUG_VIEW_INTEGRATE_INDIRECT_FIRST_SAMPLED_LOBE_PDF:
     indirectSampleData.load(pixelCoordinate, aliasedData2.IndirectFirstSampledLobeData);
@@ -782,15 +825,15 @@ void integratorDirectPathOutputDebugView(
     // DEBUG_VIEW_NOISY_SECONDARY_DIRECT_SPECULAR_RADIANCE
     if (!geometryFlags.primarySelectedIntegrationSurface)  
     {
-      isValid &= isValidValue(directPathTextures.SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate]);
-      isValid &= isValidValue(directPathTextures.SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate]);
+      isValid &= isValidValue(SecondaryCombinedDiffuseLobeRadianceHitDistance[pixelCoordinate]);
+      isValid &= isValidValue(SecondaryCombinedSpecularLobeRadianceHitDistance[pixelCoordinate]);
     }
 
-    // DEBUG_VIEW_PERCEPTUAL_ROUGHNESS
-    isValid &= isValidValue(directPathTextures.IndirectFirstHitPerceptualRoughness[pixelCoordinate]);
+    // DEBUG_VIEW_INDIRECT_FIRST_HIT_PERCEPTUAL_ROUGHNESS
+    isValid &= isValidValue(aliasedData1.IndirectFirstHitPerceptualRoughness[pixelCoordinate]);
 
     // DEBUG_VIEW_INTEGRATE_INDIRECT_FIRST_RAY_THROUGHPUT
-    isValid &= isValidValue(directPathTextures.IndirectThroughputConeRadius[pixelCoordinate].xyz);  
+    isValid &= isValidValue(IndirectThroughputConeRadius[pixelCoordinate].xyz);  
 
     indirectSampleData.load(pixelCoordinate, aliasedData2.IndirectFirstSampledLobeData);
 
@@ -798,8 +841,8 @@ void integratorDirectPathOutputDebugView(
     isValid &= isValidValue(indirectSampleData.firstSampledLobePdf);
 
     // DEBUG_VIEW_INTEGRATE_INDIRECT_FIRST_SAMPLED_SOLID_ANGLE_PDF
-    isValid &= isValidValue(indirectSampleData.firstSampledLobePdf);
-    
+    isValid &= isValidValue(indirectSampleData.firstSampledSolidAnglePdf);
+
     accumulateInDebugViewAnd(pixelCoordinate, isValid);
     break;
   }

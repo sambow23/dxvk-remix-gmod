@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2023-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -36,38 +36,29 @@
 #include "rtx/external/NRD.slangh"
 #include "rtx/utility/geometry_flags.slangh"
 #include "rtx/algorithm/volume_lighting.slangh"
+#include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
 
 groupshared uint samplePixel[16 * 8];
 
 [shader("compute")]
-[numthreads(16, 8, 1)]
+[numthreads(COMPOSITE_THREAD_GROUP_WIDTH, COMPOSITE_THREAD_GROUP_HEIGHT, 1)]
 void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThreadID)
 {
-  const VolumeArgs volumeArgs = cb.volumeArgs;
-  // Note: Fake camera constructed due to Composite pass's lack of access to typical constant buffer members. A bit hacky
-  // and may result in issues in the future if the Camera API is updated to use new members internally (not super likely)
-  // but avoids code duplication.
-  Camera fakeCamera = { 0 };
-  fakeCamera.resolution = cb.resolution;
-  fakeCamera.projectionToViewJittered = cb.projectionToViewJittered;
-  fakeCamera.viewToWorld = cb.viewToWorld;
-  fakeCamera.nearPlane = cb.nearPlane;
-
   samplePixel[localIndex.y * 16 + localIndex.x] = 0xffffffff;
   GroupMemoryBarrierWithGroupSync();
 
   // Early out for pixels outside the camera
-  if (any(thread_id >= fakeCamera.resolution))
+  if (any(thread_id >= cb.camera.resolution))
   {
     return;
   }
 
   const float primaryLinearViewZ = texelFetch(PrimaryLinearViewZ, thread_id.xy, 0).x;
   const bool primaryMiss = primaryLinearViewZ == cb.primaryDirectMissLinearViewZ;
-  const CameraDirections primaryRayDirections = cameraPixelCoordinateToDirection(fakeCamera, thread_id.xy);
-  const vec3 viewPosition = cameraReconstructViewPosition(fakeCamera, primaryRayDirections.viewDirection, primaryLinearViewZ);
+  const CameraDirections primaryRayDirections = cameraPixelCoordinateToDirection(cb.camera, thread_id.xy);
+  const vec3 viewPosition = cameraReconstructViewPosition(cb.camera, primaryRayDirections.viewDirection, primaryLinearViewZ);
   const float viewDistance = length(viewPosition);
-  vec3 cameraPosition = cameraGetWorldPosition(fakeCamera);
+  vec3 cameraPosition = cameraGetWorldPosition(cb.camera);
 
   AlphaBlendSurface surface = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[thread_id], cb.alphaBlendSurfacePackMult);
   vec3 surfaceLight = 0;
@@ -92,33 +83,40 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
       {
         if (!found)
         {
-          float neighborViewZ = texelFetch(PrimaryLinearViewZ, neighborPixel, 0).x;
-          const vec4 neighborNormalData = PrimaryVirtualWorldNormalPerceptualRoughness[neighborPixel.xy];
-          const vec3 neighborNormal = neighborNormalData.xyz * 2-1;
-          const CameraDirections neighborRayDirections = cameraPixelCoordinateToDirection(fakeCamera, neighborPixel.xy);
-          float neighborDistance = abs(neighborViewZ / neighborRayDirections.viewDirection.z);
-          vec3 neighborPosition = cameraPosition + neighborDistance * neighborRayDirections.worldDirection;
-          float depthDiff = abs(neighborDistance - surface.hitT);
-          float3 positionDiff = neighborPosition-surfacePosition;
-
-          bool isMiss = neighborViewZ == cb.primaryDirectMissLinearViewZ;
-          bool isCoplanar = (abs(dot(normalize(positionDiff), particleNormal)) < cb.stochasticAlphaBlendPlanarDifference && depthDiff < surface.hitT * 0.2);
-          bool isDepthSimilar = length(positionDiff) < cb.stochasticAlphaBlendDepthDifference;
-          bool isNormalSimilar = dot(neighborNormal, particleNormal) > cb.stochasticAlphaBlendNormalSimilarity;
-          bool isSameGeometry = true;
-          if (cb.stochasticAlphaBlendSearchTheSameObject && useForegroundGeometryHash)
+          if (cb.sparseRenderingArgs.mode != SparseRenderingMode::Off && !isActivePixelFromMask(SparseRenderingActivePixelMask, uvec2(neighborPixel)))
           {
-            uint16_t neighborGeometryHash = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[neighborPixel], cb.alphaBlendSurfacePackMult).geometryHash;
-            isSameGeometry = (i == 0) || surface.geometryHash == neighborGeometryHash;
-          }
-          if (!isMiss && (isCoplanar || isDepthSimilar) && isNormalSimilar && isSameGeometry)
-          {
-            found = true;
-            samplePixel[localIndex.y * 16 + localIndex.x] = (neighborPixel.x << 16) | neighborPixel.y;
+            radius *= cb.stochasticAlphaBlendRadiusExpandFactor;
           }
           else
           {
-            radius *= cb.stochasticAlphaBlendRadiusExpandFactor;
+            float neighborViewZ = texelFetch(PrimaryLinearViewZ, neighborPixel, 0).x;
+            const vec4 neighborNormalData = PrimaryVirtualWorldNormalPerceptualRoughness[neighborPixel.xy];
+            const vec3 neighborNormal = neighborNormalData.xyz * 2-1;
+            const CameraDirections neighborRayDirections = cameraPixelCoordinateToDirection(cb.camera, neighborPixel.xy);
+            float neighborDistance = abs(neighborViewZ / neighborRayDirections.viewDirection.z);
+            vec3 neighborPosition = cameraPosition + neighborDistance * neighborRayDirections.worldDirection;
+            float depthDiff = abs(neighborDistance - surface.hitT);
+            float3 positionDiff = neighborPosition-surfacePosition;
+
+            bool isMiss = neighborViewZ == cb.primaryDirectMissLinearViewZ;
+            bool isCoplanar = (abs(dot(normalize(positionDiff), particleNormal)) < cb.stochasticAlphaBlendPlanarDifference && depthDiff < surface.hitT * 0.2);
+            bool isDepthSimilar = length(positionDiff) < cb.stochasticAlphaBlendDepthDifference;
+            bool isNormalSimilar = dot(neighborNormal, particleNormal) > cb.stochasticAlphaBlendNormalSimilarity;
+            bool isSameGeometry = true;
+            if (cb.stochasticAlphaBlendSearchTheSameObject)
+            {
+              uint16_t neighborGeometryHash = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[neighborPixel], cb.alphaBlendSurfacePackMult).geometryHash;
+              isSameGeometry = (i == 0) || surface.geometryHash == neighborGeometryHash;
+            }
+            if (!isMiss && (isCoplanar || isDepthSimilar) && isNormalSimilar && isSameGeometry)
+            {
+              found = true;
+              samplePixel[localIndex.y * 16 + localIndex.x] = (neighborPixel.x << 16) | neighborPixel.y;
+            }
+            else
+            {
+              radius *= cb.stochasticAlphaBlendRadiusExpandFactor;
+            }
           }
         }
 
@@ -148,7 +146,7 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
           }
           else
           {
-            neighborPixel = clamp(centerPixel.xy + offset * radius,0,cb.resolution-1);
+            neighborPixel = clamp(centerPixel.xy + offset * radius, 0, cb.camera.resolution - 1);
           }
           radius = clamp(radius, 2, 200);
         }
@@ -168,11 +166,12 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
         float perceptualRoughness = PrimaryVirtualWorldNormalPerceptualRoughness[neighborPixel].a;
 
         float roughnessFactor = 1.0;
-        if (cb.demodulateRoughness) {
+        if (cb.demodulateRoughness)
+        {
           roughnessFactor = getRoughnessDemodulationFactor(perceptualRoughness, cb.roughnessDemodulationOffset);
         }
 
-        const vec3 primarySpecularAlbedo = texelFetch(PrimarySpecularAlbedo, neighborPixel.xy, 0).xyz;
+        const vec3 primarySpecularAlbedo = PrimarySpecularAlbedo[neighborPixel].xyz;
         vec3 specularLight = PrimaryDirectSpecularRadianceHitDistance[neighborPixel].xyz;
         if (cb.enableSeparatedDenoisers)
         {
@@ -191,7 +190,7 @@ void main(uint2 thread_id : SV_DispatchThreadID, uint2 localIndex : SV_GroupThre
 
       MinimalSurfaceInteraction surfaceInteraction = (MinimalSurfaceInteraction)0;
       surfaceInteraction.position = surfacePosition;
-      vec3 radiance = evalVolumetricNEE(VolumeFilteredRadianceY, VolumeFilteredRadianceCoCg, volumeArgs, surfaceInteraction, froxelVolumeHint);
+      vec3 radiance = evalVolumetricNEE(VolumeFilteredRadianceY, VolumeFilteredRadianceCoCg, cb.volumeArgs, surfaceInteraction, froxelVolumeHint);
       surfaceLight = radiance * surface.color.xyz * cb.stochasticAlphaBlendRadianceVolumeMultiplier;
     }
   }

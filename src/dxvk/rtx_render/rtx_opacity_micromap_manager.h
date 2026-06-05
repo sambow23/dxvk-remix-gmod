@@ -347,6 +347,12 @@ namespace dxvk {
     bool isOmmBuildRequested(uint32_t currentGeneration) const {
       return ommBuildRequested && ommRegistrationGeneration == currentGeneration;
     }
+    void resetCopiedRequestState() {
+      ommRegistrationGeneration = 0;
+      ommRetryAfterFrame = 0;
+      needsToCalculateNumTexelsPerMicroTriangle = false;
+      ommBuildRequested = false;
+    }
   private:
     XXH64_hash_t ommSrcHash = kEmptyHash;
     uint32_t ommRegistrationGeneration = 0;
@@ -517,7 +523,7 @@ namespace dxvk {
     // Called whenever a new instance has been added to the database
     void onInstanceAdded(const RtInstance& instance);
     // Called whenever instance metadata is updated
-    void onInstanceUpdated(const RtInstance& instance, const DrawCallState& drawCall, const MaterialData& material, const bool hasTransformChanged, const bool hasVerticesChanged, const bool isFirstUpdateThisFrame);
+    void onInstanceUpdated(const RtInstance& instance, const DrawCallState& drawCall, const MaterialData* material, const bool hasTransformChanged, const bool hasVerticesChanged, const bool isFirstUpdateThisFrame);
     // Called whenever an instance has been removed from the database
     void onInstanceDestroyed(const RtInstance& instance);
 

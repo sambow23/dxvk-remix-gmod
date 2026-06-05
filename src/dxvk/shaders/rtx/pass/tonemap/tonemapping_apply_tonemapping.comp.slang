@@ -20,13 +20,9 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx/pass/tonemap/tonemapping.slangh"
-#include "rtx/pass/tonemap/tonemapping_noise.slangh"
 #include "rtx/pass/tonemap/fork_tonemap_operators.slangh"
 #include "rtx/utility/math.slangh"
 #include "rtx/utility/color.slangh"
-
-[[vk::binding(TONEMAPPING_APPLY_BLUE_NOISE_TEXTURE_INPUT)]]
-Texture2DArray BlueNoise;
 
 [[vk::binding(TONEMAPPING_APPLY_TONEMAPPING_COLOR_INPUT)]]
 RWTexture2D<float4> InColorBuffer;
@@ -99,21 +95,9 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
     color = colorGrading(color);
   }
 
-  if (cb.performSRGBConversion > 0)
-  {
-    color = linearToGamma(color);
-  }
-
-  // Apply dithering to the output to break up banding artifacts. First-order
-  // only; ideally we would dither in linear space using sRGB range info, but
-  // the resulting error is small.
-  return ditherTo8Bit(
-    color,
-    pixelPosition,
-    cb.frameIndex,
-    cb.ditherMode != ditherModeNone,
-    cb.ditherMode == ditherModeSpatialTemporal
-  );
+  // sRGB conversion and dithering are now performed by the final output pass,
+  // which runs after all post-process effects (lens effects, etc.).
+  return color;
 }
 
 [shader("compute")]

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2024, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2021-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -39,6 +39,7 @@
 #include "rtx/concept/light/light_types.h"
 #include "rtx/concept/surface/surface_shared.h"
 #include "rtx/algorithm/nee_cache_data.h"
+#include "rtx/pass/sparse_rendering/sparse_rendering.h"
 
 struct LightRangeInfo {
   uint offset;
@@ -121,6 +122,14 @@ struct EyeArgs {
   uint  pad1;
 };
 
+struct ShadowTerminatorArgs
+{
+  uint  enableOffset;
+  uint  soften;
+  float maxArea;
+  float maxLength;
+};
+
 #define OBJECT_PICKING_INVALID (cb.clearColorPicking)
 
 // Constant buffer
@@ -155,8 +164,11 @@ struct RaytraceArgs {
   SssArgs sssArgs;
   EyeArgs eyeArgs;
   AtmosphereArgs atmosphereArgs;
+  ShadowTerminatorArgs shadowTerminatorArgs;
 
   Camera renderTargetCamera;
+
+  SparseRenderingArgs sparseRenderingArgs;
 
   // ------------------------- Structs above this line, non structs below this line -----------------------------------
 
@@ -247,7 +259,7 @@ struct RaytraceArgs {
   uint16_t minTranslucentTransmissionLobeSamplingProbability;
   float roughnessDemodulationOffset;
   float timeSinceStartSeconds;
-  
+
   uint enableCalculateVirtualShadingNormals;
   uint enableDirectLighting;
   uint enableEmissiveBlendEmissiveOverride;
@@ -266,6 +278,8 @@ struct RaytraceArgs {
   uint enableUnorderedEmissiveParticlesInIndirectRays;
   uint enableTransmissionApproximationInIndirectRays;
   uint enableDecalMaterialBlending;
+  uint enableLegacyRectLightConeShaping;
+  uint enableRectLightConeShapingRatioScaling;
   uint enableBillboardOrientationCorrection;
   uint enablePlayerModelInPrimarySpace;
   uint enablePlayerModelPrimaryShadows;

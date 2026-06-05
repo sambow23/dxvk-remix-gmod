@@ -32,6 +32,7 @@
 #include "rtx_point_instancer_system.h"
 #include "../util/util_vector.h"
 #include "../util/util_matrix.h"
+#include "../util/util_struct_hash.h"
 
 namespace dxvk 
 {
@@ -90,12 +91,23 @@ class AccelManager : public CommonDeviceObject {
              isSubsurface == other.isSubsurface;
     }
   };
-  static_assert(sizeof(BlasBucketKey) == 16, "BlasBucketKey must remain fully padded for stable hashing.");
 
   struct BlasBucketKeyHash {
     size_t operator()(const BlasBucketKey& k) const {
-      return static_cast<size_t>(XXH3_64bits(&k, sizeof(k)));
+      return static_cast<size_t>(hashStructByMemory(k,
+          &BlasBucketKey::instanceShaderBindingTableRecordOffset,
+          &BlasBucketKey::customIndexFlags,
+          &BlasBucketKey::instanceFlags,
+          &BlasBucketKey::instanceMask,
+          &BlasBucketKey::usesUnorderedApproximations,
+          &BlasBucketKey::isSubsurface,
+          &BlasBucketKey::pad));
     }
+  };
+
+  struct UniqueBlasInstances {
+    BlasEntry* blasEntry = nullptr;
+    std::vector<RtInstance*> instances;
   };
 
 public:
@@ -241,6 +253,7 @@ private:
   struct CachedBucketState {
     // The instances that contributed geometry to this bucket (for dirty checking)
     std::vector<RtInstance*> instances;
+    std::vector<uint64_t> instanceCacheIdentities;
     // Surface data for m_reorderedSurfaces
     std::vector<RtInstance*> surfaces;
     std::vector<uint32_t> indexOffsets;
@@ -261,6 +274,14 @@ private:
   // Set of BlasEntry* that went to the dynamic path on the last full rebuild.
   // Used for quick O(1) per-instance classification on the dynamics-only path.
   std::unordered_set<BlasEntry*> m_cachedDynamicBlasEntries;
+
+  // Scratch containers for collecting dynamic BLAS groups during mergeInstancesIntoBlas().
+  // The map is lookup-only; the vector preserves first-seen emission order.
+  std::vector<UniqueBlasInstances> m_uniqueDynamicBlas;
+  uint32_t m_uniqueDynamicBlasCount = 0;
+  std::unordered_map<BlasEntry*, uint32_t> m_uniqueDynamicBlasIndex;
+
+  void resetUniqueDynamicBlasGroups();
 
   Rc<DxvkBuffer> m_vkInstanceBuffer; // Note: Holds Vulkan AS Instances, not RtInstances
   Rc<DxvkBuffer> m_surfaceBuffer;

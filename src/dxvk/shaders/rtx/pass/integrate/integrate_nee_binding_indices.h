@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023-2024, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2023-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -28,6 +28,10 @@ struct VisualizeNeeArgs
   vec2 mouseUV;
 };
 
+// Thread group dimensions for NEE compute shader
+#define INTEGRATE_NEE_THREADS_DISPATCH_WIDTH 16
+#define INTEGRATE_NEE_THREADS_DISPATCH_HEIGHT 8
+
 // Inputs
 
 #define INTEGRATE_NEE_BINDING_SHARED_FLAGS_INPUT                                        40
@@ -47,7 +51,6 @@ struct VisualizeNeeArgs
 
 #define INTEGRATE_NEE_BINDING_PRIMARY_POSITION_ERROR_INPUT                              53
 #define INTEGRATE_NEE_BINDING_PRIMARY_HIT_DISTANCE_INPUT                                54
-#define INTEGRATE_NEE_BINDING_PRIMARY_WORLD_INTERPOLATED_NORMAL_INPUT                   55
 #define INTEGRATE_NEE_BINDING_INDIRECT_RADIANCE_HIT_DISTANCE_INPUT                      56
 
 #define INTEGRATE_NEE_BINDING_NEE_CACHE                                                 57
@@ -55,6 +58,7 @@ struct VisualizeNeeArgs
 #define INTEGRATE_NEE_BINDING_NEE_CACHE_SAMPLE                                          59
 #define INTEGRATE_NEE_BINDING_NEE_CACHE_THREAD_TASK                                     60
 #define INTEGRATE_NEE_BINDING_PRIMITIVE_ID_PREFIX_SUM_INPUT                             61
+#define INTEGRATE_NEE_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT                           62
 
 // Inputs/Outputs
 

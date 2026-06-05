@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2025, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2021-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -230,6 +230,7 @@ namespace dxvk
     };
 
     struct RaytracingOutput {
+      // Note: resources are called 'shared' if they are written by both Primary and Secondary (PSR) passes
       Resource m_sharedFlags;
       Resource m_sharedRadianceRG;
       Resource m_sharedRadianceB;
@@ -241,10 +242,12 @@ namespace dxvk
       AliasedResource m_sharedSurfaceIndex;
       Resource m_sharedSubsurfaceData;
       Resource m_sharedSubsurfaceDiffusionProfileData;
+      // Terminator offset image is written by Primary and overwritten by a single chosen Secondary pass -- so it's shared,
+      // as a terminator fix not that visible if we have both reflections/refractions, so we can omit it in one of them.
+      Resource m_sharedTerminatorFix[2];
 
       Resource m_primaryAttenuation;
       Resource m_primaryWorldShadingNormal;
-      Resource m_primaryWorldInterpolatedNormal;
       Resource m_primaryPerceptualRoughness;
       Resource m_primaryLinearViewZ;
       Resource m_primaryFirstHitLinearViewZ;
@@ -292,6 +295,14 @@ namespace dxvk
       AliasedResource m_indirectRadianceHitDistance;
       AliasedResource m_rayReconstructionHitDistance;
       Resource m_rayReconstructionParticleBuffer;
+      Resource m_sparseRenderingDirectActivePixelMask;
+      Resource m_sparseRenderingIndirectActivePixelMask;
+      Resource m_sparseRenderingUnionActivePixelMask;
+      Resource m_sparseRenderingDirectPixelSamplingRate;
+      Resource m_sparseRenderingIndirectPixelSamplingRate;
+      Resource m_sparseRenderingDirectActiveLocalPixelCoords;
+      Resource m_sparseRenderingIndirectActiveLocalPixelCoords;
+      Resource m_sparseRenderingUnionActiveLocalPixelCoords;
 
       AliasedResource m_primaryDirectDiffuseRadiance;
       AliasedResource m_primaryDirectSpecularRadiance;
@@ -356,6 +367,8 @@ namespace dxvk
       const AliasedResource& getPreviousRtxdiConfidence() const { return m_rtxdiConfidence[!m_swapTextures]; }
       const AliasedResource& getCurrentPrimaryWorldPositionWorldTriangleNormal() const { return m_primaryWorldPositionWorldTriangleNormal[m_swapTextures]; }
       const AliasedResource& getPreviousPrimaryWorldPositionWorldTriangleNormal() const { return m_primaryWorldPositionWorldTriangleNormal[!m_swapTextures]; }
+      const Resource& getCurrentSharedTerminatorFix() const { return m_sharedTerminatorFix[m_swapTextures]; }
+      const Resource& getPreviousSharedTerminatorFix() const { return m_sharedTerminatorFix[!m_swapTextures]; }
 
     private:
       bool m_swapTextures = false;

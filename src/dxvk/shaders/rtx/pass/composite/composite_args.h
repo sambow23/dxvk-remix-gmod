@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -34,13 +34,12 @@ struct CompositeArgs {
   Camera camera;
   DomeLightArgs domeLightArgs;
   RayPortalHitInfo rayPortalHitInfos[maxRayPortalCount * 2];
+  VolumeArgs volumeArgs;
+  AccumulationArgs accumulationArgs;
+  SparseRenderingArgs sparseRenderingArgs;
+  AtmosphereArgs atmosphereArgs;
 
-  mat4 projectionToViewJittered;
-  mat4 viewToWorld;
-
-  vec2 resolution;
-  float nearPlane;
-  float postFilterThreshold;
+  // -- Struct objects should go above this line to preserve alignment --
 
   // Fog
   vec3 fogColor;
@@ -57,10 +56,6 @@ struct CompositeArgs {
   uint demodulateRoughness;
   float roughnessDemodulationOffset;
   uint combineLightingChannels;
-
-  VolumeArgs volumeArgs;
-  AccumulationArgs accumulationArgs;
-  AtmosphereArgs atmosphereArgs;
 
   // One of DENOISER_MODE constants, affects signal conversion
   uint primaryDirectDenoiser;
@@ -81,7 +76,7 @@ struct CompositeArgs {
   uint8_t compositeSecondaryCombinedSpecular;
   // The number of active Ray Portals (Used for Ray Portal sampling). Always <= RAY_PORTAL_MAX_COUNT
   uint8_t numActiveRayPortals;
-  uint8_t pad;
+  uint8_t pad0;
 
   uint enableSeparatedDenoisers;
   uint frameIdx;
@@ -124,7 +119,7 @@ struct CompositeArgs {
   float skyFogOpacity;
 
   float alphaBlendSurfacePackMult; // for packing/unpacking hitT into Float16 in AlphaBlendSurface
+  float postFilterThreshold;
+  uint writeRayReconstructionHitDistance;
   float pad1;
-  float pad2;
-  float pad3;
 };

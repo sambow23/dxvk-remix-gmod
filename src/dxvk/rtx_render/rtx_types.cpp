@@ -19,8 +19,6 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
-#pragma once
-
 #include <algorithm>
 
 #include "rtx_types.h"
@@ -108,12 +106,14 @@ namespace dxvk {
   }
 
   ReplacementInstance::~ReplacementInstance() {
-    root = PrimInstance();
     clear();
   }
 
   void ReplacementInstance::clear() {
-    // clear up all references to this ReplacementInstance.
+    // Mark all prim entities for GC and detach their back-pointers, then drop
+    // the prim/root slots, the active-replacements tracking pointer, and the
+    // cached aggregate bounding boxes so the RI is in a clean "no replacement
+    // attached" state. setup() is the matching re-init.
     for (size_t i = 0; i < prims.size(); i++) {
       RtInstance* subInstance = prims[i].getInstance();
       if (subInstance) {
@@ -129,9 +129,13 @@ namespace dxvk {
       }
       prims[i].setReplacementInstance(nullptr, kInvalidReplacementIndex);
     }
+    prims.clear();
+    root = PrimInstance();
+    activeReplacements = nullptr;
     geometryBoundingBox.invalidate();
     lightBoundingBox.invalidate();
     boundingBoxDirty = true;
+    dirtyFlags = kAllDirtyFlags;
   }
 
   ReplacementInstance::ReplacementInstance(const LookupKey& key, uint32_t newId, uint32_t frameId)
@@ -141,26 +145,25 @@ namespace dxvk {
       , materialHash(key.materialHash)
       , vertexPositionHash(key.vertexPositionHash)
       , centroid(key.worldPos)
-      , frameCreated(frameId) {
+      , frameCreated(frameId)
+      , textureTransform(key.textureTransform)
+      , texgenMode(key.texgenMode) {
     // No prior data to diff against; every field is effectively new. Set all
     // dirty bits so downstream update logic that gates individual steps on
     // specific bits runs the full update on the RI's first submission.
-    dirtyFlags.set(
-        DirtyFlag::Transform,
-        DirtyFlag::VertexPosHash,
-        DirtyFlag::MaterialHash,
-        DirtyFlag::Any);
+    dirtyFlags = kAllDirtyFlags;
   }
 
-  void ReplacementInstance::setup(PrimInstance newRoot, size_t numPrims) {
+  void ReplacementInstance::setup(PrimInstance newRoot, size_t numPrims,
+                                  const std::vector<AssetReplacement>* replacements) {
     clear();
     prims.resize(numPrims);
     root = newRoot;
+    activeReplacements = replacements;
   }
 
   void ReplacementInstance::recalculateBoundingBox(
       const Matrix4& newObjectToWorld,
-      const std::vector<AssetReplacement>& replacements,
       const AxisAlignedBoundingBox* originalGeometryBBox) {
     objectToWorld = newObjectToWorld;
 
@@ -171,38 +174,42 @@ namespace dxvk {
     AxisAlignedBoundingBox geoBBox;
     AxisAlignedBoundingBox litBBox;
 
-    for (const auto& replacement : replacements) {
-      if (replacement.includeOriginal && originalGeometryBBox != nullptr) {
-        geoBBox.unionWith(*originalGeometryBBox);
-      } else if (replacement.type == AssetReplacement::eMesh && replacement.geometry != nullptr) {
-        const AxisAlignedBoundingBox& srcBBox = replacement.geometry->data.boundingBox;
-        if (srcBBox.isValid()) {
-          const Vector3& mn = srcBBox.minPos;
-          const Vector3& mx = srcBBox.maxPos;
-          const Vector3 corners[8] = {
-            Vector3(mn.x, mn.y, mn.z), Vector3(mx.x, mn.y, mn.z),
-            Vector3(mn.x, mx.y, mn.z), Vector3(mn.x, mn.y, mx.z),
-            Vector3(mx.x, mx.y, mn.z), Vector3(mn.x, mx.y, mx.z),
-            Vector3(mx.x, mn.y, mx.z), Vector3(mx.x, mx.y, mx.z)
-          };
-          for (const Vector3& corner : corners) {
-            const Vector3 transformed = (replacement.replacementToObject * Vector4(corner, 1.0f)).xyz();
-            for (uint32_t j = 0; j < 3; j++) {
-              geoBBox.minPos[j] = std::min(geoBBox.minPos[j], transformed[j]);
-              geoBBox.maxPos[j] = std::max(geoBBox.maxPos[j], transformed[j]);
+    if (activeReplacements == nullptr) {
+      geoBBox = *originalGeometryBBox;
+    } else {
+      for (const auto& replacement : *activeReplacements) {
+        if (replacement.includeOriginal && originalGeometryBBox != nullptr) {
+          geoBBox.unionWith(*originalGeometryBBox);
+        } else if (replacement.type == AssetReplacement::eMesh && replacement.geometry != nullptr) {
+          const AxisAlignedBoundingBox& srcBBox = replacement.geometry->data.boundingBox;
+          if (srcBBox.isValid()) {
+            const Vector3& mn = srcBBox.minPos;
+            const Vector3& mx = srcBBox.maxPos;
+            const Vector3 corners[8] = {
+              Vector3(mn.x, mn.y, mn.z), Vector3(mx.x, mn.y, mn.z),
+              Vector3(mn.x, mx.y, mn.z), Vector3(mn.x, mn.y, mx.z),
+              Vector3(mx.x, mx.y, mn.z), Vector3(mn.x, mx.y, mx.z),
+              Vector3(mx.x, mn.y, mx.z), Vector3(mx.x, mx.y, mx.z)
+            };
+            for (const Vector3& corner : corners) {
+              const Vector3 transformed = (replacement.replacementToObject * Vector4(corner, 1.0f)).xyz();
+              for (uint32_t j = 0; j < 3; j++) {
+                geoBBox.minPos[j] = std::min(geoBBox.minPos[j], transformed[j]);
+                geoBBox.maxPos[j] = std::max(geoBBox.maxPos[j], transformed[j]);
+              }
             }
           }
-        }
-      } else if (replacement.type == AssetReplacement::eLight && replacement.lightData.has_value()) {
-        RtLight objectSpaceLight = replacement.lightData->toRtLight();
-        const Vector3 pos = objectSpaceLight.getPosition();
-        float lightRadius = 0.f;
-        if (objectSpaceLight.getType() == RtLightType::Sphere) {
-          lightRadius = objectSpaceLight.getSphereLight().getRadius();
-        }
-        for (uint32_t j = 0; j < 3; j++) {
-          litBBox.minPos[j] = std::min(litBBox.minPos[j], pos[j] - lightRadius);
-          litBBox.maxPos[j] = std::max(litBBox.maxPos[j], pos[j] + lightRadius);
+        } else if (replacement.type == AssetReplacement::eLight && replacement.lightData.has_value()) {
+          RtLight objectSpaceLight = replacement.lightData->toRtLight();
+          const Vector3 pos = objectSpaceLight.getPosition();
+          float lightRadius = 0.f;
+          if (objectSpaceLight.getType() == RtLightType::Sphere) {
+            lightRadius = objectSpaceLight.getSphereLight().getRadius();
+          }
+          for (uint32_t j = 0; j < 3; j++) {
+            litBBox.minPos[j] = std::min(litBBox.minPos[j], pos[j] - lightRadius);
+            litBBox.maxPos[j] = std::max(litBBox.maxPos[j], pos[j] + lightRadius);
+          }
         }
       }
     }

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2023-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -33,11 +33,10 @@
 namespace dxvk {
 
   class DxvkDevice;
+  class DxvkPipelineManager;
 
-  // Global tonemapper. Operator-only pipeline (the dynamic tone curve and
-  // histogram passes were removed in the 2026-05-13 refactor). The selected
-  // operator is dispatched from fork_tonemap_operators.slangh; per-operator
-  // parameters are populated by fork_hooks::populateTonemapOperatorArgs.
+  // Global tonemapper. Operator-only pipeline; sRGB conversion and dithering
+  // are handled by the final output pass.
   class DxvkToneMapping: public CommonDeviceObject {
   public:
     explicit DxvkToneMapping(DxvkDevice* device);
@@ -47,10 +46,11 @@ namespace dxvk {
       Rc<RtxContext> ctx,
       Rc<DxvkImageView> exposureView,
       const Resources::RaytracingOutput& rtOutput,
-      bool performSRGBConversion = true,
       bool autoExposureEnabled = true);
 
     bool isEnabled() const { return tonemappingEnabled(); }
+
+    void prewarmShaders(DxvkPipelineManager& pipelineManager) const;
 
     void showImguiSettings();
 
@@ -60,33 +60,17 @@ namespace dxvk {
       Rc<DxvkImageView> exposureView,
       const Resources::Resource& inputBuffer,
       const Resources::Resource& colorBuffer,
-      bool performSRGBConversion,
       bool autoExposureEnabled);
 
     Rc<vk::DeviceFn> m_vkd;
 
-    enum class DitherMode : uint32_t {
-      None = 0,
-      Spatial,
-      SpatialTemporal,
-    };
-
     RTX_OPTION("rtx.tonemap", float, exposureBias, 0.f, "The exposure value to use for the global tonemapper when auto exposure is disabled, or a bias multiplier on top of the auto exposure's calculated exposure value.");
     RTX_OPTION("rtx.tonemap", bool, tonemappingEnabled, true, "A flag to enable or disable the global tonemapper.");
-    RTX_OPTION("rtx.tonemap", bool, colorGradingEnabled, false, "A flag to enable or disable color grading after the global tonemapper's tonemapping pass, but before gamma correction and dithering (if enabled).");
+    RTX_OPTION("rtx.tonemap", bool, colorGradingEnabled, false, "A flag to enable or disable color grading after the global tonemapper's tonemapping pass.");
 
-    // Color grading settings.
     RTX_OPTION("rtx.tonemap", Vector3, colorBalance, Vector3(1.0f, 1.0f, 1.0f), "The color tint to apply after tonemapping when color grading is enabled for the tonemapper (rtx.tonemap.colorGradingEnabled). Values should be in the range [0, 1].");
     RTX_OPTION("rtx.tonemap", float, contrast, 1.0f, "The contrast adjustment to apply after tonemapping when color grading is enabled for the tonemapper (rtx.tonemap.colorGradingEnabled). Values should be in the range [0, 1].");
     RTX_OPTION("rtx.tonemap", float, saturation, 1.0f, "The saturation adjustment to apply after tonemapping when color grading is enabled for the tonemapper (rtx.tonemap.colorGradingEnabled). Values should be in the range [0, 1].");
-
-    // Dithering settings.
-    RTX_OPTION("rtx.tonemap", DitherMode, ditherMode, DitherMode::SpatialTemporal,
-               "Tonemap dither mode selection, dithering allows for reduction of banding artifacts in the final rendered output from quantization using a small amount of monochromatic noise. Impact typically most visible in darker regions with smooth lighting gradients.\n"
-               "Enabling dithering will make the rendered image slightly noisier, though usually dither noise is fairly imperceptible in most cases without looking closely. Generally dithered results will also look better than the alternative of banding artifacts due to increasing perceptual precision of the signal.\n"
-               "Note that temporal dithering may increase perceptual precision further but may also introduce more noticeable noise in the final output in some cases due to the noise pattern changing every frame unlike a purely spatial approach.\n"
-               "Supported enum values are 0 = None (Disabled), 1 = Spatial (Enabled, Spatial dithering only), 2 = SpatialTemporal (Enabled, Spatial and temporal dithering).\n"
-               "Generally enabling dithering is recommended, but disabling it may be useful in some niche cases for improving compression ratios in images or videos at the cost of quality (as noise while it may not be very visible may be more difficult to compress), or for capturing \"raw\" post-tonemapped data from the renderer.");
   };
 
 }

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2024, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -62,6 +62,14 @@ Texture2D<float2> PrimaryScreenSpaceMotionVector;
 layout(r32f, binding = RTXDI_REUSE_BINDING_POSITION_ERROR_INPUT)
 Texture2D<float> PrimaryPositionError;
 
+[[vk::binding(RTXDI_REUSE_BINDING_SHARED_TERMINATOR_FIX_INPUT)]]
+Texture2D<float> SharedTerminatorFix;
+
+// NOTE: temporal resampling relies on the previous frame data,
+//       so the terminator fix must also be included to avoid incorrect resampling
+[[vk::binding(RTXDI_REUSE_BINDING_SHARED_TERMINATOR_FIX_PREVIOUS_INPUT)]]
+Texture2D<float> SharedTerminatorFixPrevious;
+
 layout(r16ui, binding = RTXDI_REUSE_BINDING_SHARED_FLAGS_INPUT)
 Texture2D<uint16_t> SharedFlags;
 
@@ -76,6 +84,9 @@ Texture2D<uint2> SharedSubsurfaceData;
 
 layout(rg32ui, binding = RTXDI_REUSE_BINDING_SUBSURFACE_DIFFUSION_PROFILE_DATA_INPUT)
 Texture2D<uint2> SharedSubsurfaceDiffusionProfileData;
+
+layout(r16ui, binding = RTXDI_REUSE_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT)
+Texture2D<uint16_t> DirectActiveLocalPixelCoords;
 
 // Inputs / Outputs
 

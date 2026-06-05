@@ -70,6 +70,7 @@ namespace dxvk {
         {DEBUG_VIEW_BARYCENTRICS, "Barycentric Coordinates"},
         {DEBUG_VIEW_IS_FRONT_HIT, "Is Front Hit"},
         {DEBUG_VIEW_IS_STATIC, "Is Static"},
+        {DEBUG_VIEW_PRESERVE_PATH, "Preserve path (preserved instances)"},
         {DEBUG_VIEW_IS_OPAQUE, "Is Opaque"},
         {DEBUG_VIEW_IS_THIN_OPAQUE, "Is Thin Opaque"},
         {DEBUG_VIEW_IS_SUBSURFACE_SCATTERING, "Is Subsurface Scattering (SSS)"},
@@ -87,12 +88,9 @@ namespace dxvk {
         {DEBUG_VIEW_TEXCOORD_GENERATION_MODE, "Texture Coordinates Generation Mode"},
         {DEBUG_VIEW_VIRTUAL_MOTION_VECTOR, "Virtual Motion Vector"},
         {DEBUG_VIEW_SCREEN_SPACE_MOTION_VECTOR, "Screen-Space Motion Vector"},
-        {DEBUG_VIEW_TRIANGLE_NORMAL, "Triangle Normal"},
-        {DEBUG_VIEW_TRIANGLE_TANGENT, "Triangle Tangent"},
-        {DEBUG_VIEW_TRIANGLE_BITANGENT, "Triangle Bitangent"},
-        {DEBUG_VIEW_INTERPOLATED_NORMAL, "Interpolated Normal"},
-        {DEBUG_VIEW_INTERPOLATED_TANGENT, "Interpolated Tangent"},
-        {DEBUG_VIEW_INTERPOLATED_BITANGENT, "Interpolated Bitangent"},
+        {DEBUG_VIEW_GEOMETRY_NORMAL, "Geometry Normal"},
+        {DEBUG_VIEW_GEOMETRY_TANGENT, "Geometry Tangent"},
+        {DEBUG_VIEW_GEOMETRY_BITANGENT, "Geometry Bitangent"},
         {DEBUG_VIEW_SHADING_NORMAL, "Shading Normal"},
         {DEBUG_VIEW_VIRTUAL_SHADING_NORMAL, "Virtual Shading Normal"},
         {DEBUG_VIEW_VERTEX_COLOR, "Vertex Color"},
@@ -114,9 +112,9 @@ namespace dxvk {
                                                     "Parameterize via:\n"
                                                     "Debug Knob [0]: num texels per checker box [Default: 64]\n"
                                                     "Debug Knob [1]: checkers overlay strength [Default: 0.5]"},
-        {DEBUG_VIEW_BASE_REFLECTIVITY, "Base Reflectivity"},
         {DEBUG_VIEW_ROUGHNESS, "Isotropic Roughness"},
-        {DEBUG_VIEW_PERCEPTUAL_ROUGHNESS, "Perceptual Roughness"},
+        {DEBUG_VIEW_INDIRECT_FIRST_HIT_PERCEPTUAL_ROUGHNESS, "Indirect First Hit Perceptual Roughness"},
+        {DEBUG_VIEW_PRIMARY_PERCEPTUAL_ROUGHNESS, "Primary Perceptual Roughness"},
         {DEBUG_VIEW_ANISOTROPY, "Anisotropy"},
         {DEBUG_VIEW_ANISOTROPIC_ROUGHNESS, "Anisotropic Roughness"},
         {DEBUG_VIEW_OPACITY, "Opacity"},
@@ -276,6 +274,12 @@ namespace dxvk {
 
         {DEBUG_VIEW_PRIMARY_SPECULAR_ALBEDO,               "Primary Specular Albedo"},
         {DEBUG_VIEW_SECONDARY_SPECULAR_ALBEDO,               "Secondary Specular Albedo"},
+        {DEBUG_VIEW_SECONDARY_ALBEDO,                      "Secondary Diffuse Albedo"},
+        {DEBUG_VIEW_PRIMARY_BASE_REFLECTIVITY_RAW,         "Primary Base Reflectivity (Raw)"},
+        {DEBUG_VIEW_PRIMARY_BASE_REFLECTIVITY_ADJUSTED,    "Primary Base Reflectivity (Adjusted)"},
+        {DEBUG_VIEW_SECONDARY_BASE_REFLECTIVITY_RAW,       "Secondary Base Reflectivity (Raw)"},
+        {DEBUG_VIEW_SECONDARY_BASE_REFLECTIVITY_ADJUSTED,  "Secondary Base Reflectivity (Adjusted)"},
+        {DEBUG_VIEW_SECONDARY_PERCEPTUAL_ROUGHNESS, "Secondary Perceptual Roughness" },
 
         {DEBUG_VIEW_NOISY_PRIMARY_DIRECT_DIFFUSE_RADIANCE,               "Primary Direct Diffuse: Noisy Color"},
         {DEBUG_VIEW_NOISY_PRIMARY_DIRECT_DIFFUSE_HIT_T,                  "Primary Direct Diffuse: Noisy HitT"},
@@ -376,6 +380,28 @@ namespace dxvk {
                                                   "  1: World Normal\n"
                                                   "  2: World Tangent\n"
                                                   "  3: World Bitangent" },
+        {DEBUG_VIEW_SPARSE_RENDERING_DIRECT_PIXEL_SAMPLING_RATE,        "Sparse Rendering Direct Final Sampling Probability",
+                                                                        "Shows the per-pixel direct-lighting final sampling probability." },
+        {DEBUG_VIEW_SPARSE_RENDERING_INDIRECT_PIXEL_SAMPLING_RATE,      "Sparse Rendering Indirect Final Sampling Probability",
+                                                                        "Shows the per-pixel indirect-lighting final sampling probability." },
+        {DEBUG_VIEW_SPARSE_RENDERING_ACTIVE_PIXELS_MASK,         "Sparse Rendering Active Pixel Mask",
+                                                                 "Shows the actual stochastic active pixels selected this frame." },
+        {DEBUG_VIEW_SPARSE_RENDERING_DIRECT_ACTIVE_PIXELS_PERCENTAGE, "Sparse Rendering Direct Active Pixels Percentage",
+                                                                 "Shows the per-pixel direct-lighting sampling probability." },
+        {DEBUG_VIEW_SPARSE_RENDERING_INDIRECT_ACTIVE_PIXELS_PERCENTAGE, "Sparse Rendering Indirect Active Pixels Percentage",
+                                                                 "Shows the per-pixel indirect-lighting sampling probability." },
+        {DEBUG_VIEW_SPARSE_RENDERING_DIRECT_ACTIVE_PIXELS_OUTPUT_SCALE, "Sparse Rendering Direct Active Pixel Output Scale",
+                                                                 "Shows 1 / direct sampling probability on pixels selected by the active pixel mask." },
+        {DEBUG_VIEW_SPARSE_RENDERING_INDIRECT_ACTIVE_PIXELS_OUTPUT_SCALE, "Sparse Rendering Indirect Active Pixel Output Scale",
+                                                                 "Shows 1 / indirect sampling probability on pixels selected by the active pixel mask." },
+        {DEBUG_VIEW_SPARSE_RENDERING_UNION_ACTIVE_THREADS, "Sparse Rendering Union Active Threads",
+                                                                 "Outputs 1 for pixels whose composite thread was union-active (direct or indirect active, or a primary miss)." },
+        {DEBUG_VIEW_SPARSE_RENDERING_DIRECT_ACTIVE_THREADS, "Sparse Rendering Direct Active Threads",
+                                                                 "Outputs 1 for pixels whose composite thread was direct-active." },
+        {DEBUG_VIEW_SPARSE_RENDERING_INDIRECT_ACTIVE_THREADS, "Sparse Rendering Indirect Active Threads",
+                                                                 "Outputs 1 for pixels whose composite thread was indirect-active." },
+
+        {DEBUG_VIEW_SHADOW_TERMINATOR_OFFSET, "Shadow Terminator Offset"},
       };
 
   // Note: this does a linear search through the debug view vector so do not use it in performance critical code
@@ -478,7 +504,7 @@ namespace dxvk {
   #define LIST_EXPLICIT_COMPOSITE_DEBUG_VIEWS(X) \
     X(CompositeDebugView::FinalRenderWithMaterialProperties, "Final Render + Material Properties", 3, \
       DEBUG_VIEW_POST_TONEMAP_OUTPUT, DEBUG_VIEW_ALBEDO, DEBUG_VIEW_SHADING_NORMAL, \
-      DEBUG_VIEW_PERCEPTUAL_ROUGHNESS, DEBUG_VIEW_EMISSIVE_RADIANCE, DEBUG_VIEW_HEIGHT_MAP) \
+      DEBUG_VIEW_PRIMARY_PERCEPTUAL_ROUGHNESS, DEBUG_VIEW_EMISSIVE_RADIANCE, DEBUG_VIEW_HEIGHT_MAP) \
     X(CompositeDebugView::OpaqueMaterialTextureResolutionCheckers, "Opaque Material Texture Resolution Checkers", 2, \
       DEBUG_VIEW_OPAQUE_RAW_ALBEDO_RESOLUTION_CHECKERS, DEBUG_VIEW_OPAQUE_NORMAL_RESOLUTION_CHECKERS, \
       DEBUG_VIEW_OPAQUE_ROUGHNESS_RESOLUTION_CHECKERS)
@@ -614,6 +640,7 @@ namespace dxvk {
         TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT)
         TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_SHARED_TERMINATOR_FIX_INPUT)
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -638,8 +665,6 @@ namespace dxvk {
       END_PARAMETER()
     };
 
-    PREWARM_SHADER_PIPELINE(DebugViewPostprocessShader);
-
     class DebugViewWaveformRenderShader : public ManagedShader {
       SHADER_SOURCE(DebugViewWaveformRenderShader, VK_SHADER_STAGE_COMPUTE_BIT, debug_view_waveform_render)
 
@@ -653,8 +678,6 @@ namespace dxvk {
       END_PARAMETER()
     };
 
-    PREWARM_SHADER_PIPELINE(DebugViewWaveformRenderShader);
-
     class DebugViewRenderToOutputShader : public ManagedShader {
       SHADER_SOURCE(DebugViewRenderToOutputShader, VK_SHADER_STAGE_COMPUTE_BIT, debug_view_render_to_output)
       
@@ -666,7 +689,6 @@ namespace dxvk {
       END_PARAMETER()
     };
 
-    PREWARM_SHADER_PIPELINE(DebugViewRenderToOutputShader);
   }
 
   DebugView::DebugView(dxvk::DxvkDevice* device)
@@ -681,7 +703,14 @@ namespace dxvk {
   }
 
   void DebugView::prewarmShaders(DxvkPipelineManager& pipelineManager) const {
+    if (debugViewIdx() == DEBUG_VIEW_DISABLED) {
+      return;
+    }
+
     getDebugViewShader();
+    DebugViewPostprocessShader::getShader();
+    DebugViewWaveformRenderShader::getShader();
+    DebugViewRenderToOutputShader::getShader();
   }
 
   bool DebugView::areDebugViewStatisticsSupported() const {
@@ -1474,6 +1503,8 @@ namespace dxvk {
     ctx->bindResourceView(DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT,
                            rtOutput.getPreviousPrimaryWorldPositionWorldTriangleNormal().view(Resources::AccessType::Read,
                                                                                               rtOutput.getPreviousPrimaryWorldPositionWorldTriangleNormal().matchesWriteFrameIdx(frameIdx - 1)), nullptr);
+
+    ctx->bindResourceView(DEBUG_VIEW_BINDING_SHARED_TERMINATOR_FIX_INPUT, rtOutput.getCurrentSharedTerminatorFix().view, nullptr);
 
     // Inputs / Outputs
 

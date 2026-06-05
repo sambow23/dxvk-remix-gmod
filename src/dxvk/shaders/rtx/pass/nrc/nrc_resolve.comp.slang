@@ -32,6 +32,8 @@
 #include "rtx/utility/gpu_printing.slangh"
 #include "rtx/pass/nrc/nrc_utilities.slangh"
 #include "rtx/utility/debug_view_helpers.slangh"
+#include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
+#include "rtx/pass/sparse_rendering/compact_active_pixels.slangh"
 
 // Inputs
 
@@ -52,6 +54,9 @@ RWStructuredBuffer<NrcDebugTrainingPathInfo> DebugTrainingPathInfo;
 
 layout(r16ui, binding = NRC_RESOLVE_BINDING_SHARED_FLAGS_INPUT)
 Texture2D<uint16_t> SharedFlags;
+
+layout(binding = NRC_RESOLVE_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT)
+Texture2D<uint16_t> IndirectActiveLocalPixelCoords;
 
 // Inputs / Outputs
 
@@ -83,7 +88,7 @@ enum class OutputMode
 
 void writeToDebugView(
   OutputMode outputMode,
-  uint2 pixelIndex,
+  uint2 pixelCoordinate,
   vec3 color)
 {
   // Prevent NaNs and Infs leaking into final image
@@ -104,14 +109,14 @@ void writeToDebugView(
   switch (outputMode)
   {
   case OutputMode::Add:
-    outputValue += DebugView[pixelIndex];
+    outputValue += DebugView[pixelCoordinate];
     break;
 
   case OutputMode::Replace:
     break;
   }
 
-  DebugView[pixelIndex] = outputValue;
+  DebugView[pixelCoordinate] = outputValue;
 }
 
 // Heat map where 0->1 maps to
@@ -151,13 +156,33 @@ vec3 IndexToColor(uint x)
   return color;
 }
 
-void debugResolve(uint2 pixelIndex)
+void debugResolve(uint2 pixelIndex, bool pixelIsActive)
 {
   // Early out on out-of-frame pixels
   const uint2 frameDimensions = cb.camera.resolution;
   if (any(pixelIndex >= frameDimensions))
   {
     return;
+  }
+
+  // Under sparse rendering, inactive screen pixels have no valid per-pixel query data. Only the
+  // training-pixel-backed modes are valid for inactive pixels (their source is DebugTrainingPathInfo
+  // which is per training pixel, shared across every screen pixel in the same training tile).
+  if (!pixelIsActive)
+  {
+    switch (push.resolveMode)
+    {
+    case NrcResolveMode::TrainingBounceHeatMap:
+    case NrcResolveMode::TrainingBounceHeatMapSmoothed:
+    case NrcResolveMode::PrimaryVertexTrainingRadiance:
+    case NrcResolveMode::PrimaryVertexTrainingRadianceSmoothed:
+    case NrcResolveMode::SecondaryVertexTrainingRadiance:
+    case NrcResolveMode::SecondaryVertexTrainingRadianceSmoothed:
+    case NrcResolveMode::TrainingQueryIndex:
+      break;
+    default:
+      return;
+    }
   }
 
   const uint samplesPerPixel = push.samplesPerPixel;
@@ -234,10 +259,20 @@ void debugResolve(uint2 pixelIndex)
   {
     if (push.debugBuffersAreEnabled)
     {
-      // We store smoothed color data in one of our debug buffers
+      // We store smoothed color data in one of our debug buffers.
+      // Only active screen pixels update the per-training-pixel accumulation; inactive pixels just
+      // read the latest accumulated value for display. This avoids both racing writes and repeated
+      // lerps within a single training tile under sparse rendering.
       vec3 previous = DebugTrainingPathInfo[trainingPathIndex].accumulation;
-      outputColor = lerp(previous, outputColor, push.resolveModeAccumulationWeight);
-      DebugTrainingPathInfo[trainingPathIndex].accumulation = outputColor;
+      if (pixelIsActive)
+      {
+        outputColor = lerp(previous, outputColor, push.resolveModeAccumulationWeight);
+        DebugTrainingPathInfo[trainingPathIndex].accumulation = outputColor;
+      }
+      else
+      {
+        outputColor = previous;
+      }
       }
     }
     break;
@@ -250,7 +285,7 @@ void debugResolve(uint2 pixelIndex)
 }
 
 vec3 loadIndirectRadiance(
-  uint2 launchIndex,
+  uint2 pixelCoordinate,
   GeometryFlags geometryFlags)
 {
   // Indirect NEE shader already split radiance into diffuse and specular resources for the primary surface
@@ -258,21 +293,21 @@ vec3 loadIndirectRadiance(
   {
     if (geometryFlags.firstSampledLobeIsSpecular)
     {
-      return PrimarySpecularRadianceHitDistance[launchIndex].xyz;
+      return PrimarySpecularRadianceHitDistance[pixelCoordinate].xyz;
     }
     else
     {
-      return PrimaryDiffuseRadianceHitDistance[launchIndex].xyz;
+      return PrimaryDiffuseRadianceHitDistance[pixelCoordinate].xyz;
     }
   }
   else
   {
-    return IndirectRadianceHitDistance[launchIndex].xyz;
+    return IndirectRadianceHitDistance[pixelCoordinate].xyz;
   }
 }
 
 void storeIndirectRadiance(
-  uint2 launchIndex,
+  uint2 pixelCoordinate,
   GeometryFlags geometryFlags,
   vec3 indirectRadiance)
 {
@@ -280,51 +315,60 @@ void storeIndirectRadiance(
   {
     if (geometryFlags.firstSampledLobeIsSpecular)
     {
-      PrimarySpecularRadianceHitDistance[launchIndex].xyz = indirectRadiance;
+      PrimarySpecularRadianceHitDistance[pixelCoordinate].xyz = indirectRadiance;
     }
     else
     {
-      PrimaryDiffuseRadianceHitDistance[launchIndex].xyz = indirectRadiance;
+      PrimaryDiffuseRadianceHitDistance[pixelCoordinate].xyz = indirectRadiance;
     }
   }
   else
   {
-    IndirectRadianceHitDistance[launchIndex].xyz = indirectRadiance;
+    IndirectRadianceHitDistance[pixelCoordinate].xyz = indirectRadiance;
   }
 
   if (cb.debugView == DEBUG_VIEW_NRC_RESOLVED_RADIANCE)
   {
-    storeInDebugView(launchIndex, indirectRadiance);
+    storeInDebugView(pixelCoordinate, indirectRadiance);
   }
 }
 
 [shader("compute")]
 [numthreads(NRC_RESOLVE_THREADS_DISPATCH_WIDTH, NRC_RESOLVE_THREADS_DISPATCH_HEIGHT, 1)]
-void main(uint2 launchIndex: SV_DispatchThreadID)
+void main(uint2 threadIndex: SV_DispatchThreadID)
 {
-  if (any(launchIndex >= push.resolution))
+  if (any(threadIndex >= cb.camera.resolution))
   {
     return;
   }
 
-  if (push.resolveMode != NrcResolveMode::AddQueryResultToOutput) 
+  uvec2 pixelCoordinate;
+  const bool pixelIsActive = loadPixelCoordinate(threadIndex, IndirectActiveLocalPixelCoords,
+                                                 cb.camera.resolution, cb.sparseRenderingArgs, pixelCoordinate);
+
+  if (push.resolveMode != NrcResolveMode::AddQueryResultToOutput)
   {
-    debugResolve(launchIndex);
+    debugResolve(pixelCoordinate, pixelIsActive);
+  }
+
+  if (!pixelIsActive)
+  {
+    return;
   }
     
-  const GeometryFlags geometryFlags = geometryFlagsReadFromGBuffer(launchIndex, SharedFlags);
+  const GeometryFlags geometryFlags = geometryFlagsReadFromGBuffer(pixelCoordinate, SharedFlags);
 
   const uint sampleIndex = 0;
   const uint samplesPerPixel = push.samplesPerPixel;
 
-  const uint pathIndex = NrcCalculateQueryPathIndex(push.resolution, launchIndex, sampleIndex, samplesPerPixel);
+  const uint pathIndex = NrcCalculateQueryPathIndex(cb.camera.resolution, pixelCoordinate, sampleIndex, samplesPerPixel);
   const NrcQueryPathInfo queryPathInfo = NrcUnpackQueryPathInfo(QueryPathInfo[pathIndex]);
 
   vec3 indirectRadiance = vec3(0);
 
   if (push.addPathtracedRadiance)
   {
-    indirectRadiance = loadIndirectRadiance(launchIndex, geometryFlags);
+    indirectRadiance = loadIndirectRadiance(pixelCoordinate, geometryFlags);
   }
 
   // Resolve NRC radiance
@@ -340,6 +384,5 @@ void main(uint2 launchIndex: SV_DispatchThreadID)
     }
   }  
 
-
-  storeIndirectRadiance(launchIndex, geometryFlags, indirectRadiance);
+  storeIndirectRadiance(pixelCoordinate, geometryFlags, indirectRadiance);
 }

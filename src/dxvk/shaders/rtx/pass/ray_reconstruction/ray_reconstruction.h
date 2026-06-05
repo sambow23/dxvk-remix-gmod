@@ -43,7 +43,6 @@
 #define RAY_RECONSTRUCTION_SECONDARY_VIRTUAL_WORLD_SHADING_NORMAL_INPUT 13
 
 #define RAY_RECONSTRUCTION_SHARED_FLAGS_INPUT                 20
-#define RAY_RECONSTRUCTION_COMBINED_INPUT                     21
 #define RAY_RECONSTRUCTION_NORMALS_DLSSRR_INPUT               22
 #define RAY_RECONSTRUCTION_DEPTHS_INPUT                       23
 #define RAY_RECONSTRUCTION_MOTION_VECTOR_INPUT                24
@@ -53,7 +52,6 @@
 #define RAY_RECONSTRUCTION_PRIMARY_SPECULAR_ALBEDO_INPUT_OUTPUT 41
 
 // Outputs
-#define RAY_RECONSTRUCTION_HIT_DISTANCE_OUTPUT                  51
 #define RAY_RECONSTRUCTION_DEBUG_VIEW_OUTPUT                    52
 #define RAY_RECONSTRUCTION_PRIMARY_DISOCCLUSION_MASK_OUTPUT     53
 
@@ -66,15 +64,15 @@ struct RayReconstructionArgs {
   uint enableDemodulateRoughness;
   float upscalerRoughnessDemodulationMultiplier;
   float upscalerRoughnessDemodulationOffset;
-  uint debugViewIdx;
+  uint debugView;
 
   uint particleBufferMode;
-  uint enableDemodulateAttenuation;
   uint combineSpecularAlbedo;
   uint frameIdx;
+  float rcpSquaredDisocclusionMaskBlurGaussianWeightSigma;
 
   uint enableDisocclusionMaskBlur;
   uint disocclusionMaskBlurRadius;
-  float rcpSquaredDisocclusionMaskBlurGaussianWeightSigma;
+  uint enableReSTIRGI;
   uint pad0;
 };

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
+* Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -32,6 +32,9 @@ SamplerCube<float3> SkyProbe;
 [[vk::binding(INTEGRATE_DIRECT_BINDING_SHARED_INTEGRATION_SURFACE_PDF_INPUT)]]
 Texture2D<float> SharedIntegrationSurfacePdf;
 
+[[vk::binding(INTEGRATE_DIRECT_BINDING_SHARED_SHADOW_TERMINATOR_FIX_INPUT)]]
+Texture2D<float> SharedTerminatorFix;
+
 [[vk::binding(INTEGRATE_DIRECT_BINDING_SHARED_MATERIAL_DATA0_INPUT)]]
 Texture2D<uint> SharedMaterialData0;
 
@@ -49,6 +52,12 @@ Texture2D<uint2> SharedSubsurfaceData;
 
 [[vk::binding(INTEGRATE_DIRECT_BINDING_SHARED_SUBSURFACE_DIFFUSION_PROFILE_DATA_INPUT)]]
 Texture2D<uint2> SharedSubsurfaceDiffusionProfileData;
+
+[[vk::binding(INTEGRATE_DIRECT_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT)]]
+Texture2D<uint16_t> DirectActiveLocalPixelCoords;
+
+[[vk::binding(INTEGRATE_DIRECT_BINDING_SPARSE_RENDERING_INDIRECT_ACTIVE_PIXEL_MASK_INPUT)]]
+Texture2D<uint> SparseRenderingIndirectActivePixelMask;
 
 // Shared Inputs/Outputs
 

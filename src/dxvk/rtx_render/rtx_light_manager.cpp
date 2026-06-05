@@ -719,7 +719,6 @@ namespace dxvk {
     fork_hooks::updateLightStaticSleep(light, newLight, m_device, externalId);
   }
 
-
   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
     auto found = m_externalLights.find(handle);
     if (found != m_externalLights.end()) {
