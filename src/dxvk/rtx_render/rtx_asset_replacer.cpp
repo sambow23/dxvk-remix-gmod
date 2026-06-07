@@ -29,6 +29,19 @@
 #include "rtx_utils.h"
 #include "rtx_asset_data_manager.h"
 
+#include <mutex>
+#include <unordered_set>
+
+namespace {
+  std::mutex s_materialReplacementLogMutex;
+  std::unordered_set<XXH64_hash_t> s_loggedReplacementMaterialHits;
+
+  bool shouldLogReplacementMaterialHit(XXH64_hash_t hash) {
+    std::lock_guard lock(s_materialReplacementLogMutex);
+    return s_loggedReplacementMaterialHits.insert(hash).second;
+  }
+}
+
 namespace dxvk {
 
 std::vector<AssetReplacement>* AssetReplacer::getReplacementsForMesh(XXH64_hash_t hash) {
@@ -70,6 +83,14 @@ MaterialData* AssetReplacer::getReplacementMaterial(XXH64_hash_t hash) {
   for (auto& mod : m_modManager.mods()) {
     MaterialData* material;
     if (mod->replacements().getObject(hash, material)) {
+      if (shouldLogReplacementMaterialHit(hash)) {
+        Logger::info(str::format(
+          "[RTX-Material-Replacement] Found replacement for hash 0x",
+          std::hex, hash,
+          std::dec,
+          " in ",
+          mod->path().string()));
+      }
       return material;
     }
   }

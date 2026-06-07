@@ -116,8 +116,17 @@ namespace dxvk {
 
     // Checks for a USD material replacement and updates the material pointer in-place.
     // Implementation in rtx_fork_submit.cpp.
-    void externalDrawMaterialReplacement(
-      AssetReplacer& replacer, const MaterialData*& material);
+    XXH64_hash_t externalDrawMaterialReplacement(
+      AssetReplacer& replacer,
+      remixapi_MaterialHandle handle,
+      const MaterialData*& material);
+
+    // Merges original external material state into a replacement material for
+    // API draws so replacement-authored fields win while unspecified fields
+    // inherit from the game-provided material.
+    void mergeExternalMaterialState(
+      const MaterialData& originalMaterial,
+      MaterialData& replacementMaterial);
 
     // Resolves the albedo texture hash from an API material and auto-applies
     // all texture-based instance categories (Sky, Ignore, WorldUI, etc.).

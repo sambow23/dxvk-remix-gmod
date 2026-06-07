@@ -536,10 +536,13 @@ namespace dxvk {
     assert(meshHash != 0);
 
     const LegacyMaterialData& material = pBlas->getMaterialData(matHash);
+    const remixapi_MaterialHandle externalMaterialHandle = pBlas->input.getGeometryData().externalMaterial;
 
-    // For API materials, use the MaterialData hash (what runtime uses for replacement lookup).
-    // For D3D9 materials this equals matHash, but for API-submitted materials the two differ.
-    const XXH64_hash_t materialLookupHash = material.getHash();
+    // API-submitted materials use the stable API material handle hash for replacement lookup and
+    // USD export naming. D3D9 materials continue to use their runtime material hash.
+    const XXH64_hash_t materialLookupHash = externalMaterialHandle != nullptr
+      ? reinterpret_cast<XXH64_hash_t>(externalMaterialHandle)
+      : material.getHash();
 
     const bool bIsNewMat = (materialLookupHash != 0x0) && (m_pCap->materials.count(materialLookupHash) == 0);
     if (bIsNewMat) {

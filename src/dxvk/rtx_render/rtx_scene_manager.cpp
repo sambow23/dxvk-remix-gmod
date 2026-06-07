@@ -2432,11 +2432,15 @@ namespace dxvk {
 
       XXH64_hash_t textureHash = 0;
 
-      const MaterialData* material = m_pReplacer->accessExternalMaterial(submeshes[i].externalMaterial);
+      const MaterialData* originalMaterial = m_pReplacer->accessExternalMaterial(submeshes[i].externalMaterial);
+      const MaterialData* material = originalMaterial;
       if (material != nullptr) {
-        fork_hooks::externalDrawMaterialReplacement(*m_pReplacer, material);
+        const XXH64_hash_t materialLookupHash = fork_hooks::externalDrawMaterialReplacement(
+          *m_pReplacer,
+          submeshes[i].externalMaterial,
+          material);
 
-        state.drawCall.materialData.setHashOverride(material->getHash());
+        state.drawCall.materialData.setHashOverride(materialLookupHash);
 
         fork_hooks::externalDrawTextureCategories(material, state.drawCall, textureHash);
       }
@@ -2451,8 +2455,15 @@ namespace dxvk {
       RtInstance* existingInstance = (replacementInstance->prims.size() > i)
           ? replacementInstance->prims[i].getInstance() : nullptr;
 
+      MaterialData renderMaterialData = material != nullptr
+        ? MaterialData(*material)
+        : LegacyMaterialData().as<OpaqueMaterialData>();
+      if (originalMaterial != nullptr && material != nullptr && originalMaterial != material) {
+        fork_hooks::mergeExternalMaterialState(*originalMaterial, renderMaterialData);
+      }
+
       RtInstance* instance = processDrawCallState(ctx, state.drawCall,
-          material != nullptr ? MaterialData(*material) : LegacyMaterialData().as<OpaqueMaterialData>(),
+          renderMaterialData,
           existingInstance, pParticles);
 
       if (instance != nullptr) {

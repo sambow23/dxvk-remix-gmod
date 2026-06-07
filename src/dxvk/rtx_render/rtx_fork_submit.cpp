@@ -20,8 +20,25 @@
 
 #include "dxvk_device.h"          // DxvkDevice::getCommon()->getResources()
 
+#include <mutex>
+#include <unordered_set>
+
 namespace dxvk {
 namespace fork_hooks {
+
+  namespace {
+    std::mutex s_externalMaterialReplacementLogMutex;
+    std::unordered_set<XXH64_hash_t> s_loggedExternalMaterialReplacementHits;
+    std::unordered_set<XXH64_hash_t> s_loggedExternalMaterialReplacementMisses;
+
+    bool shouldLogExternalMaterialReplacement(
+        std::unordered_set<XXH64_hash_t>& loggedHashes,
+        XXH64_hash_t hash) {
+      std::lock_guard lock(s_externalMaterialReplacementLogMutex);
+      return loggedHashes.insert(hash).second;
+    }
+
+  }
 
   // ---------------------------------------------------------------------------
   // externalDrawMeshReplacement
@@ -42,15 +59,60 @@ namespace fork_hooks {
   // ---------------------------------------------------------------------------
   // externalDrawMaterialReplacement
   //
-  // Checks for a USD material replacement via getReplacementMaterial() and
-  // updates the caller's material pointer in-place if one is found.
+  // Checks for a USD material replacement via getReplacementMaterial() keyed
+  // on the stable API material handle hash when one is present, and updates
+  // the caller's material pointer in-place if one is found.
   // ---------------------------------------------------------------------------
-  void externalDrawMaterialReplacement(
-      AssetReplacer& replacer, const MaterialData*& material) {
-    // Check for material replacement (matches the D3D9 draw path behavior).
-    MaterialData* pReplacementMaterial = replacer.getReplacementMaterial(material->getHash());
+  XXH64_hash_t externalDrawMaterialReplacement(
+      AssetReplacer& replacer,
+      remixapi_MaterialHandle handle,
+      const MaterialData*& material) {
+    const XXH64_hash_t lookupHash = handle != nullptr
+      ? reinterpret_cast<XXH64_hash_t>(handle)
+      : material->getHash();
+
+    MaterialData* pReplacementMaterial = replacer.getReplacementMaterial(lookupHash);
     if (pReplacementMaterial != nullptr) {
+      if (shouldLogExternalMaterialReplacement(s_loggedExternalMaterialReplacementHits, lookupHash)) {
+        Logger::info(str::format(
+          "[RTX-External-Material-Replacement] Replaced API material hash 0x",
+          std::hex, lookupHash,
+          std::dec,
+          "."));
+      }
       material = pReplacementMaterial;
+    } else {
+      if (shouldLogExternalMaterialReplacement(s_loggedExternalMaterialReplacementMisses, lookupHash)) {
+        Logger::info(str::format(
+          "[RTX-External-Material-Replacement] No replacement for API material hash 0x",
+          std::hex, lookupHash,
+          std::dec,
+          "."));
+      }
+    }
+
+    return lookupHash;
+  }
+
+  void mergeExternalMaterialState(
+      const MaterialData& originalMaterial,
+      MaterialData& replacementMaterial) {
+    if (originalMaterial.getType() != replacementMaterial.getType()) {
+      return;
+    }
+
+    switch (replacementMaterial.getType()) {
+    case MaterialDataType::Opaque:
+      replacementMaterial.getOpaqueMaterialData().merge(originalMaterial.getOpaqueMaterialData());
+      break;
+    case MaterialDataType::Translucent:
+      replacementMaterial.getTranslucentMaterialData().merge(originalMaterial.getTranslucentMaterialData());
+      break;
+    case MaterialDataType::RayPortal:
+      replacementMaterial.getRayPortalMaterialData().merge(originalMaterial.getRayPortalMaterialData());
+      break;
+    default:
+      break;
     }
   }
 
