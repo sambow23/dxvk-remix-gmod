@@ -21,6 +21,7 @@
 #include "rtx_game_capturer.h"       // GameCapturer (full definition for friend access)
 #include "rtx_instance_manager.h"    // RtInstance
 #include "rtx_materials.h"           // LegacyMaterialData, kSurfaceMaterialInvalidTextureIndex
+#include "rtx_scene_manager.h"       // SceneManager sampler table
 #include "rtx_texture_manager.h"     // RtxTextureManager, TextureRef
 #include "rtx_constants.h"           // kEmptyHash
 #include "rtx_options.h"             // RtxOptions::leftHandedCoordinateSystem()
@@ -143,8 +144,19 @@ namespace fork_hooks {
 
     lssMat.enableOpacity = bEnableOpacity;
 
-    // Sampler info is only available on the D3D9 path; API-submitted materials may have no sampler.
-    const auto& sampler = materialData.getSampler();
+    // Prefer the scene-manager sampler table because it reflects the raytraced
+    // surface material state after MaterialData::populateSamplerInfo() has been applied.
+    const auto& samplerTable = ctx->getCommonObjects()->getSceneManager().getSamplerTable();
+    const auto samplerIndex = rtInstance.getSamplerIndex();
+    Rc<DxvkSampler> sampler = nullptr;
+    if (samplerIndex != kSurfaceMaterialInvalidTextureIndex && samplerIndex < samplerTable.size()) {
+      sampler = samplerTable[samplerIndex];
+    }
+
+    if (sampler == nullptr) {
+      sampler = materialData.getSampler();
+    }
+
     if (sampler != nullptr) {
       const auto& samplerCreateInfo = sampler->info();
       lssMat.sampler.addrModeU = samplerCreateInfo.addressModeU;

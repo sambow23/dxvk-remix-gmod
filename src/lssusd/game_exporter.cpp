@@ -91,6 +91,136 @@
 #endif
 
 namespace {
+bool replaceSubstring(std::string& text, const char* from, const char* to) {
+  const std::string source(from);
+  const size_t position = text.find(source);
+
+  if (position == std::string::npos) {
+    return false;
+  }
+
+  text.replace(position, source.size(), to);
+  return true;
+}
+
+std::string patchCaptureMaterialMdl(const char* fileName, std::string text) {
+  static const char* kNearestSamplingHelpers = R"MDL(
+
+float wrapNearestUv(float uv, uniform tex::wrap_mode wrap_mode)
+{
+  if (wrap_mode == tex::wrap_repeat) {
+    float wrapped = math::fmod(uv, 1.0f);
+    return wrapped < 0.0f ? wrapped + 1.0f : wrapped;
+  }
+
+  if (wrap_mode == tex::wrap_mirrored_repeat) {
+    float wrapped = math::fmod(uv, 2.0f);
+    if (wrapped < 0.0f) {
+      wrapped += 2.0f;
+    }
+    return wrapped <= 1.0f ? wrapped : 2.0f - wrapped;
+  }
+
+  return math::min(1.0f, math::max(0.0f, uv));
+}
+
+bool shouldClipNearest(float uv, uniform tex::wrap_mode wrap_mode)
+{
+  return wrap_mode == tex::wrap_clip && (uv < 0.0f || uv > 1.0f);
+}
+
+int nearestTexelCoord(float uv, uniform int dimension, uniform tex::wrap_mode wrap_mode)
+{
+  float wrappedUv = wrapNearestUv(uv, wrap_mode);
+  int coord = int(math::floor(wrappedUv * float(dimension)));
+
+  if (coord < 0) {
+    return 0;
+  }
+
+  if (coord >= dimension) {
+    return dimension - 1;
+  }
+
+  return coord;
+}
+
+float4 sampleTextureFloat4(uniform texture_2d texture, float2 uv, uniform FilterMode filter_mode,
+                           uniform tex::wrap_mode wrap_mode_u, uniform tex::wrap_mode wrap_mode_v)
+{
+  if (filter_mode != Nearest) {
+    return tex::lookup_float4(texture, uv, wrap_mode_u, wrap_mode_v);
+  }
+
+  if (shouldClipNearest(uv.x, wrap_mode_u) || shouldClipNearest(uv.y, wrap_mode_v)) {
+    return float4(0.0f);
+  }
+
+  uniform int width = tex::width(texture);
+  uniform int height = tex::height(texture);
+  if (width == 0 || height == 0) {
+    return float4(0.0f);
+  }
+
+  int2 coord = int2(nearestTexelCoord(uv.x, width, wrap_mode_u),
+                    nearestTexelCoord(uv.y, height, wrap_mode_v));
+  return tex::texel_float4(texture, coord, int2(0, 0));
+}
+
+float sampleTextureFloat(uniform texture_2d texture, float2 uv, uniform FilterMode filter_mode,
+                         uniform tex::wrap_mode wrap_mode_u, uniform tex::wrap_mode wrap_mode_v)
+{
+  return sampleTextureFloat4(texture, uv, filter_mode, wrap_mode_u, wrap_mode_v).x;
+}
+
+color sampleTextureColor(uniform texture_2d texture, float2 uv, uniform FilterMode filter_mode,
+                         uniform tex::wrap_mode wrap_mode_u, uniform tex::wrap_mode wrap_mode_v)
+{
+  float4 sampled = sampleTextureFloat4(texture, uv, filter_mode, wrap_mode_u, wrap_mode_v);
+  return color(sampled.x, sampled.y, sampled.z);
+}
+)MDL";
+
+  if (std::string(fileName) == "AperturePBR_Opacity.mdl") {
+    const bool inserted = replaceSubstring(text, "export material AperturePBR_Opacity(",
+      (std::string(kNearestSamplingHelpers) + "\nexport material AperturePBR_Opacity(").c_str());
+    const bool replacedBase = replaceSubstring(text,
+      "tex::lookup_float4(diffuse_texture, final_uv, wrap_mode_u, wrap_mode_v)",
+      "sampleTextureFloat4(diffuse_texture, final_uv, filter_mode, wrap_mode_u, wrap_mode_v)");
+    const bool replacedRoughness = replaceSubstring(text,
+      "tex::lookup_float(reflectionroughness_texture, final_uv, wrap_mode_u, wrap_mode_v)",
+      "sampleTextureFloat(reflectionroughness_texture, final_uv, filter_mode, wrap_mode_u, wrap_mode_v)");
+    const bool replacedAnisotropy = replaceSubstring(text,
+      "tex::lookup_float(anisotropy_texture, final_uv, wrap_mode_u, wrap_mode_v)",
+      "sampleTextureFloat(anisotropy_texture, final_uv, filter_mode, wrap_mode_u, wrap_mode_v)");
+    const bool replacedMetallic = replaceSubstring(text,
+      "tex::lookup_float(metallic_texture, final_uv, wrap_mode_u, wrap_mode_v)",
+      "sampleTextureFloat(metallic_texture, final_uv, filter_mode, wrap_mode_u, wrap_mode_v)");
+    const bool replacedEmissive = replaceSubstring(text,
+      "tex::lookup_color(emissive_mask_texture, final_uv, wrap_mode_u, wrap_mode_v)",
+      "sampleTextureColor(emissive_mask_texture, final_uv, filter_mode, wrap_mode_u, wrap_mode_v)");
+
+    if (!(inserted && replacedBase && replacedRoughness && replacedAnisotropy && replacedMetallic && replacedEmissive)) {
+      dxvk::Logger::warn(dxvk::str::format("[GameExporter] Failed to patch nearest-sampling capture material: ", fileName));
+    }
+  } else if (std::string(fileName) == "AperturePBR_Translucent.mdl") {
+    const bool inserted = replaceSubstring(text, "export material AperturePBR_Translucent(",
+      (std::string(kNearestSamplingHelpers) + "\nexport material AperturePBR_Translucent(").c_str());
+    const bool replacedTransmittance = replaceSubstring(text,
+      "tex::lookup_float4(transmittance_texture, final_uv, wrap_mode_u, wrap_mode_v)",
+      "sampleTextureFloat4(transmittance_texture, final_uv, filter_mode, wrap_mode_u, wrap_mode_v)");
+    const bool replacedEmissive = replaceSubstring(text,
+      "tex::lookup_color(emissive_mask_texture, final_uv, wrap_mode_u, wrap_mode_v)",
+      "sampleTextureColor(emissive_mask_texture, final_uv, filter_mode, wrap_mode_u, wrap_mode_v)");
+
+    if (!(inserted && replacedTransmittance && replacedEmissive)) {
+      dxvk::Logger::warn(dxvk::str::format("[GameExporter] Failed to patch nearest-sampling capture material: ", fileName));
+    }
+  }
+
+  return text;
+}
+
 pxr::VtMatrix4dArray sanitizeBoneXforms(const pxr::VtMatrix4dArray& xforms,
                                         const pxr::VtMatrix4dArray& bindPose,
                                         const lss::Export::Meta& meta) {
@@ -293,20 +423,23 @@ void GameExporter::createApertureMdls(const std::string& baseExportPath) {
   const std::string materialsDirPath = baseExportPath + "/" + commonDirName::matDir;
   dxvk::env::createDirectory(materialsDirPath);
 
-  auto writeFile = [](const std::string& path, const auto& data) {
+  auto writeFile = [](const std::string& path, const char* fileName, const auto& data) {
+    std::string fileText(reinterpret_cast<const char*>(data), sizeof(data));
+    fileText = patchCaptureMaterialMdl(fileName, std::move(fileText));
+
     std::ofstream stream(path, std::ios_base::binary);
     if (stream.is_open()) {
-      stream.write(reinterpret_cast<const char*>(data), sizeof(data));
+      stream.write(fileText.data(), fileText.size());
     } else {
       dxvk::Logger::info(dxvk::str::format("[GameExporter] Unable to create file: ", path));
     }
   };
 
-  writeFile(materialsDirPath + "AperturePBR_Opacity.mdl", ___AperturePBR_Opacity);
-  writeFile(materialsDirPath + "AperturePBR_Translucent.mdl", ___AperturePBR_Translucent);
-  writeFile(materialsDirPath + "AperturePBR_Model.mdl", ___AperturePBR_Model);
-  writeFile(materialsDirPath + "AperturePBR_Normal.mdl", ___AperturePBR_Normal);
-  writeFile(materialsDirPath + "AperturePBR_SpriteSheet.mdl", ___AperturePBR_SpriteSheet);
+  writeFile(materialsDirPath + "AperturePBR_Opacity.mdl", "AperturePBR_Opacity.mdl", ___AperturePBR_Opacity);
+  writeFile(materialsDirPath + "AperturePBR_Translucent.mdl", "AperturePBR_Translucent.mdl", ___AperturePBR_Translucent);
+  writeFile(materialsDirPath + "AperturePBR_Model.mdl", "AperturePBR_Model.mdl", ___AperturePBR_Model);
+  writeFile(materialsDirPath + "AperturePBR_Normal.mdl", "AperturePBR_Normal.mdl", ___AperturePBR_Normal);
+  writeFile(materialsDirPath + "AperturePBR_SpriteSheet.mdl", "AperturePBR_SpriteSheet.mdl", ___AperturePBR_SpriteSheet);
 }
 
 namespace{
@@ -343,10 +476,10 @@ static std::unordered_map<Enum,std::string> attrNames {
   {ImplSrc,          "info:implementationSource"},
   {MdlSrcAsset,      "info:mdl:sourceAsset"},
   {MdlSrcAssetSubId, "info:mdl:sourceAsset:subIdentifier"},
-  {Opacity,          "enable_opacity"},
-  {FilterMode,       "filter_mode"},
-  {WrapModeU,        "wrap_mode_u"},
-  {WrapModeV,        "wrap_mode_v"},
+  {Opacity,          "inputs:enable_opacity"},
+  {FilterMode,       "inputs:filter_mode"},
+  {WrapModeU,        "inputs:wrap_mode_u"},
+  {WrapModeV,        "inputs:wrap_mode_v"},
 };
 static std::unordered_map<Enum,AttrDesc> attrDescs{
   AttrDescMapEntry(OutputsOut,       Token, false, Varying),
@@ -354,10 +487,10 @@ static std::unordered_map<Enum,AttrDesc> attrDescs{
   AttrDescMapEntry(ImplSrc,          Token, false, Uniform),
   AttrDescMapEntry(MdlSrcAsset,      Asset, false, Uniform),
   AttrDescMapEntry(MdlSrcAssetSubId, Token, false, Uniform),
-  AttrDescMapEntry(Opacity,           Bool, false, Uniform),
-  AttrDescMapEntry(FilterMode,        UInt, false, Uniform),
-  AttrDescMapEntry(WrapModeU,         UInt, false, Uniform),
-  AttrDescMapEntry(WrapModeV,         UInt, false, Uniform),
+  AttrDescMapEntry(Opacity,           Bool, true, Uniform),
+  AttrDescMapEntry(FilterMode,         Int, true, Uniform),
+  AttrDescMapEntry(WrapModeU,          Int, true, Uniform),
+  AttrDescMapEntry(WrapModeV,          Int, true, Uniform),
 };
 }
 }
@@ -366,6 +499,31 @@ void GameExporter::exportMaterials(const Export& exportData, ExportContext& ctx)
   dxvk::Logger::debug("[GameExporter][" + exportData.debugId + "][exportMaterials] Begin");
   const std::string matDirPath = exportData.baseExportPath + "/" + commonDirName::matDir;
   const std::string fullMaterialBasePath = computeLocalPath(matDirPath);
+
+  const auto authorMaterialShaderInputs = [](const pxr::UsdPrim& shaderPrim,
+                                             const Material& matData,
+                                             const std::string& diffuseTexturePath,
+                                             const std::string& mdlSourceAssetPath) {
+    std::unordered_map<ShaderAttr::Enum, pxr::UsdAttribute> shaderAttrs;
+    for (const auto& [attrEnum, desc] : ShaderAttr::attrDescs) {
+      shaderAttrs[attrEnum] =
+        shaderPrim.CreateAttribute(desc.attrName, desc.typeName, desc.custom, desc.sdfVariability);
+    }
+
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::DiffuseTex].Set(pxr::SdfAssetPath(diffuseTexturePath)));
+    shaderAttrs[ShaderAttr::DiffuseTex].SetColorSpace(pxr::TfToken("auto"));
+
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::ImplSrc].Set(pxr::TfToken("sourceAsset")));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::MdlSrcAsset].Set(pxr::SdfAssetPath(mdlSourceAssetPath)));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::MdlSrcAssetSubId].Set(pxr::TfToken("AperturePBR_Opacity")));
+
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::Opacity].Set(matData.enableOpacity));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::FilterMode].Set((int)lss::Mdl::Filter::vkToMdl(matData.sampler.filter)));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::WrapModeU].Set((int)lss::Mdl::WrapMode::vkToMdl(matData.sampler.addrModeU)));
+    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::WrapModeV].Set((int)lss::Mdl::WrapMode::vkToMdl(matData.sampler.addrModeV)));
+
+    return shaderAttrs;
+  };
   
   dxvk::env::createDirectory(matDirPath);
   for(const auto& [matId, matData] : exportData.materials) {
@@ -397,42 +555,24 @@ void GameExporter::exportMaterials(const Export& exportData, ExportContext& ctx)
     const auto shaderPrim = shader.GetPrim();
     assert(shaderPrim);
 
-    std::unordered_map<ShaderAttr::Enum, pxr::UsdAttribute> shaderAttrs;
-    for(const auto& [attrEnum, desc] : ShaderAttr::attrDescs) {
-      shaderAttrs[attrEnum] =
-        shaderPrim.CreateAttribute(desc.attrName, desc.typeName, desc.custom, desc.sdfVariability);
-      // Cannot assert. Attr "outputs:out" asserts false, but authoring + Setting works just fine.
-      // assert(shaderAttrs[attrEnum]); 
-    }
+    const auto relToMaterialsTexPath =
+      std::filesystem::relative(computeLocalPath(matData.albedoTexPath), fullMaterialBasePath).string();
+    const std::string materialMdlAssetPath = "./AperturePBR_Opacity.mdl";
+    const std::string relToInstanceTexPath =
+      std::filesystem::relative(computeLocalPath(matData.albedoTexPath), computeLocalPath(exportData.baseExportPath)).string();
+    const std::string instanceMdlAssetPath = commonDirName::matDir + "AperturePBR_Opacity.mdl";
 
     // Create and connect material outputs to shader outputs
     static const pxr::TfToken kTokOutputsMdlSurface("outputs:mdl:surface");
     const auto outputsMdlSurfaceAttr =
       matPrim.CreateAttribute(kTokOutputsMdlSurface, pxr::SdfValueTypeNames->Token, false, pxr::SdfVariabilityVarying);
+
+    auto shaderAttrs = authorMaterialShaderInputs(shaderPrim, matData, relToMaterialsTexPath, materialMdlAssetPath);
     outputsMdlSurfaceAttr.AddConnection(shaderAttrs[ShaderAttr::OutputsOut].GetPath(), pxr::UsdListPositionFrontOfAppendList);
 
     // Set shader "Kind"
     static const pxr::TfToken kTokMaterial("Material");
     pxr::UsdModelAPI(shader).SetKind(kTokMaterial);
-
-    // Create and set textures asset paths on material
-    const auto relToMaterialsTexPath =
-      std::filesystem::relative(computeLocalPath(matData.albedoTexPath), fullMaterialBasePath).string();
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::DiffuseTex].Set(pxr::SdfAssetPath(relToMaterialsTexPath)));
-    shaderAttrs[ShaderAttr::DiffuseTex].SetColorSpace(pxr::TfToken("auto"));
-
-    // Create and set OmniPBR MDL boilerplate attributes on shader
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::ImplSrc].Set(pxr::TfToken("sourceAsset")));
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::MdlSrcAsset].Set(pxr::SdfAssetPath("./AperturePBR_Opacity.mdl")));
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::MdlSrcAssetSubId].Set(pxr::TfToken("AperturePBR_Opacity")));
-
-    // Mark whether to enable varying opacity
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::Opacity].Set(matData.enableOpacity));
-
-    // Sampler State
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::FilterMode].Set((uint32_t)lss::Mdl::Filter::vkToMdl(matData.sampler.filter)));
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::WrapModeU].Set((uint32_t)lss::Mdl::WrapMode::vkToMdl(matData.sampler.addrModeU)));
-    ASSERT_OR_EXECUTE(shaderAttrs[ShaderAttr::WrapModeV].Set((uint32_t)lss::Mdl::WrapMode::vkToMdl(matData.sampler.addrModeV)));
 
     matStage->Save();
     
@@ -450,6 +590,17 @@ void GameExporter::exportMaterials(const Export& exportData, ExportContext& ctx)
       const std::string relMeshStagePath = commonDirName::matDir + matName + ctx.extension;
       auto matInstanceUsdReferences = matInstanceSchema.GetPrim().GetReferences();
       matInstanceUsdReferences.AddReference(relMeshStagePath, matSdfPath);
+
+      const auto matInstanceShaderPath = matInstanceSdfPath.AppendChild(kTokShader);
+      const auto matInstanceShader = pxr::UsdShadeShader::Define(ctx.instanceStage, matInstanceShaderPath);
+      const auto matInstanceShaderPrim = matInstanceShader.GetPrim();
+      assert(matInstanceShaderPrim);
+
+      auto instanceShaderAttrs = authorMaterialShaderInputs(matInstanceShaderPrim, matData, relToInstanceTexPath, instanceMdlAssetPath);
+      const auto instanceOutputsMdlSurfaceAttr =
+        matInstanceSchema.GetPrim().CreateAttribute(kTokOutputsMdlSurface, pxr::SdfValueTypeNames->Token, false, pxr::SdfVariabilityVarying);
+      instanceOutputsMdlSurfaceAttr.AddConnection(instanceShaderAttrs[ShaderAttr::OutputsOut].GetPath(), pxr::UsdListPositionFrontOfAppendList);
+      pxr::UsdModelAPI(matInstanceShader).SetKind(kTokMaterial);
       
       matLssReference.instanceSdfPath = matInstanceSdfPath;
     }
