@@ -687,7 +687,12 @@ void applyFog(
 
   // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
   // as emissive hits will be over-attenuated.
-  vec4 fogColor = calculateFog(viewDistance, cb.fogColor);
+  // Primary-miss pixels reconstruct to a sky sentinel distance, which would otherwise trip
+  // the max-fog-distance early-out and leave physical atmosphere uncovered.
+  const float fogViewDistance = primaryMiss && cb.maxFogDistance > 0.0f
+    ? min(viewDistance, cb.maxFogDistance)
+    : viewDistance;
+  vec4 fogColor = calculateFog(fogViewDistance, cb.fogColor);
 
   if (primaryMiss)
   {
