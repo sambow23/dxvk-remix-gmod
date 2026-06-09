@@ -225,6 +225,8 @@ def createSlangTask(inputFile, variantSpec):
 
     # Create task to resolve dep file for the compiler output (.spv)
     task = createBasicTask(inputFile, destFile, destFile, depFile)
+    if not args.binary:
+        task.outputs.append(headerFile)
 
     if variantName != inputName:
         task.customName = f'{os.path.basename(inputFile)} ({variantName})'

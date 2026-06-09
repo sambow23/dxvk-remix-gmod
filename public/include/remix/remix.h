@@ -202,6 +202,9 @@ namespace remix {
     // Deferred update of an analytical light definition. Applied on render thread.
     Result< void >                    UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info);
     Result< void >                    SetConfigVariable(const char* key, const char* value);
+    // Plugin-injected game-state write; stored in the fork-owned thread-safe
+    // string/string map read by graph components and fork-side subsystems.
+    Result< void >                    SetGameValue(const char* key, const char* value);
     Result< void >                    SetFogState(const remixapi_FogInfo& info);
     Result< void >                    SetScreenTint(float colorR, float colorG, float colorB, float alpha);
     Result< void >                    AddTextureHash(const char* textureCategory, const char* textureHash);
@@ -291,6 +294,13 @@ namespace remix {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.SetConfigVariable(key, value);
+  }
+
+  inline Result< void > Interface::SetGameValue(const char* key, const char* value) {
+    if (!m_CInterface.SetGameValue) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.SetGameValue(key, value);
   }
 
   inline Result< void > Interface::SetFogState(const remixapi_FogInfo& info) {
