@@ -2628,9 +2628,11 @@ extern "C"
       interf.RegisterUITexture = remixapi_RegisterUITexture;
       interf.FreeUITexture = remixapi_FreeUITexture;
       interf.SubmitUIDrawList = remixapi_SubmitUIDrawList;
+      interf.SetGameValue = remixapi_SetGameValue;
+      interf.GetGameValue = remixapi_GetGameValue;
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 320, "Add/remove function registration");
+    static_assert(sizeof(interf) == 336, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

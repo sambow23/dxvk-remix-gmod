@@ -16,17 +16,158 @@
 #include "rtx_fork_hooks.h"
 #include "rtx_context.h"
 #include "rtx_atmosphere.h"
+#include "rtx_fork_game_state.h"
 #include "rtx_options.h"
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h" // MAX_MOONS (showAtmosphereUI moon loop)
 #include "imgui/imgui.h"              // ImGui::Button, ImGui::Text, etc. (showAtmosphereUI)
 #include "rtx_imgui.h"                // RemixGui::DragFloat, ComboWithKey (showAtmosphereUI)
+#include <cctype>                      // std::tolower (GameStateStore bool parsing)
+#include <cstdlib>                     // std::strtof (GameStateStore float parsing)
 #include <cstdio>                     // std::snprintf (renderMoonUI label)
 #include <cmath>                      // std::tan (cloud render camera basis)
+#include <string>                      // std::string, std::to_string
 
 namespace dxvk {
 namespace fork_hooks {
+
+  namespace {
+
+    struct MoonOptionBindings {
+      RtxOption<bool>*     pEnabled         = nullptr;
+      RtxOption<float>*    pAngularRadius   = nullptr;
+      RtxOption<float>*    pBrightness      = nullptr;
+      RtxOption<Vector3>*  pColor           = nullptr;
+      RtxOption<uint32_t>* pSurfaceStyle    = nullptr;
+      RtxOption<float>*    pCraterDensity   = nullptr;
+      RtxOption<float>*    pSurfaceContrast = nullptr;
+      RtxOption<float>*    pNoiseScale      = nullptr;
+      RtxOption<float>*    pDarkSide        = nullptr;
+      RtxOption<float>*    pRoughness       = nullptr;
+      RtxOption<float>*    pElevation       = nullptr;
+      RtxOption<float>*    pRotation        = nullptr;
+      RtxOption<float>*    pPhase           = nullptr;
+    };
+
+    bool getMoonOptionBindings(const int idx, MoonOptionBindings& bindings) {
+      switch (idx) {
+#define MOON_PTRS(N)                                                       \
+        case N:                                                            \
+          bindings.pEnabled         = &RtxOptions::enabled##N##Object();   \
+          bindings.pAngularRadius   = &RtxOptions::angularRadius##N##Object(); \
+          bindings.pBrightness      = &RtxOptions::brightness##N##Object(); \
+          bindings.pColor           = &RtxOptions::color##N##Object();     \
+          bindings.pSurfaceStyle    = &RtxOptions::surfaceStyle##N##Object(); \
+          bindings.pCraterDensity   = &RtxOptions::craterDensity##N##Object(); \
+          bindings.pSurfaceContrast = &RtxOptions::surfaceContrast##N##Object(); \
+          bindings.pNoiseScale      = &RtxOptions::surfaceNoiseScale##N##Object(); \
+          bindings.pDarkSide        = &RtxOptions::darkSideBrightness##N##Object(); \
+          bindings.pRoughness       = &RtxOptions::roughnessAmount##N##Object(); \
+          bindings.pElevation       = &RtxOptions::elevation##N##Object(); \
+          bindings.pRotation        = &RtxOptions::rotation##N##Object();  \
+          bindings.pPhase           = &RtxOptions::phase##N##Object();     \
+          return true
+        MOON_PTRS(0);
+        MOON_PTRS(1);
+        MOON_PTRS(2);
+        MOON_PTRS(3);
+#undef MOON_PTRS
+      default:
+        return false;
+      }
+    }
+
+    std::string trimGameStateValue(const std::string& raw) {
+      constexpr char kWhitespace[] = " \t\r\n";
+      const size_t begin = raw.find_first_not_of(kWhitespace);
+      if (begin == std::string::npos) {
+        return {};
+      }
+
+      const size_t end = raw.find_last_not_of(kWhitespace);
+      return raw.substr(begin, end - begin + 1);
+    }
+
+    std::string makeMoonGameStateKey(const int idx, const char* suffix) {
+      return "__atmosphere.moon" + std::to_string(idx) + "." + suffix;
+    }
+
+    bool tryReadMoonGameStateBool(const std::string& key, bool& outValue) {
+      std::string raw;
+      if (!fork_game_state::GameStateStore::get().tryGet(key, raw)) {
+        return false;
+      }
+
+      std::string normalized = trimGameStateValue(raw);
+      for (char& ch : normalized) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      }
+
+      if (normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on") {
+        outValue = true;
+        return true;
+      }
+
+      if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off") {
+        outValue = false;
+        return true;
+      }
+
+      return false;
+    }
+
+    bool tryReadMoonGameStateFloat(const std::string& key, float& outValue) {
+      std::string raw;
+      if (!fork_game_state::GameStateStore::get().tryGet(key, raw)) {
+        return false;
+      }
+
+      const std::string trimmed = trimGameStateValue(raw);
+      if (trimmed.empty()) {
+        return false;
+      }
+
+      char* parseEnd = nullptr;
+      const float parsedValue = std::strtof(trimmed.c_str(), &parseEnd);
+      if (parseEnd == trimmed.c_str() || *parseEnd != '\0') {
+        return false;
+      }
+
+      outValue = parsedValue;
+      return true;
+    }
+
+    void applyGameDrivenMoonState() {
+      for (int moonIdx = 0; moonIdx < static_cast<int>(MAX_MOONS); ++moonIdx) {
+        MoonOptionBindings bindings;
+        if (!getMoonOptionBindings(moonIdx, bindings)) {
+          continue;
+        }
+
+        bool enabled = false;
+        if (tryReadMoonGameStateBool(makeMoonGameStateKey(moonIdx, "enabled"), enabled)) {
+          bindings.pEnabled->setImmediately(enabled);
+        }
+
+        float elevation = 0.0f;
+        if (tryReadMoonGameStateFloat(makeMoonGameStateKey(moonIdx, "elevation"), elevation)) {
+          bindings.pElevation->setImmediately(elevation);
+        }
+
+        float rotation = 0.0f;
+        if (tryReadMoonGameStateFloat(makeMoonGameStateKey(moonIdx, "rotation"), rotation)) {
+          bindings.pRotation->setImmediately(rotation);
+        }
+
+        float phase = 0.0f;
+        if (tryReadMoonGameStateFloat(makeMoonGameStateKey(moonIdx, "phase"), phase)) {
+          bindings.pPhase->setImmediately(phase);
+        }
+      }
+    }
+
+  }
 
   // ---------------------------------------------------------------------------
   // initAtmosphere
@@ -90,6 +231,10 @@ namespace fork_hooks {
         ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
       }
       ctx.m_atmosphere->initialize(&ctx);
+
+      // Apply any plugin-pushed moon pose/phase overrides before the frame's
+      // atmosphere constants are built from the option layer.
+      applyGameDrivenMoonState();
 
       // Cloud render compute pass setup (Nubis Cubed 2023, fork — 2026-05-12, C4).
       // Push the per-frame camera basis and ensure the screen-space RT is
@@ -396,43 +541,8 @@ namespace fork_hooks {
     void renderMoonUI(int idx) {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
 
-      RtxOption<bool>*     pEnabled         = nullptr;
-      RtxOption<float>*    pAngularRadius   = nullptr;
-      RtxOption<float>*    pBrightness      = nullptr;
-      RtxOption<Vector3>*  pColor           = nullptr;
-      RtxOption<uint32_t>* pSurfaceStyle    = nullptr;
-      RtxOption<float>*    pCraterDensity   = nullptr;
-      RtxOption<float>*    pSurfaceContrast = nullptr;
-      RtxOption<float>*    pNoiseScale      = nullptr;
-      RtxOption<float>*    pDarkSide        = nullptr;
-      RtxOption<float>*    pRoughness       = nullptr;
-      RtxOption<float>*    pElevation       = nullptr;
-      RtxOption<float>*    pRotation        = nullptr;
-      RtxOption<float>*    pPhase           = nullptr;
-
-      switch (idx) {
-#define MOON_PTRS(N)                                                         \
-        case N:                                                              \
-          pEnabled         = &RtxOptions::enabled##N##Object();              \
-          pAngularRadius   = &RtxOptions::angularRadius##N##Object();        \
-          pBrightness      = &RtxOptions::brightness##N##Object();           \
-          pColor           = &RtxOptions::color##N##Object();                \
-          pSurfaceStyle    = &RtxOptions::surfaceStyle##N##Object();         \
-          pCraterDensity   = &RtxOptions::craterDensity##N##Object();        \
-          pSurfaceContrast = &RtxOptions::surfaceContrast##N##Object();      \
-          pNoiseScale      = &RtxOptions::surfaceNoiseScale##N##Object();    \
-          pDarkSide        = &RtxOptions::darkSideBrightness##N##Object();   \
-          pRoughness       = &RtxOptions::roughnessAmount##N##Object();      \
-          pElevation       = &RtxOptions::elevation##N##Object();            \
-          pRotation        = &RtxOptions::rotation##N##Object();             \
-          pPhase           = &RtxOptions::phase##N##Object();                \
-          break
-        MOON_PTRS(0);
-        MOON_PTRS(1);
-        MOON_PTRS(2);
-        MOON_PTRS(3);
-#undef MOON_PTRS
-      default:
+      MoonOptionBindings bindings;
+      if (!getMoonOptionBindings(idx, bindings)) {
         return;
       }
 
@@ -440,31 +550,31 @@ namespace fork_hooks {
       std::snprintf(headerLabel, sizeof(headerLabel), "Moon %d", idx);
 
       if (ImGui::TreeNode(headerLabel)) {
-        RemixGui::Checkbox("Enabled", pEnabled);
-        RemixGui::DragFloat("Angular Radius", pAngularRadius, 0.1f, 0.1f, 30.0f, "%.1f\xc2\xb0", sliderFlags);
-        RemixGui::DragFloat("Brightness",     pBrightness,    0.1f, 0.0f, 20.0f, "%.1f",         sliderFlags);
-        RemixGui::DragFloat3("Color",         pColor,         0.01f, 0.0f, 1.0f, "%.2f",         sliderFlags);
+        RemixGui::Checkbox("Enabled", bindings.pEnabled);
+        RemixGui::DragFloat("Angular Radius", bindings.pAngularRadius, 0.1f, 0.1f, 30.0f, "%.1f\xc2\xb0", sliderFlags);
+        RemixGui::DragFloat("Brightness",     bindings.pBrightness,    0.1f, 0.0f, 20.0f, "%.1f",         sliderFlags);
+        RemixGui::DragFloat3("Color",         bindings.pColor,         0.01f, 0.0f, 1.0f, "%.2f",         sliderFlags);
 
-        RemixGui::DragFloat("Elevation", pElevation, 0.1f, -90.0f, 90.0f, "%.1f\xc2\xb0", sliderFlags);
+        RemixGui::DragFloat("Elevation", bindings.pElevation, 0.1f, -90.0f, 90.0f, "%.1f\xc2\xb0", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Moon elevation in degrees. Game-drivable per-frame; slider edits go to the Derived layer and don't persist to rtx.conf.");
-        RemixGui::DragFloat("Rotation",  pRotation,  0.1f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
+        RemixGui::DragFloat("Rotation",  bindings.pRotation,  0.1f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Moon rotation/azimuth in degrees. Same persistence rules as Elevation.");
-        RemixGui::DragFloat("Phase",     pPhase,     0.005f, 0.0f, 1.0f, "%.3f",  sliderFlags);
+        RemixGui::DragFloat("Phase",     bindings.pPhase,     0.005f, 0.0f, 1.0f, "%.3f",  sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Moon phase: 0 = new, 0.25 = first quarter, 0.5 = full, 0.75 = third quarter. Same persistence rules as Elevation.");
 
         if (ImGui::TreeNode("Appearance")) {
           static const char* kStyleNames[] = { "Rocky", "Volcanic" };
-          int styleInt = static_cast<int>(pSurfaceStyle->get());
+          int styleInt = static_cast<int>(bindings.pSurfaceStyle->get());
           if (ImGui::Combo("Surface Style", &styleInt, kStyleNames, IM_ARRAYSIZE(kStyleNames))) {
-            pSurfaceStyle->setImmediately(static_cast<uint32_t>(styleInt));
+            bindings.pSurfaceStyle->setImmediately(static_cast<uint32_t>(styleInt));
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Procedural surface preset. Knobs below tune the chosen style.");
 
-          RemixGui::DragFloat("Crater Density",      pCraterDensity,   0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
-          RemixGui::DragFloat("Surface Contrast",    pSurfaceContrast, 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
-          RemixGui::DragFloat("Surface Noise Scale", pNoiseScale,      0.01f, 0.1f, 5.0f, "%.2f", sliderFlags);
-          RemixGui::DragFloat("Dark Side Brightness",pDarkSide,        0.005f,0.0f, 1.0f, "%.3f", sliderFlags);
-          RemixGui::DragFloat("Roughness",           pRoughness,       0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Crater Density",      bindings.pCraterDensity,   0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Surface Contrast",    bindings.pSurfaceContrast, 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Surface Noise Scale", bindings.pNoiseScale,      0.01f, 0.1f, 5.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Dark Side Brightness",bindings.pDarkSide,        0.005f,0.0f, 1.0f, "%.3f", sliderFlags);
+          RemixGui::DragFloat("Roughness",           bindings.pRoughness,       0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
           ImGui::TreePop();
         }
 

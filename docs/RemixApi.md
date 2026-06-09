@@ -559,6 +559,7 @@ independently of the typed C API.
 
 | Namespace | Channel | Reference |
 | :-- | :-- | :-- |
+| `__atmosphere.*` | `SetGameValue` | [`RemixAtmosphereAPI.md`](RemixAtmosphereAPI.md) |
 | `__weather.*` | `SetGameValue` / `GetGameValue` | [`RemixWeatherAPI.md`](RemixWeatherAPI.md) |
 | `rtx.weather.preset.*` | `SetConfigVariable` | [`RemixWeatherAPI.md`](RemixWeatherAPI.md) |
 

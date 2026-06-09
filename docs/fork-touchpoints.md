@@ -71,7 +71,7 @@ check will enforce it if discipline slips.
   *C++ wrapper for the `remixapi_SetGameValue` C API slot introduced in workstream 10 (plugin-injected game-state write). Wrapper guards on nullptr vtable slot before dispatching, matching the `SetConfigVariable` shape. Companion readers are graph components `GameValueReadBool` / `GameValueReadNumber`; backing store lives in `rtx_fork_game_state.h`.*
 
 - **Block** at `remixapi_Interface` static_assert updates (file scope) — ~3 LOC (three separate assert sizes), planned target `N/A (public header)` in `N/A (public header)`.
-  *Updates `sizeof(remixapi_Interface)` static_asserts in the C++ header to match each successive vtable extension (208 → 240 → 272 → 280 → 288 → 296 → 320, the 320 adding the three UI API slots `RegisterUITexture` / `FreeUITexture` / `SubmitUIDrawList`).*
+  *Updates `sizeof(remixapi_Interface)` static_asserts in the C++ header to match each successive vtable extension (208 → 240 → 272 → 280 → 288 → 296 → 320 → 336; the 320 adding the three UI API slots `RegisterUITexture` / `FreeUITexture` / `SubmitUIDrawList`, the 336 adding the `SetGameValue` / `GetGameValue` slots restored after an upstream merge dropped them).*
 
 ---
 
