@@ -92,6 +92,9 @@ TranslucentSurfaceMaterialInteraction translucentSurfaceMaterialInteractionCreat
   const bool transmittanceOrDiffuseLoaded = surfaceMaterialInteractionTextureReadHelper(translucentSurfaceMaterial.transmittanceOrDiffuseTextureIndex, translucentSurfaceMaterial.samplerIndex, surfaceInteraction, transmittanceOrDiffuseSample);
   const bool emissiveColorLoaded = surfaceMaterialInteractionTextureReadHelper(translucentSurfaceMaterial.emissiveColorTextureIndex, translucentSurfaceMaterial.samplerIndex, surfaceInteraction, emissiveColorSample);
 
+  // Baked terrain normals are already decoded by the terrain baker.
+  const bool isBakedTerrain = surface.texcoordGenerationMode == uint(TexGenMode::CascadedViewPositions);
+
   // Create a tangent to world space matrix for future calculations
   const f16mat3 tangentToWorld = transpose(f16mat3(surfaceInteraction.geometryTangent, surfaceInteraction.geometryBitangent, surfaceInteraction.geometryNormal));
 
@@ -101,8 +104,17 @@ TranslucentSurfaceMaterialInteraction translucentSurfaceMaterialInteractionCreat
 
   if (normalLoaded)
   {
-    // Note: Using f16 from texture to decode from is fine as the original texture is only 8 bits of precision.
-    vec3 tangentNormal = unsignedOctahedralToHemisphereDirection(vec2(normalSample.xy), cb.translucentMaterialArgs.normalIntensity);
+    vec3 tangentNormal;
+
+    if (isBakedTerrain)
+    {
+      tangentNormal = sanitize(normalSample.xyz, cb.isZUp ? vec3(0.f, 0.f, 1.f) : vec3(0.f, 1.f, 0.f));
+    }
+    else
+    {
+      // Note: Using f16 from texture to decode from is fine as the original texture is only 8 bits of precision.
+      tangentNormal = unsignedOctahedralToHemisphereDirection(vec2(normalSample.xy), cb.translucentMaterialArgs.normalIntensity);
+    }
 
     if (secondNormalLoaded)
     {
@@ -111,6 +123,11 @@ TranslucentSurfaceMaterialInteraction translucentSurfaceMaterialInteractionCreat
       tangentNormal = normalBlendRNM(tangentNormal2, tangentNormal);
     }
     normal = normalize(mul(tangentToWorld, tangentNormal));
+
+    if (isBakedTerrain)
+    {
+      normal = sanitize(normal, cb.isZUp ? vec3(0.f, 0.f, 1.f) : vec3(0.f, 1.f, 0.f));
+    }
   }
 
   // Note: Diffuse layer override encapsulated in if the diffuse layer flag is set or not as this override is able to be done on the CPU.
