@@ -410,12 +410,22 @@ SubsurfaceMaterialInteraction subsurfaceMaterialInteractionCreate(
   }
   else
   {
-    subsurfaceMaterialInteraction.packedSingleScatteringAlbedo = colorToR11G11B10(subsurfaceMaterial.singleScatteringAlbedo);
+    subsurfaceSingleScatteringAlbedo.rgb = subsurfaceMaterial.singleScatteringAlbedo;
+    subsurfaceMaterialInteraction.packedSingleScatteringAlbedo = colorToR11G11B10(subsurfaceSingleScatteringAlbedo.rgb);
+  }
+
+  const float transmittanceMax = max(transmittanceColor.r, max(transmittanceColor.g, transmittanceColor.b));
+  const bool disableSubsurface = transmittanceColorLoaded && transmittanceMax <= materialSssEpsilon;
+
+  if (disableSubsurface)
+  {
+    subsurfaceMaterialInteraction.measurementDistance = 0.0f;
+    subsurfaceMaterialInteraction.packedTransmittanceColor = colorToR11G11B10(0.0f);
+    subsurfaceMaterialInteraction.packedSingleScatteringAlbedo = colorToR11G11B10(0.0f);
   }
 
   subsurfaceMaterialInteraction.volumetricAnisotropy = f16ToSnorm8(subsurfaceMaterial.volumetricAnisotropy);
-
-  subsurfaceMaterialInteraction.maxSampleRadius = subsurfaceMaterial.maxSampleRadius != 0.0f ? f16ToUnorm8(max(subsurfaceMaterial.maxSampleRadius, materialSssEpsilon)) : 0;
+  subsurfaceMaterialInteraction.maxSampleRadius = disableSubsurface ? 0 : (subsurfaceMaterial.maxSampleRadius != 0.0f ? f16ToUnorm8(max(subsurfaceMaterial.maxSampleRadius, materialSssEpsilon)) : 0);
 
   return subsurfaceMaterialInteraction;
 }
