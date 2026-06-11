@@ -24,6 +24,7 @@
 #include "rtx/algorithm/path_state.slangh"
 #include "rtx/utility/math.slangh"
 #include "rtx/utility/noise.slangh"
+#include "rtx/utility/sampling.slangh"
 #include "rtx/utility/color.slangh"
 #include "rtx/utility/packing.slangh"
 #include "rtx/utility/debug_view_helpers.slangh"
@@ -32,6 +33,7 @@
 #include "rtx/pass/instance_definitions.slangh"
 #include "rtx/concept/surface/surface.slangh"
 #include "rtx/algorithm/integrator.slangh"
+#include "rtx/algorithm/rtxcr/rtxcr_material.slangh"
 #include "rtx/concept/surface_material/opaque_surface_material_interaction.slangh"
 #include "rtx/pass/nrc/nrc_integrator_utilities.slangh"
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
@@ -40,6 +42,196 @@
 #endif
 
 #include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
+
+SssDiffusionProfileResult evalAtmosphereDirectionalSssSecondary(
+  OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
+  MinimalRayInteraction rayInteraction,
+  MinimalSurfaceInteraction surfaceInteraction,
+  const uint8_t rayMask,
+  const PortalSpace2BitsType portalSpace,
+  const bool pomOpaqueSurfaceEncountered,
+  const bool isViewModel,
+  const Ray ray,
+  const uint16_t surfaceIndex,
+  float2 texcoords,
+  vec3 lightDirection,
+  vec3 lightRadiance,
+  float inverseSelectionPdf,
+  float coneAngle,
+  inout RNG randomState)
+{
+  vec3 sssScatteringWeight = 0.0f;
+
+  const SubsurfaceMaterial subsurfaceMaterial = subsurfaceMaterialCreate(opaqueSurfaceMaterialInteraction.subsurfaceMaterialInteraction);
+
+  RTXCR_SubsurfaceMaterialData subsurfaceMaterialData = RTXCR_CreateDefaultSubsurfaceMaterialData();
+  subsurfaceMaterialData.transmissionColor = float3(subsurfaceMaterial.volumetricAttenuationCoefficient);
+  subsurfaceMaterialData.scatteringColor = float3(subsurfaceMaterial.singleScatteringAlbedo);
+  subsurfaceMaterialData.scale = subsurfaceMaterial.measurementDistance * cb.sssArgs.diffusionProfileScale;
+  subsurfaceMaterialData.g = subsurfaceMaterial.volumetricAnisotropy;
+
+  const float rand = getNextSampleBlueNoise(randomState);
+  const vec3 diskNormalWorldSpace = (rand <= 0.5f) ? opaqueSurfaceMaterialInteraction.shadingNormal : rayInteraction.viewDirection;
+
+  RTXCR_SubsurfaceInteraction subsurfaceInteraction =
+    RTXCR_CreateSubsurfaceInteraction(surfaceInteraction.position, diskNormalWorldSpace, surfaceInteraction.geometryTangent, surfaceInteraction.geometryBitangent);
+
+  uint16_t validSampleCount = 0;
+  const uint secondarySubsurfaceMaterialIndex = opaqueSurfaceMaterialCreate(surfaceMaterials[surfaceIndex]).subsurfaceMaterialIndex;
+
+  [unroll]
+  for (uint16_t i = 0; i < MAX_SSS_SAMPLE_COUNT; ++i)
+  {
+    const float2 rand2 = float2(getNextSampleBlueNoise(randomState), getNextSampleBlueNoise(randomState));
+
+    RTXCR_SubsurfaceSample subsurfaceSample;
+    RTXCR_EvalBurleyDiffusionProfile(subsurfaceMaterialData,
+                                     subsurfaceInteraction,
+                                     subsurfaceMaterial.maxSampleRadius,
+                                     cb.enableSssTransmission && cb.enableTransmissionDiffusionProfileCorrection,
+                                     rand2,
+                                     subsurfaceSample);
+
+    Ray sssSampleRay;
+    sssSampleRay.origin = subsurfaceSample.samplePosition;
+    sssSampleRay.direction = -diskNormalWorldSpace;
+    sssSampleRay.tMax = max(subsurfaceMaterial.maxSampleRadius * subsurfaceMaterialData.scale * 2.0f, 0.1f);
+
+    const SssTracingResult sssTracingResult = traceSssRay(sssSampleRay, OBJECT_MASK_OPAQUE, RAY_FLAG_CULL_BACK_FACING_TRIANGLES);
+    if (!sssTracingResult.hasHit || secondarySubsurfaceMaterialIndex != sssTracingResult.subsurfaceMaterialIndex)
+    {
+      continue;
+    }
+
+    const MinimalSurfaceInteraction sssMinimalSurfaceInteraction = sssTracingResult.sssMinimalSurfaceInteraction;
+    const vec3 jitteredLightDirection = getJitteredSunDirection(lightDirection, coneAngle, getNextSampleBlueNoise(randomState), getNextSampleBlueNoise(randomState));
+    const vec3 lightTargetPos = sssMinimalSurfaceInteraction.position + jitteredLightDirection * 1000000.0f;
+
+    const VisibilityResult visibility = traceVisibilityRay<visibilityModeEnablePom | visibilityModeAccurateHitDistance | visibilityModeEnableTranslucentMaterials | visibilityModeEnableSubsurfaceMaterials>(
+      sssMinimalSurfaceInteraction,
+      lightTargetPos, rayMask,
+      invalidRayPortalIndex, portalSpace, pomOpaqueSurfaceEncountered,
+      rayInteraction.coneRadius, ray.spreadAngle, 1.0, isViewModel, false,
+      surfaceIndex, texcoords,
+      false,
+      opaqueSurfaceMaterialInteraction.shadingNormal,
+      true);
+
+    if (visibility.hasOpaqueHit)
+    {
+      continue;
+    }
+
+    const vec3 shadingNormal = sssTracingResult.normal;
+    const vec3 inputDirection = visibility.rayDirection;
+    const float normalDotInputDirection = max(dot(inputDirection, shadingNormal), 0.0f);
+    const vec3 commonLightThroughput = inverseSelectionPdf * vec3(visibility.attenuation);
+
+    sssScatteringWeight += RTXCR_EvalBssrdf(subsurfaceSample, lightRadiance, float(normalDotInputDirection)) * commonLightThroughput;
+    ++validSampleCount;
+  }
+
+  SssDiffusionProfileResult sssDiffusionProfileResult;
+  sssDiffusionProfileResult.scatteringWeight = sssScatteringWeight / float(MAX_SSS_SAMPLE_COUNT);
+  sssDiffusionProfileResult.allSamplesHaveHit = validSampleCount == 0;
+  return sssDiffusionProfileResult;
+}
+
+#ifdef ATMOSPHERE_AVAILABLE
+vec3 evalAtmosphereSkySssSecondary(
+  OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
+  MinimalRayInteraction rayInteraction,
+  MinimalSurfaceInteraction surfaceInteraction,
+  const uint8_t rayMask,
+  const PortalSpace2BitsType portalSpace,
+  const bool pomOpaqueSurfaceEncountered,
+  const bool isViewModel,
+  const Ray ray,
+  const uint16_t surfaceIndex,
+  float2 texcoords,
+  AtmosphereArgs atmosphereArgs,
+  bool isZUp,
+  inout RNG randomState)
+{
+  vec3 sssScatteringWeight = 0.0f;
+
+  const SubsurfaceMaterial subsurfaceMaterial = subsurfaceMaterialCreate(opaqueSurfaceMaterialInteraction.subsurfaceMaterialInteraction);
+
+  RTXCR_SubsurfaceMaterialData subsurfaceMaterialData = RTXCR_CreateDefaultSubsurfaceMaterialData();
+  subsurfaceMaterialData.transmissionColor = float3(subsurfaceMaterial.volumetricAttenuationCoefficient);
+  subsurfaceMaterialData.scatteringColor = float3(subsurfaceMaterial.singleScatteringAlbedo);
+  subsurfaceMaterialData.scale = subsurfaceMaterial.measurementDistance * cb.sssArgs.diffusionProfileScale;
+  subsurfaceMaterialData.g = subsurfaceMaterial.volumetricAnisotropy;
+
+  const float rand = getNextSampleBlueNoise(randomState);
+  const vec3 diskNormalWorldSpace = (rand <= 0.5f) ? opaqueSurfaceMaterialInteraction.shadingNormal : rayInteraction.viewDirection;
+
+  RTXCR_SubsurfaceInteraction subsurfaceInteraction =
+    RTXCR_CreateSubsurfaceInteraction(surfaceInteraction.position, diskNormalWorldSpace, surfaceInteraction.geometryTangent, surfaceInteraction.geometryBitangent);
+
+  [unroll]
+  for (uint16_t i = 0; i < MAX_SSS_SAMPLE_COUNT; ++i)
+  {
+    const float2 rand2 = float2(getNextSampleBlueNoise(randomState), getNextSampleBlueNoise(randomState));
+
+    RTXCR_SubsurfaceSample subsurfaceSample;
+    RTXCR_EvalBurleyDiffusionProfile(subsurfaceMaterialData,
+                                     subsurfaceInteraction,
+                                     subsurfaceMaterial.maxSampleRadius,
+                                     cb.enableSssTransmission && cb.enableTransmissionDiffusionProfileCorrection,
+                                     rand2,
+                                     subsurfaceSample);
+
+    Ray sssSampleRay;
+    sssSampleRay.origin = subsurfaceSample.samplePosition;
+    sssSampleRay.direction = -diskNormalWorldSpace;
+    sssSampleRay.tMax = max(subsurfaceMaterial.maxSampleRadius * subsurfaceMaterialData.scale * 2.0f, 0.1f);
+
+    const SssTracingResult sssTracingResult = traceSssRay(sssSampleRay, OBJECT_MASK_OPAQUE, RAY_FLAG_CULL_BACK_FACING_TRIANGLES);
+    if (!sssTracingResult.hasHit)
+    {
+      continue;
+    }
+
+    const MinimalSurfaceInteraction sssMinimalSurfaceInteraction = sssTracingResult.sssMinimalSurfaceInteraction;
+    const vec3 shadingNormal = sssTracingResult.normal;
+    const f16mat3 tangentToWorld = transpose(f16mat3(sssMinimalSurfaceInteraction.geometryTangent, sssMinimalSurfaceInteraction.geometryBitangent, shadingNormal));
+
+    float skySolidAnglePdf = 0.0f;
+    const vec3 skyDirectionLocal = calcCosineHemisphereDirectionSample(rand2, skySolidAnglePdf);
+    const vec3 skyDirection = normalize(mul(tangentToWorld, skyDirectionLocal));
+    const vec3 skyTargetPos = sssMinimalSurfaceInteraction.position + skyDirection * 1000000.0f;
+
+    const VisibilityResult visibility = traceVisibilityRay<visibilityModeEnablePom | visibilityModeAccurateHitDistance | visibilityModeEnableTranslucentMaterials | visibilityModeEnableSubsurfaceMaterials>(
+      sssMinimalSurfaceInteraction,
+      skyTargetPos, rayMask,
+      invalidRayPortalIndex, portalSpace, pomOpaqueSurfaceEncountered,
+      rayInteraction.coneRadius, ray.spreadAngle, 1.0, isViewModel, false,
+      surfaceIndex, texcoords,
+      false,
+      opaqueSurfaceMaterialInteraction.shadingNormal,
+      true);
+
+    if (visibility.hasOpaqueHit)
+    {
+      continue;
+    }
+
+    const float normalDotInputDirection = max(dot(skyDirection, shadingNormal), 0.0f);
+    if (normalDotInputDirection <= 0.0f)
+    {
+      continue;
+    }
+
+    const vec3 skyRadiance = evalSkyRadiance(skyDirection, atmosphereArgs, uint2(0u, 0u), cb.frameIdx, isZUp);
+    const vec3 commonLightThroughput = vec3(visibility.attenuation) / max(skySolidAnglePdf, 1e-6f);
+
+    sssScatteringWeight += RTXCR_EvalBssrdf(subsurfaceSample, skyRadiance, normalDotInputDirection) * commonLightThroughput;
+  }
+
+  return sssScatteringWeight / float(MAX_SSS_SAMPLE_COUNT);
+}
+#endif
 
 // Evaluate direct sun lighting for secondary bounces (atmosphere mode) with soft shadows
 bool evalAtmosphereSunNEESecondary(
@@ -80,6 +272,7 @@ bool evalAtmosphereSunNEESecondary(
   shadowMask |= (cb.enableIndirectAlphaBlendShadows) ? OBJECT_MASK_ALPHA_BLEND : 0;
   
   const bool isThinOpaqueSubsurface = isThinOpaqueSubsurfaceMaterial(opaqueSurfaceMaterialInteraction);
+  const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
   const bool isViewModel = rayMask & OBJECT_MASK_ALL_VIEWMODEL;
   
   // Soft shadows: trace multiple shadow rays with jittered directions
@@ -119,24 +312,52 @@ bool evalAtmosphereSunNEESecondary(
     }
   }
   
-  // If all samples were occluded, no light contribution
-  if (visibilitySum <= 0.0f) {
+  SssDiffusionProfileResult sssDiffusionProfileResult = createEmptySssDiffusionProfileResult();
+  if (isDiffusionProfileSss)
+  {
+    sssDiffusionProfileResult = evalAtmosphereDirectionalSssSecondary(
+      opaqueSurfaceMaterialInteraction,
+      rayInteraction,
+      surfaceInteraction,
+      shadowMask,
+      portalSpace,
+      pomOpaqueSurfaceEncountered,
+      isViewModel,
+      ray,
+      surfaceIndex,
+      texcoords,
+      sunSample.direction,
+      sunSample.radiance,
+      1.0f,
+      sunSample.coneAngle,
+      randomState);
+  }
+
+  if (visibilitySum <= 0.0f && sssDiffusionProfileResult.allSamplesHaveHit) {
     return false;
   }
-  
-  // Average the visibility
-  float avgVisibility = visibilitySum / float(numSamples);
-  vec3 avgAttenuation = attenuationSum / float(numSamples);
-  
-  // Evaluate BRDF for main sun direction
-  const SurfaceMaterialInteractionSplitWeight splitWeight =
-    opaqueSurfaceMaterialInteractionCalcProjectedWeight(
-      opaqueSurfaceMaterialInteraction, rayInteraction, f16vec3(sunSample.direction));
-  
-  // Accumulate sun contribution with soft shadow factor
-  vec3 sunThroughput = avgAttenuation * avgVisibility;
-  diffuseLight += sunSample.radiance * vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) * sunThroughput;
-  specularLight += sunSample.radiance * vec3(splitWeight.specularReflectionWeight) * sunThroughput;
+
+  if (visibilitySum > 0.0f)
+  {
+    float avgVisibility = visibilitySum / float(numSamples);
+    vec3 avgAttenuation = attenuationSum / float(numSamples);
+
+    const SurfaceMaterialInteractionSplitWeight splitWeight =
+      opaqueSurfaceMaterialInteractionCalcProjectedWeight(
+        opaqueSurfaceMaterialInteraction, rayInteraction, f16vec3(sunSample.direction));
+
+    const vec3 diffuseLobeWeight = !isDiffusionProfileSss ? vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) : vec3(0.0f);
+    const vec3 specularLobeWeight = vec3(splitWeight.specularReflectionWeight);
+    vec3 sunThroughput = avgAttenuation * avgVisibility;
+
+    diffuseLight += sunSample.radiance * diffuseLobeWeight * sunThroughput;
+    specularLight += sunSample.radiance * specularLobeWeight * sunThroughput;
+  }
+
+  if (isDiffusionProfileSss)
+  {
+    diffuseLight += vec3(sssDiffusionProfileResult.scatteringWeight);
+  }
 
   return true;
 }
@@ -183,6 +404,7 @@ bool evalAtmosphereMoonNEESecondary(
   shadowMask |= (cb.enableIndirectAlphaBlendShadows) ? OBJECT_MASK_ALPHA_BLEND : 0;
 
   const bool isThinOpaqueSubsurface = isThinOpaqueSubsurfaceMaterial(opaqueSurfaceMaterialInteraction);
+  const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
   const bool isViewModel = rayMask & OBJECT_MASK_ALL_VIEWMODEL;
 
   // Soft shadows: half the samples for indirect (matches the sun path).
@@ -219,22 +441,53 @@ bool evalAtmosphereMoonNEESecondary(
     }
   }
 
-  if (visibilitySum <= 0.0f) {
+  SssDiffusionProfileResult sssDiffusionProfileResult = createEmptySssDiffusionProfileResult();
+  if (isDiffusionProfileSss)
+  {
+    sssDiffusionProfileResult = evalAtmosphereDirectionalSssSecondary(
+      opaqueSurfaceMaterialInteraction,
+      rayInteraction,
+      surfaceInteraction,
+      shadowMask,
+      portalSpace,
+      pomOpaqueSurfaceEncountered,
+      isViewModel,
+      ray,
+      surfaceIndex,
+      texcoords,
+      moonSample.direction,
+      moonSample.radiance,
+      1.0f / max(moonSample.solidAnglePdf, 1e-6f),
+      moonSample.coneAngle,
+      randomState);
+  }
+
+  if (visibilitySum <= 0.0f && sssDiffusionProfileResult.allSamplesHaveHit) {
     return false;
   }
 
-  float avgVisibility = visibilitySum / float(numSamples);
-  vec3 avgAttenuation = attenuationSum / float(numSamples);
+  if (visibilitySum > 0.0f)
+  {
+    float avgVisibility = visibilitySum / float(numSamples);
+    vec3 avgAttenuation = attenuationSum / float(numSamples);
 
-  const SurfaceMaterialInteractionSplitWeight splitWeight =
-    opaqueSurfaceMaterialInteractionCalcProjectedWeight(
-      opaqueSurfaceMaterialInteraction, rayInteraction, f16vec3(moonSample.direction));
+    const SurfaceMaterialInteractionSplitWeight splitWeight =
+      opaqueSurfaceMaterialInteractionCalcProjectedWeight(
+        opaqueSurfaceMaterialInteraction, rayInteraction, f16vec3(moonSample.direction));
 
-  // Divide by discrete pick PDF (see evalAtmosphereMoonNEE for rationale).
-  vec3 moonThroughput = avgAttenuation * avgVisibility;
-  float invPickPdf = 1.0f / max(moonSample.solidAnglePdf, 1e-6f);
-  diffuseLight += moonSample.radiance * vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) * moonThroughput * invPickPdf;
-  specularLight += moonSample.radiance * vec3(splitWeight.specularReflectionWeight) * moonThroughput * invPickPdf;
+    const vec3 diffuseLobeWeight = !isDiffusionProfileSss ? vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) : vec3(0.0f);
+    const vec3 specularLobeWeight = vec3(splitWeight.specularReflectionWeight);
+
+    vec3 moonThroughput = avgAttenuation * avgVisibility;
+    float invPickPdf = 1.0f / max(moonSample.solidAnglePdf, 1e-6f);
+    diffuseLight += moonSample.radiance * diffuseLobeWeight * moonThroughput * invPickPdf;
+    specularLight += moonSample.radiance * specularLobeWeight * moonThroughput * invPickPdf;
+  }
+
+  if (isDiffusionProfileSss)
+  {
+    diffuseLight += vec3(sssDiffusionProfileResult.scatteringWeight);
+  }
 
   return true;
 }
@@ -1032,6 +1285,31 @@ void integratePathVertex(
         vec3 moonLight = moonDiffuse + moonSpecular;
         accumulateRadiance(pathState, moonLight);
       }
+
+#ifdef ATMOSPHERE_AVAILABLE
+      if (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction))
+      {
+        const uint8_t skyShadowMask = OBJECT_MASK_OPAQUE | (pathState.rayMask & OBJECT_MASK_ALL_DYNAMIC)
+          | ((cb.enableIndirectTranslucentShadows) ? OBJECT_MASK_TRANSLUCENT : 0)
+          | ((cb.enableIndirectAlphaBlendShadows) ? OBJECT_MASK_ALPHA_BLEND : 0);
+        const bool isViewModel = pathState.rayMask & OBJECT_MASK_ALL_VIEWMODEL;
+        const vec3 skySssLight = evalAtmosphereSkySssSecondary(
+          opaqueSurfaceMaterialInteraction,
+          rayInteraction,
+          surfaceInteraction,
+          skyShadowMask,
+          pathState.portalSpace,
+          pomOpaqueSurfaceEncountered,
+          isViewModel,
+          ray,
+          rayInteraction.surfaceIndex,
+          surfaceInteraction.textureCoordinates,
+          cb.atmosphereArgs,
+          cb.isZUp != 0,
+          randomState);
+        accumulateRadiance(pathState, skySssLight);
+      }
+#endif
     }
 
     // Terminate the path if NRC requested it

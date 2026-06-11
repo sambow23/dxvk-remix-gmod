@@ -63,7 +63,9 @@ SubsurfaceMaterial subsurfaceMaterialCreate(const SubsurfaceMaterialInteraction 
     transmittanceColor;
   subsurfaceMaterial.measurementDistance = subsurfaceMaterialInteraction.measurementDistance;
   subsurfaceMaterial.singleScatteringAlbedo = r11g11b10ToColor(subsurfaceMaterialInteraction.packedSingleScatteringAlbedo);
-  subsurfaceMaterial.volumetricAnisotropy = snorm8ToF16(subsurfaceMaterialInteraction.volumetricAnisotropy);
+  // Keep subsurface anisotropy away from the exact HG singular endpoints.
+  // g = +/-1 produces a near-delta phase response that collapses visible SSS into a narrow view/light alignment band.
+  subsurfaceMaterial.volumetricAnisotropy = clamp(snorm8ToF16(subsurfaceMaterialInteraction.volumetricAnisotropy), -0.99f, 0.99f);
   subsurfaceMaterial.maxSampleRadius = unorm8ToF16(subsurfaceMaterialInteraction.maxSampleRadius);
 
   return subsurfaceMaterial;

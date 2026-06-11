@@ -364,6 +364,7 @@ SubsurfaceMaterialInteraction subsurfaceMaterialInteractionCreate(
   vec4 transmittanceColor = 0.0f;
   vec4 subsurfaceMeasurementDistance = 0.0f;
   vec4 subsurfaceSingleScatteringAlbedo = 0.0f;
+  const vec3 subsurfaceColorTint = saturate(surfaceInteraction.vertexColor.rgb);
 
   bool isDiffusionProfile = subsurfaceMaterial.maxSampleRadius > 0.0f;
 
@@ -402,15 +403,19 @@ SubsurfaceMaterialInteraction subsurfaceMaterialInteractionCreate(
       transmittanceColor.rgb = subsurfaceMaterial.volumetricAttenuationCoefficient;
     }
   }
+  // Vertex-color-tinted terrain commonly keeps the SSS atlases grayscale and derives hue from the draw color.
+  // Apply the resolved vertex tint here so biome-colored foliage carries that tint into transmission as well.
+  transmittanceColor.rgb *= subsurfaceColorTint;
   subsurfaceMaterialInteraction.packedTransmittanceColor = colorToR11G11B10(transmittanceColor.rgb);
 
   if (singleScatteringAlbedoLoaded)
   {
+    subsurfaceSingleScatteringAlbedo.rgb *= subsurfaceColorTint;
     subsurfaceMaterialInteraction.packedSingleScatteringAlbedo = colorToR11G11B10(subsurfaceSingleScatteringAlbedo.rgb);
   }
   else
   {
-    subsurfaceSingleScatteringAlbedo.rgb = subsurfaceMaterial.singleScatteringAlbedo;
+    subsurfaceSingleScatteringAlbedo.rgb = subsurfaceMaterial.singleScatteringAlbedo * subsurfaceColorTint;
     subsurfaceMaterialInteraction.packedSingleScatteringAlbedo = colorToR11G11B10(subsurfaceSingleScatteringAlbedo.rgb);
   }
 
