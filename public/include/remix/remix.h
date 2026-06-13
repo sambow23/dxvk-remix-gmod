@@ -195,6 +195,7 @@ namespace remix {
     Result< void >                    DestroyLight(remixapi_LightHandle handle);
     Result< void >                    DrawLightInstance(remixapi_LightHandle handle);
     Result< void >                    SetConfigVariable(const char* key, const char* value);
+    Result< void >                    SetGameValue(const char* key, const char* value);
     Result< void >                    SetFogState(const remixapi_FogInfo& info);
 
     // DXVK interoperability
@@ -232,7 +233,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 256,
+      static_assert(sizeof(remixapi_Interface) == 272,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -274,6 +275,13 @@ namespace remix {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.SetConfigVariable(key, value);
+  }
+
+  inline Result< void > Interface::SetGameValue(const char* key, const char* value) {
+    if (!m_CInterface.SetGameValue) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.SetGameValue(key, value);
   }
 
   inline Result< void > Interface::SetFogState(const remixapi_FogInfo& info) {

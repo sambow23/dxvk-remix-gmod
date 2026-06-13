@@ -29,6 +29,7 @@
 #include "rtx_lights.h"
 #include "rtx_objectpicking.h"
 #include "rtx_option.h"
+#include "rtx_fork_game_state.h"
 #include "rtx_globals.h"
 #include "rtx_options.h"
 #include "rtx_debug_view.h"
@@ -1875,6 +1876,51 @@ extern "C" {
     return dxvk::fork_hooks::submitUiDrawList(drawList);
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetGameValue(
+    const char* key,
+    const char* value) {
+    if (!key || key[0] == '\0' || !value) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    dxvk::fork_game_state::GameStateStore::get().set(
+      std::string { key }, std::string { value });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetGameValue(
+    const char* key,
+    char*       out_buffer,
+    uint32_t    in_buffer_size,
+    uint32_t*   out_actual_size) {
+    if (key == nullptr || key[0] == '\0') {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (out_actual_size == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (in_buffer_size > 0 && out_buffer == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    std::string value;
+    if (!dxvk::fork_game_state::GameStateStore::get().tryGet(std::string { key }, value)) {
+      *out_actual_size = 0;
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    const uint32_t needed = static_cast<uint32_t>(value.size()) + 1u;
+    *out_actual_size = needed;
+
+    if (in_buffer_size >= needed) {
+      memcpy(out_buffer, value.data(), value.size());
+      out_buffer[value.size()] = '\0';
+    }
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
     const remixapi_InitializeLibraryInfo* info,
     remixapi_Interface* out_result) {
@@ -1913,14 +1959,17 @@ extern "C" {
     interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
     interf.GetUIState = remixapi_GetUIState;
     interf.SetUIState = remixapi_SetUIState;
+    interf.DrawScreenOverlay = remixapi_DrawScreenOverlay;
     interf.SetFogState = remixapi_SetFogState;
     interf.SetScreenTint = remixapi_SetScreenTint;
     interf.RegisterUITexture = remixapi_RegisterUITexture;
     interf.FreeUITexture = remixapi_FreeUITexture;
     interf.SubmitUIDrawList = remixapi_SubmitUIDrawList;
+    interf.SetGameValue = remixapi_SetGameValue;
+    interf.GetGameValue = remixapi_GetGameValue;
     dxvk::fork_hooks::remixApiVtableInit(interf);
 
-    static_assert(sizeof(interf) == 256, "Add/remove function registration");
+    static_assert(sizeof(interf) == 272, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

@@ -35,6 +35,10 @@ struct VolumeArgs;
 struct RaytraceArgs;
 
 namespace dxvk {
+  namespace fork_hooks {
+    void dispatchScreenOverlay(class RtxContext& ctx, Resources::RaytracingOutput& rtOutput);
+  }
+
   class DxvkContext;
   class AssetExporter;
   class SceneManager;
@@ -336,5 +340,7 @@ namespace dxvk {
 
     RtxFramePassStage m_currentPassStage = RtxFramePassStage::FrameBegin;
 #endif
+
+    friend void fork_hooks::dispatchScreenOverlay(RtxContext& ctx, Resources::RaytracingOutput& rtOutput);
   };
 } // namespace dxvk

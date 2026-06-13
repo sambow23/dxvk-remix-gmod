@@ -75,8 +75,6 @@
 #include "rtx_matrix_helpers.h"
 #include "../util/util_fastops.h"
 
-#include "rtx/pass/screen_overlay/screen_overlay.h"
-#include <rtx_shaders/screen_overlay.h>
 #include "rtx/pass/screen_tint/screen_tint.h"
 #include <rtx_shaders/screen_tint.h>
 // Destructor requires the struct definitions
@@ -85,19 +83,6 @@
 namespace dxvk {
 
   namespace {
-    class ScreenOverlayShader : public ManagedShader {
-      SHADER_SOURCE(ScreenOverlayShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_overlay)
-
-      PUSH_CONSTANTS(ScreenOverlayArgs)
-
-      BEGIN_PARAMETER()
-        RW_TEXTURE2D(SCREEN_OVERLAY_INPUT_OUTPUT)
-        SAMPLER2D(SCREEN_OVERLAY_TEXTURE)
-      END_PARAMETER()
-    };
-
-    PREWARM_SHADER_PIPELINE(ScreenOverlayShader);
-
     class ScreenTintShader : public ManagedShader {
       SHADER_SOURCE(ScreenTintShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_tint)
 
@@ -1921,7 +1906,7 @@ namespace dxvk {
   }
 
   void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
-    static_cast<void>(rtOutput);
+    fork_hooks::dispatchScreenOverlay(*this, rtOutput);
   }
 
   void RtxContext::dispatchUi(Resources::RaytracingOutput& rtOutput) {

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - renamed MaterialInfoOpaqueEXT.heightTextureStrength to MaterialInfoOpaqueEXT.displaceIn
 
 ### Fixed
+- Restored `remixapi_Interface.DrawScreenOverlay` assignment, the screen-overlay render path, and the `remixapi_SetGameValue` / `remixapi_GetGameValue` game-state entry points.
 
 ### Removed
 
