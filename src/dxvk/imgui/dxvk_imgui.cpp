@@ -611,7 +611,7 @@ namespace dxvk {
 
     m_capture = new ImGuiCapture(this);
 
-    if (RtxOptions::useNewGuiInputMethod()) {
+    if (RtxOptions::useNewGuiInputMethod() && env::isRemixBridgeActive()) {
       m_overlayWin = new GameOverlay("RemixGuiInputSink", this);
     }
   }
@@ -922,6 +922,8 @@ namespace dxvk {
     if (showUI == UIType::None) {
       ImGui::CloseCurrentPopup();
       ImGui::GetIO().MouseDrawCursor = false;
+      // Restore OS cursor visibility (ShowCursor uses a reference counter)
+      while (ShowCursor(TRUE) < 0) { }
     } else {
       if (RtxOptions::showUICursor()) {
         ImGui::GetIO().MouseDrawCursor = true;
