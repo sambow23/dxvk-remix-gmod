@@ -159,6 +159,11 @@ namespace dxvk {
     CameraPositionAndDepthFlags
   };
 
+  enum class SkyMode : int {
+    SkyboxRasterization = 0,
+    PhysicalAtmosphere = 1
+  };
+
   enum class EnableVsync : int {
     Off = 0,
     On = 1,
@@ -1315,31 +1320,6 @@ namespace dxvk {
     DECLARE_MOON_OPTIONS(2);
     DECLARE_MOON_OPTIONS(3);
 #undef DECLARE_MOON_OPTIONS
-
-    // ----- Weather preset declarations (fork, 2026-05-08) -----
-    // 348 RTX_OPTIONs: 12 presets x 29 fields under rtx.weather.preset.<name>.
-    // (Buckets: 19 cloud + 3 atmosphere + 3 sky/moon mood + 4 volumetric.)
-    // Neutral defaults here; per-archetype tuning lands in a follow-up commit.
-    // Getter form: RtxOptions::clear_cloudDensity(), etc.
-    // See src/dxvk/rtx_render/rtx_fork_weather.h for macro definitions.
-    DECLARE_ALL_WEATHER_PRESETS();
-#undef DECLARE_ALL_WEATHER_PRESETS
-#undef DECLARE_WEATHER_PRESET
-#undef WEATHER_PRESET_RTX_OPTION_FOR
-#undef WEATHER_PRESET_BIND_clear
-#undef WEATHER_PRESET_BIND_partlyCloudy
-#undef WEATHER_PRESET_BIND_overcast
-#undef WEATHER_PRESET_BIND_hazy
-#undef WEATHER_PRESET_BIND_foggy
-#undef WEATHER_PRESET_BIND_drizzle
-#undef WEATHER_PRESET_BIND_rainstorm
-#undef WEATHER_PRESET_BIND_thunderstorm
-#undef WEATHER_PRESET_BIND_snow
-#undef WEATHER_PRESET_BIND_blizzard
-#undef WEATHER_PRESET_BIND_sandstorm
-#undef WEATHER_PRESET_BIND_smoggy
-    // NOTE: WEATHER_PRESET_FIELD_LIST is intentionally NOT undef'd here -
-    // Task 2 consumes it to declare WeatherSnapshot struct members.
 
     // ----- Moon NEE / atmospheric-coupling strengths (fork) -----
     RTX_OPTION("rtx.atmosphere", float, moonNeeStrength, 1.0f,

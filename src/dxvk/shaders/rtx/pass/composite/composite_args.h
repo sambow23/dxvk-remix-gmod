@@ -22,6 +22,7 @@
 #pragma once
 
 #include "rtx/utility/shader_types.h"
+#include "rtx/pass/atmosphere/atmosphere_args.h"
 #include "rtx/pass/volume_args.h"
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/algorithm/accumulate.h"
@@ -56,8 +57,6 @@ struct CompositeArgs {
   float roughnessDemodulationOffset;
   uint combineLightingChannels;
 
-  VolumeArgs volumeArgs;
-  AccumulationArgs accumulationArgs;
   AtmosphereArgs atmosphereArgs;
 
   // One of DENOISER_MODE constants, affects signal conversion

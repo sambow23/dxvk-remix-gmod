@@ -515,6 +515,12 @@ struct MinimalSurfaceInteraction
   vec3 geometryBitangent = 0.f;
   float shadowTerminatorOffset = 0.f;
 
+  property vec3 triangleNormal
+  {
+    get { return geometryNormal; }
+    set { geometryNormal = newValue; }
+  }
+
   // Surfaces created from gbuffer may not be valid (i.e. if this pixel was a ray miss)
   property bool isValid
   {

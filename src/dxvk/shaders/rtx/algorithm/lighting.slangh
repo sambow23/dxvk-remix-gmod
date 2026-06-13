@@ -49,7 +49,8 @@ bool shouldSkipLightForCustomIndex(DecodedPolymorphicLight decodedLight, uint cu
 bool sampleLightRTXDI(
   ivec2 pixelCoordinate,
   MinimalSurfaceInteraction primarySurfaceInteraction,
-  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint8_t portalID, inout uint16_t lightIdx)
+  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint8_t portalID, inout uint16_t lightIdx,
+  uint customIndex = 0)
 {
   // Load the reservoir for this pixel from RTXDI
 
@@ -201,7 +202,8 @@ bool sampleLightAdvancedRIS(
   MinimalSurfaceInteraction surfaceInteraction,
   OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
   vec3 viewDirection,
-  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t outLightIndex)
+  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t outLightIndex,
+  uint customIndex = 0)
 {
   if (cb.risTotalSampleCount == 0) {
     return false;

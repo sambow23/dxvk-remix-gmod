@@ -119,47 +119,6 @@ vec4 calculateFog(float viewDistance, vec3 fogColor)
   return vec4(fogColor, 1.0 - f);
 }
 
-void unpackDenoiserRadiance(inout float3 radiance, uint denoiserMode)
-{
-  switch (denoiserMode)
-  {
-    case DENOISER_MODE_RELAX:
-      radiance = RELAX_BackEnd_UnpackRadiance(float4(radiance, 0)).xyz;
-      break;
-    case DENOISER_MODE_REBLUR:
-      radiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(float4(radiance, 0)).xyz;
-      break;
-  }
-}
-
-vec3 applyPostFilter(Texture2D<float4> texture, uint2 pixel, uint denoiserMode)
-{
-  vec3 centerColor = texture[pixel].xyz;
-  unpackDenoiserRadiance(centerColor, denoiserMode);
-  vec3 totalColor = vec3(0);
-  uint count = 0;
-  for (int i = -1; i <= 1; ++i)
-  {
-    for (int j = -1; j <= 1; ++j)
-    {
-      if (i != 0 && j != 0)
-      {
-        vec3 color = texture[pixel + int2(i, j)].xyz;
-        unpackDenoiserRadiance(color, denoiserMode);
-        count += any(color > vec3(0)) ? 1 : 0;
-        totalColor += color;
-      }
-    }
-  }
-
-  vec3 avgColor = totalColor / max(1, count);
-  if (calcBt709Luminance(centerColor) > calcBt709Luminance(avgColor) * cb.postFilterThreshold)
-  {
-    centerColor = avgColor;
-  }
-  return centerColor;
-}
-
 void preCompositeDebugView(uint2 pixelCoordinate)
 {
   // Debug views that need to run before the union-active early-out so they cover every pixel.

@@ -28,6 +28,12 @@
 #include "rtx/utility/math.slangh"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
 
+#ifndef ATMOSPHERE_AVAILABLE
+Texture2D<float4> AtmosphereSkyViewLut;
+Texture2D<float> AtmosphereCloudSkyTransmittanceLut;
+SamplerState AtmosphereCloudNoise3DSampler;
+#endif
+
 // Constants
 static const float kAtmosphereEpsilon = 1e-3f;
 static const float kPi = 3.14159265358979323846f;
@@ -656,6 +662,32 @@ float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
   float transmittance = exp(-density * args.cloudDensity * 2.0f);
 
   return mix(1.0f, transmittance, args.cloudShadowStrength);
+#endif
+}
+
+vec3 sampleSkyAmbientForVolume(vec3 dirYUp,
+                               AtmosphereArgs args,
+                               Texture2D<float4> skyViewLut,
+                               Texture2D<float> cloudSkyTransmittanceLut,
+                               SamplerState lutSampler) {
+#ifndef ATMOSPHERE_AVAILABLE
+  return vec3(0.0f);
+#else
+  if (dirYUp.y < 0.0f) {
+    return vec3(0.0f);
+  }
+
+  float elevation = asin(saturate(dirYUp.y));
+  float azimuth = atan2(dirYUp.z, dirYUp.x);
+  if (azimuth < 0.0f) {
+    azimuth += 2.0f * kPi;
+  }
+
+  vec2 uv = vec2(azimuth / (2.0f * kPi), elevation / kPi + 0.5f);
+  vec3 skyRadiance = skyViewLut.SampleLevel(lutSampler, uv, 0).rgb;
+  float cloudTrans = cloudSkyTransmittanceLut.SampleLevel(lutSampler, uv, 0).r;
+  float cloudFactor = lerp(1.0f, cloudTrans, args.cloudSkyAmbientCloudOcclusionStrength);
+  return skyRadiance * cloudFactor;
 #endif
 }
 

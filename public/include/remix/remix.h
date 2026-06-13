@@ -232,7 +232,7 @@ namespace remix {
         return status;
       }
 
-  static_assert(sizeof(remixapi_Interface) == 272,
+      static_assert(sizeof(remixapi_Interface) == 256,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};

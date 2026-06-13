@@ -65,6 +65,7 @@
 typedef struct IDirect3D9Ex       IDirect3D9Ex;
 typedef struct IDirect3DDevice9Ex IDirect3DDevice9Ex;
 typedef struct IDirect3DSurface9  IDirect3DSurface9;
+typedef struct IDirect3DTexture9  IDirect3DTexture9;
 
 #ifndef REMIX_WINAPI_NO_INCLUDE
   typedef HWND remixapi_HWND;
@@ -202,6 +203,7 @@ extern "C" {
   typedef struct remixapi_MaterialHandle_T* remixapi_MaterialHandle;
   typedef struct remixapi_MeshHandle_T* remixapi_MeshHandle;
   typedef struct remixapi_LightHandle_T* remixapi_LightHandle;
+  typedef struct remixapi_TextureHandle_T* remixapi_TextureHandle;
 
   typedef const wchar_t* remixapi_Path;
 
@@ -816,7 +818,6 @@ extern "C" {
     remixapi_TextureHandle      handle);
 
   typedef void (REMIXAPI_PTR* PFN_remixapi_BridgeCallback)(void);
-
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RegisterCallbacks)(
     PFN_remixapi_BridgeCallback beginSceneCallback,
     PFN_remixapi_BridgeCallback endSceneCallback,

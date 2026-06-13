@@ -1408,6 +1408,8 @@ namespace dxvk {
     constants.resolveStochasticAlphaBlendThreshold = m_common->metaComposite().stochasticAlphaBlendOpacityThreshold();
 
     constants.skyBrightness = RtxOptions::skyBrightness();
+    constants.skyMode = 0u;
+    constants.atmosphereArgs = {};
     constants.isLastCompositeOutputValid = restirGI.isActive() && restirGI.getLastCompositeOutput().matchesWriteFrameIdx(frameIdx - 1);
     constants.isZUp = RtxOptions::zUp();
     constants.enableCullingSecondaryRays = RtxOptions::enableCullingInSecondaryRays();
@@ -1916,6 +1918,10 @@ namespace dxvk {
     ScopedCpuProfileZone();
 
     m_common->metaSRGBDither().dispatch(this, rtOutput, performSRGBConversion);
+  }
+
+  void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
+    static_cast<void>(rtOutput);
   }
 
   void RtxContext::dispatchUi(Resources::RaytracingOutput& rtOutput) {

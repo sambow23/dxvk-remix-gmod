@@ -492,18 +492,6 @@ namespace dxvk {
     // Implementation in rtx_fork_api_entry.cpp.
     remixapi_ErrorCode requestTextureVramFree(D3D9DeviceEx* remixDevice);
 
-    // Fills out_stats with DXVK per-category totals, driver-view heap info
-    // (matches Task Manager / nvidia-smi — gap vs totalAllocatedBytes exposes
-    // non-DXVK allocations such as NGX, RT pipeline state, descriptor pools,
-    // NRC, etc.), and the fork-side texture manager's table size. Returns
-    // INVALID_ARGUMENTS if out_stats is null or REMIX_DEVICE_WAS_NOT_REGISTERED
-    // if remixDevice is null.
-    // No private-member access; no friend declaration needed.
-    // Implementation in rtx_fork_api_entry.cpp.
-    remixapi_ErrorCode getVramStats(
-      D3D9DeviceEx*        remixDevice,
-      remixapi_VramStats*  out_stats);
-
     // Populates the tonemap-operator-related fields of the global tonemapper's
     // shader args struct (tonemapOperator + per-operator param blocks for
     // Hable, AgX, Lottes, Psycho17). Called from
