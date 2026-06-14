@@ -145,6 +145,112 @@ namespace {
     return sizeof(T) * count;
   }
 
+  void flushPendingLightWork(dxvk::D3D9DeviceEx* remixDevice) {
+    std::vector<PendingLightCreate> creates;
+    std::vector<PendingLightUpdate> updates;
+    std::vector<PendingDomeUpdate> domeUpdates;
+    std::vector<remixapi_LightHandle> destroys;
+    {
+      std::lock_guard lock { s_mutex };
+      creates.swap(s_pendingLightCreates);
+      updates.swap(s_pendingLightUpdates);
+      domeUpdates.swap(s_pendingDomeUpdates);
+      destroys.swap(s_pendingLightDestroys);
+    }
+
+    std::unordered_set<remixapi_LightHandle> tombstones;
+    tombstones.insert(destroys.begin(), destroys.end());
+
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), domeUpdates = std::move(domeUpdates), destroys = std::move(destroys), tombstones = std::move(tombstones)](dxvk::DxvkContext* ctx) mutable {
+      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+
+      for (auto h : destroys) {
+        if (h) {
+          lightMgr.unregisterPersistentExternalLight(h);
+          lightMgr.removeExternalLight(h);
+        }
+      }
+
+      for (auto& create : creates) {
+        if (tombstones.find(create.handle) != tombstones.end()) {
+          continue;
+        }
+
+        if (create.isDome) {
+          auto preloadTexture = [ctx](const std::filesystem::path& path) {
+            if (path.empty()) {
+              return dxvk::TextureRef{};
+            }
+            auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
+            if (assetData == nullptr) {
+              return dxvk::TextureRef{};
+            }
+            auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
+              .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
+            return dxvk::TextureRef{ uploadedTexture };
+          };
+
+          dxvk::DomeLight domeLight;
+          domeLight.radiance = create.radiance;
+          domeLight.worldToLight = inverse(create.transform);
+          domeLight.texture = preloadTexture(create.texturePath);
+
+          uint32_t unused;
+          ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
+
+          lightMgr.addExternalDomeLight(create.handle, domeLight);
+        } else if (create.rtLight.has_value()) {
+          lightMgr.addExternalLight(create.handle, *create.rtLight);
+        }
+
+        lightMgr.registerPersistentExternalLight(create.handle);
+        lightMgr.addExternalLightInstance(create.handle);
+      }
+
+      for (auto& upd : updates) {
+        if (upd.rtLight.has_value() && tombstones.find(upd.handle) == tombstones.end()) {
+          lightMgr.registerPersistentExternalLight(upd.handle);
+          lightMgr.addExternalLight(upd.handle, *upd.rtLight);
+          lightMgr.addExternalLightInstance(upd.handle);
+        }
+      }
+
+      for (auto& du : domeUpdates) {
+        if (tombstones.find(du.handle) != tombstones.end()) {
+          continue;
+        }
+
+        auto preloadTexture = [ctx](const std::filesystem::path& path) {
+          if (path.empty()) {
+            return dxvk::TextureRef{};
+          }
+          auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
+          if (assetData == nullptr) {
+            return dxvk::TextureRef{};
+          }
+          auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
+            .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
+          return dxvk::TextureRef{ uploadedTexture };
+        };
+
+        dxvk::DomeLight domeLight;
+        domeLight.radiance = du.radiance;
+        domeLight.worldToLight = inverse(du.transform);
+        domeLight.texture = preloadTexture(du.texturePath);
+
+        uint32_t unused;
+        ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
+
+        lightMgr.registerPersistentExternalLight(du.handle);
+        lightMgr.addExternalDomeLight(du.handle, domeLight);
+        lightMgr.addExternalLightInstance(du.handle);
+      }
+
+      lightMgr.queueAutoInstancePersistent();
+    });
+  }
+
   bool isHResultAliasedWithRemixErrorCode(HRESULT hr) {
     switch (hr) {
     case REMIXAPI_ERROR_CODE_HRESULT_NO_REQUIRED_GPU_FEATURES:
@@ -1193,6 +1299,7 @@ namespace {
 
         auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
         lightMgr.addExternalDomeLight(cHandle, domeLight);
+        lightMgr.registerPersistentExternalLight(cHandle);
       });
     } else {
       // Regular analytical light handling
@@ -1217,6 +1324,7 @@ namespace {
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
         auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
         lightMgr.addExternalLight(cHandle, cRtLight);
+        lightMgr.registerPersistentExternalLight(cHandle);
       });
     }
 
@@ -1232,11 +1340,7 @@ namespace {
     }
 
     std::lock_guard lock { s_mutex };
-    auto devLock = remixDevice->LockDevice();
-    remixDevice->EmitCs([handle](dxvk::DxvkContext* ctx) {
-      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
-      lightMgr.removeExternalLight(handle);
-    });
+    s_pendingLightDestroys.push_back(handle);
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
@@ -1716,6 +1820,7 @@ namespace {
     if (!remixDevice) {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
     }
+    flushPendingLightWork(remixDevice);
     dxvk::fork_hooks::presentScreenOverlayFlush(remixDevice);
     dxvk::fork_hooks::presentUiFlush(remixDevice);
     dxvk::fork_hooks::presentEndSceneDispatch();
@@ -1785,9 +1890,15 @@ namespace {
 
 extern "C" {
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void) {
-    if (!tryAsDxvk()) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
     }
+
+    flushPendingLightWork(remixDevice);
+    dxvk::fork_hooks::presentScreenOverlayFlush(remixDevice);
+    dxvk::fork_hooks::presentUiFlush(remixDevice);
+
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -1800,6 +1911,33 @@ extern "C" {
     if (!handle || !info) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
+
+    if (auto extDome = pnext::find<remixapi_LightInfoDomeEXT>(info)) {
+      auto cTransform = convert::tomat4(extDome->transform);
+      auto cTexturePath = convert::topath(extDome->colorTexture);
+      auto cRadiance = convert::tovec3(info->radiance);
+
+      std::lock_guard lock { s_mutex };
+      s_pendingDomeUpdates.push_back(PendingDomeUpdate{ handle, cTransform, cTexturePath, cRadiance });
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    if (info->sType != REMIXAPI_STRUCT_TYPE_LIGHT_INFO) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    auto rt = convert::toRtLight(*info);
+    if (!rt.has_value()) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    rt->isDynamic = info->isDynamic;
+    rt->ignoreViewModel = info->ignoreViewModel;
+    rt->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
+
+    std::lock_guard lock { s_mutex };
+    s_pendingLightUpdates.push_back(PendingLightUpdate{ handle, std::move(rt) });
+
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 

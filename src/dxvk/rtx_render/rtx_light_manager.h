@@ -41,6 +41,23 @@ struct RaytraceArgs;
 namespace dxvk {
 class DxvkContext;
 class DxvkDevice;
+struct LightManager;
+
+namespace fork_hooks {
+  void flushPendingLightMutations(LightManager& mgr);
+  void updateLightStaticSleep(RtLight* light, const RtLight& newLight,
+                              DxvkDevice* device, uint64_t externalId);
+  void setExternalLightEmplace(LightManager& mgr,
+                               remixapi_LightHandle handle,
+                               const RtLight& rtlight);
+  void disableExternalLightQueue(LightManager& mgr,
+                                 remixapi_LightHandle handle);
+  void registerPersistentLight(LightManager& mgr,
+                               remixapi_LightHandle handle);
+  void unregisterPersistentLight(LightManager& mgr,
+                                 remixapi_LightHandle handle);
+  void queueAutoInstancePersistent(LightManager& mgr);
+}
 
 struct LightRange {
   uint32_t offset;
@@ -48,6 +65,14 @@ struct LightRange {
 };
 
 struct LightManager : public CommonDeviceObject {
+  friend void fork_hooks::flushPendingLightMutations(LightManager&);
+  friend void fork_hooks::updateLightStaticSleep(RtLight*, const RtLight&, DxvkDevice*, uint64_t);
+  friend void fork_hooks::setExternalLightEmplace(LightManager&, remixapi_LightHandle, const RtLight&);
+  friend void fork_hooks::disableExternalLightQueue(LightManager&, remixapi_LightHandle);
+  friend void fork_hooks::registerPersistentLight(LightManager&, remixapi_LightHandle);
+  friend void fork_hooks::unregisterPersistentLight(LightManager&, remixapi_LightHandle);
+  friend void fork_hooks::queueAutoInstancePersistent(LightManager&);
+
 public:
   enum class FallbackLightMode : int {
     Never = 0,
@@ -100,6 +125,9 @@ public:
   void addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight);
   void removeExternalLight(remixapi_LightHandle handle);
   void addExternalLightInstance(remixapi_LightHandle enabledLight);
+  void registerPersistentExternalLight(remixapi_LightHandle handle);
+  void unregisterPersistentExternalLight(remixapi_LightHandle handle);
+  void queueAutoInstancePersistent();
 
   void setRaytraceArgs(RaytraceArgs& raytraceArgs, uint32_t rtxdiInitialLightSamples, uint32_t volumeRISInitialLightSamples, uint32_t risLightSamples) const;
   
@@ -123,6 +151,11 @@ private:
   std::unordered_set<remixapi_LightHandle> m_externalActiveLightList;
   remixapi_LightHandle m_externalActiveDomeLight = nullptr;
   DomeLightArgs m_gpuDomeLightArgs;
+
+  std::vector<remixapi_LightHandle> m_pendingExternalLightErases{};
+  std::vector<std::pair<remixapi_LightHandle, RtLight>> m_pendingExternalLightUpdates{};
+  std::unordered_set<remixapi_LightHandle> m_pendingExternalActiveLights{};
+  std::unordered_set<remixapi_LightHandle> m_persistentExternalLights{};
 
   Rc<DxvkBuffer> m_lightBuffer;
   Rc<DxvkBuffer> m_previousLightBuffer;
