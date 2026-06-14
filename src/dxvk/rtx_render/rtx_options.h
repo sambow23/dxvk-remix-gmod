@@ -1241,6 +1241,9 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, sunSize, 0.545f, "Size of sun disc in degrees.");
     RTX_OPTION("rtx.atmosphere", float, sunIntensity, 1.0f, "Strength of Sun.");
     RTX_OPTION("rtx.atmosphere", float, sunVolumetricRadianceScale, 1.0f, "Multiplier for the sun's direct contribution to volumetric lighting. Lower values reduce 'glow' on translucent surfaces in direct sunlight.");
+    RTX_OPTION_ARGS("rtx.atmosphere", float, atmosphereSunVolumetricRadianceScale, 1.0f,
+           "Independent multiplier on the physical sun's contribution to volumetric fog in-scattering.",
+           args.minValue = 0.0f, args.maxValue = 50.0f);
     RTX_OPTION("rtx.atmosphere", float, sunElevation, 15.0f, "Sun angle from horizon in degrees.");
     RTX_OPTION("rtx.atmosphere", float, sunRotation, 0.0f, "Rotation of sun around zenith in degrees.");
     RTX_OPTION("rtx.atmosphere", float, altitude, 100.0f, "Height from sea level in meters.");
@@ -1260,6 +1263,8 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, ozoneLayerAltitude, 25.0f, "Altitude of ozone layer peak in kilometers.");
     RTX_OPTION("rtx.atmosphere", float, ozoneLayerWidth, 15.0f, "Width of the ozone layer in kilometers.");
     RTX_OPTION("rtx.atmosphere", Vector3, sunIlluminance, Vector3(20.0f, 20.0f, 20.0f), "Base Sun illuminance color/intensity.");
+    RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 0.0f,
+           "Blend between artistic and physical atmosphere multiscattering.");
 
     // ----- Night-sky shading (fork) -----
     // Stars, Milky Way, shooting stars, airglow. Active when skyMode == PhysicalAtmosphere.
@@ -1279,6 +1284,26 @@ namespace dxvk {
                "Ambient night-sky brightness from airglow and zodiacal light.");
     RTX_OPTION("rtx.atmosphere", Vector3, nightSkyColor, Vector3(0.15f, 0.2f, 0.4f),
                "Base color tint of the night-sky airglow.");
+    RTX_OPTION("rtx.atmosphere", bool, milkyWayEnabled, false,
+           "Enable Milky Way density and background glow shaping.");
+    RTX_OPTION("rtx.atmosphere", float, milkyWayDensityBoost, 0.3f,
+           "Additional star density inside the Milky Way band.");
+    RTX_OPTION("rtx.atmosphere", float, milkyWayBackgroundBrightness, 0.05f,
+           "Diffuse glow brightness for the Milky Way band.");
+    RTX_OPTION("rtx.atmosphere", Vector3, milkyWayBackgroundColor, Vector3(0.5f, 0.55f, 0.75f),
+           "Outer-edge tint for the Milky Way glow.");
+    RTX_OPTION("rtx.atmosphere", Vector3, milkyWayCoreColor, Vector3(1.0f, 0.85f, 0.55f),
+           "Core tint for the Milky Way glow.");
+    RTX_OPTION("rtx.atmosphere", Vector3, milkyWayDustColor, Vector3(0.15f, 0.08f, 0.05f),
+           "Dust-lane tint for the Milky Way glow.");
+    RTX_OPTION("rtx.atmosphere", float, milkyWayDustAmount, 0.6f,
+           "How strongly Milky Way dust lanes darken the band.");
+    RTX_OPTION("rtx.atmosphere", float, starPsfSharpness, 20.0f,
+           "Procedural star point-spread sharpness.");
+    RTX_OPTION("rtx.atmosphere", float, starCloudExtinctionPower, 2.5f,
+           "Extra extinction power applied to stars behind clouds.");
+    RTX_OPTION("rtx.atmosphere", float, starAmbientCouplingStrength, 0.25f,
+           "Strength of starlight coupling into cloud night ambience.");
 
     // ----- Per-moon parameters (fork) -----
     // MAX_MOONS in atmosphere_args.h must equal the number of DECLARE_MOON_OPTIONS
@@ -1378,6 +1403,10 @@ namespace dxvk {
                "Ambient airglow per-moon strength contribution to nightLight. The cloud "
                "volume gets a uniform sky-bounce from each enabled moon scaled by this "
                "constant. Default 0.0015.");
+    RTX_OPTION("rtx.atmosphere", float, moonSilverLiningIntensity, 1.0f,
+           "Master multiplier on cloud-moon silver-lining intensity.");
+    RTX_OPTION("rtx.atmosphere", float, moonHaloGlowStrength, 1.0f,
+           "Master multiplier on moon halo and ambient glow intensity.");
 
     // Cloud parameters (procedural FBM cloud layer)
     RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
@@ -1432,6 +1461,139 @@ namespace dxvk {
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
                "Default 12.0; viable range 6-24.");
+    RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientStrength, 0.0f,
+           "Overall strength of volumetric sky-ambient illumination.");
+    RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientCloudOcclusionStrength, 1.0f,
+           "Cloud-occlusion strength applied to volumetric sky ambient.");
+       RTX_OPTION("rtx.atmosphere", float, cloudMultiScatterStrength, 1.0f,
+                        "Master strength of the Wrenninge-style cloud multi-scatter response.");
+       RTX_OPTION("rtx.atmosphere", uint32_t, cloudMultiScatterOctaves, 3,
+                        "Octave count used for cloud multi-scatter accumulation.");
+    RTX_OPTION("rtx.atmosphere", bool, cloudHexTilingEnable, true,
+           "Enable seamless hex-based de-tiling of the cloud noise field.");
+    RTX_OPTION("rtx.atmosphere", float, cloudNoiseBaseFreqScale, 1.0f,
+           "Base frequency multiplier for the baked cloud noise.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailStrength, 0.6f,
+           "High-frequency edge detail strength for cloud silhouettes.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailScale, 4.3f,
+           "Frequency multiplier for the cloud edge-detail noise.");
+    RTX_OPTION("rtx.atmosphere", float, cloudEdgeSoftness, 0.15f,
+           "Width of the soft transition band at cloud edges.");
+    RTX_OPTION("rtx.atmosphere", float, cloudEdgeAmbientFade, 0.15f,
+           "Ambient fade strength on the thinnest cloud-edge samples.");
+    RTX_OPTION("rtx.atmosphere", float, cloudVerticalStretch, 1.0f,
+           "Vertical elongation factor for cloud noise features.");
+    RTX_OPTION("rtx.atmosphere", float, cloudWorleyCarveStrength, 0.6f,
+           "Worley carve strength used by the cloud noise bake.");
+    RTX_OPTION("rtx.atmosphere", float, cloudWorleyFrequency, 1.0f,
+           "Worley feature-point frequency used by the cloud noise bake.");
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudWorleyOctaves, 3,
+           "Worley FBM octave count used by the cloud noise bake.");
+
+    RTX_OPTION("rtx.atmosphere", bool, cloudColumnShapingEnable, true,
+           "Enable per-cloud column shaping instead of a single global slab profile.");
+    RTX_OPTION("rtx.atmosphere", float, cloudCellSizeKm, 2.0f,
+           "Average cloud-cluster footprint in kilometers.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnTopVariation, 0.45f,
+           "Per-cloud tower-height variation.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnTopShape, 0.6f,
+           "How strongly cloud height follows dense cluster cores.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnBaseVariation, 0.12f,
+           "Local cloud-base lift as a fraction of layer depth.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnFeather, 0.35f,
+           "Feather width at cloud-cluster edges.");
+    RTX_OPTION("rtx.atmosphere", float, cloudViewStepKm, 0.1f,
+           "View-ray march spacing through clouds in kilometers.");
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamplesMax, 64,
+           "Hard cap on cloud samples per view ray.");
+    RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f,
+           "Underside self-shadowing strength for column-shaped clouds.");
+
+    RTX_OPTION("rtx.atmosphere", float, cloudBottomDarkening, 0.55f,
+           "How much darker the cloud base is than the top.");
+    RTX_OPTION("rtx.atmosphere", float, cloudBottomDarkeningHeight, 0.65f,
+           "Height fraction at which bottom darkening reaches full brightness.");
+
+    RTX_OPTION("rtx.atmosphere", float, cloudAerialHazePerKm, 0.05f,
+           "Per-kilometer haze extinction applied to cloud radiance.");
+    RTX_OPTION("rtx.atmosphere", float, cloudAerialFadePerKm, 0.15f,
+           "Per-kilometer fade extinction applied to cloud alpha accumulation.");
+
+    RTX_OPTION("rtx.atmosphere", float, cloudPhaseG1, 0.8f,
+           "Primary Henyey-Greenstein asymmetry for cloud forward scatter.");
+    RTX_OPTION("rtx.atmosphere", float, cloudPhaseG2, 0.3f,
+           "Secondary Henyey-Greenstein asymmetry for broader in-scatter.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMsScale, 1.0f,
+           "Master multiplier on Nubis cloud multi-scatter strength.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMsSunDotMax, 0.9f,
+           "Upper bound on sun-dot for the Nubis sigma_ms remap.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMsSigmaShallow, 0.25f,
+           "Shallow sigma_ms value for Nubis cloud lighting.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMsSigmaDeep, 0.05f,
+           "Deep sigma_ms value for Nubis cloud lighting.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMsSdfDepth, 128.0f,
+           "Signed-distance depth in meters where sigma_ms reaches the deep value.");
+
+    RTX_OPTION("rtx.atmosphere", float, cloudSunsetAmbientStrength, 1.0f,
+           "Strength of the sunset warm/cool ambient cloud blend.");
+    RTX_OPTION("rtx.atmosphere", float, cloudSunsetAmbientReachInvKm, 1.0f,
+           "How quickly sunset ambient turns cool with self-shadow depth.");
+    RTX_OPTION("rtx.atmosphere", float, cloudSunsetAmbientRampHighSun, 0.4f,
+           "Sun-elevation threshold where sunset ambient fades out.");
+    RTX_OPTION("rtx.atmosphere", float, cloudVoxelGridRebakeGranularityKm, 0.1f,
+           "Travel or wind-scroll distance before cloud voxel grids rebake.");
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchCloudVoxelGrids, true,
+           "Diagnostic toggle for cloud voxel-grid dispatches.");
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchCloudRender, true,
+           "Diagnostic toggle for the cloud render dispatch.");
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchCloudSkyTransmittance, true,
+           "Diagnostic toggle for the cloud-sky transmittance dispatch.");
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchSkyLuts, true,
+           "Diagnostic toggle for the sky LUT bake cascade.");
+    RTX_OPTION("rtx.atmosphere", bool, debugEnableAtmosphereNee, true,
+           "Diagnostic toggle for atmosphere sun and moon NEE.");
+    RTX_OPTION("rtx.atmosphere", bool, debugEnableSkyMissShading, true,
+           "Diagnostic toggle for full sky-miss shading.");
+       RTX_OPTION("rtx.atmosphere", int, sunShadowMaxSamples, 1,
+                        "Maximum number of atmosphere sun shadow samples per ray.");
+       RTX_OPTION("rtx.atmosphere", int, moonShadowMaxSamples, 1,
+                        "Maximum number of atmosphere moon shadow samples per ray.");
+    RTX_OPTION("rtx.atmosphere", float, skyViewRebakeGranularityDeg, 0.1f,
+           "Angular granularity that triggers sky-view LUT re-bakes.");
+    RTX_OPTION("rtx.atmosphere", bool, skyLutCacheKeySplitEnable, true,
+           "Enable split cache keys for the atmosphere LUTs.");
+    RTX_OPTION("rtx.atmosphere", bool, cloudRenderRTEnable, true,
+           "Enable primary-ray cloud compositing from the cloud render target.");
+    RTX_OPTION("rtx.atmosphere", bool, cloudVoxelShadowsEnable, true,
+           "Enable voxel-grid cloud shadows in atmosphere lighting.");
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowMarchStrength, 1.0f,
+           "Beer-Lambert strength multiplier for voxel-grid cloud shadows.");
+
+    RTX_OPTION("rtx.atmosphere", float, cloudRenderResolutionScale, 0.5f,
+           "Cloud render target resolution scale relative to internal resolution.");
+    RTX_OPTION("rtx.atmosphere", bool, cloudSecondaryLutEnable, true,
+           "Enable the baked secondary-ray cloud LUT.");
+    RTX_OPTION("rtx.atmosphere", bool, cloudHeightLutEnable, true,
+           "Enable the baked cloud height LUT in the screen-space cloud render pass.");
+
+    RTX_OPTION("rtx.atmosphere", bool, cloudLayer2Enable, true,
+           "Enable a second higher-altitude cloud layer.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Altitude, 5.5f,
+           "Base altitude of the second cloud layer in kilometers.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Thickness, 2.0f,
+           "Vertical depth of the second cloud layer in kilometers.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeMean, 0.6f,
+           "Mean cloud type for the second layer.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageMean, 0.85f,
+           "Mean coverage for the second cloud layer.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageSpread, 0.0f,
+           "Coverage variation for the second cloud layer.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeSpread, 1.0f,
+           "Cloud-type variation for the second cloud layer.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2NoiseSeed, 1000.0f,
+           "Noise-seed offset used to decorrelate the second cloud layer.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2DensityScale, 0.65f,
+           "Density multiplier applied only to the second cloud layer.");
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");
 

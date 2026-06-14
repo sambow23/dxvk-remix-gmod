@@ -25,10 +25,12 @@
 #include "rtx_resources.h"
 #include "rtx_asset_exporter.h"
 #include "rtx_camera_manager.h"
+#include "rtx_atmosphere.h"
 #include "rtx/pass/nrd_args.h"
 
 #include <cstdint>
 #include <chrono>
+#include <optional>
 #include "rtx_options.h"
 
 struct VolumeArgs;
@@ -36,6 +38,13 @@ struct RaytraceArgs;
 
 namespace dxvk {
   namespace fork_hooks {
+    void initAtmosphere(class RtxContext& ctx);
+    void updateAtmosphereConstants(class RtxContext& ctx, RaytraceArgs& constants);
+    void bindAtmosphereLuts(class RtxContext& ctx);
+    Resources::Resource getCloudSkyTransmittanceLut(class RtxContext& ctx);
+    Resources::Resource getCloudDSun(class RtxContext& ctx);
+    Resources::Resource getCloudDAmbient(class RtxContext& ctx);
+    Resources::Resource getCloudRenderRT(class RtxContext& ctx);
     void dispatchScreenOverlay(class RtxContext& ctx, Resources::RaytracingOutput& rtOutput);
   }
 
@@ -242,6 +251,9 @@ namespace dxvk {
     VkFormat m_skyRtColorFormat = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     VkClearValue m_skyClearValue;
     bool m_skyClearDirty = false;
+    SkyMode m_lastSkyMode = SkyMode::SkyboxRasterization;
+
+    std::unique_ptr<RtxAtmosphere> m_atmosphere;
 
     bool shouldUseDLSS() const;
     bool shouldUseRayReconstruction() const;
@@ -341,6 +353,13 @@ namespace dxvk {
     RtxFramePassStage m_currentPassStage = RtxFramePassStage::FrameBegin;
 #endif
 
+    friend void fork_hooks::initAtmosphere(RtxContext& ctx);
+    friend void fork_hooks::updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants);
+    friend void fork_hooks::bindAtmosphereLuts(RtxContext& ctx);
+    friend Resources::Resource fork_hooks::getCloudSkyTransmittanceLut(RtxContext& ctx);
+    friend Resources::Resource fork_hooks::getCloudDSun(RtxContext& ctx);
+    friend Resources::Resource fork_hooks::getCloudDAmbient(RtxContext& ctx);
+    friend Resources::Resource fork_hooks::getCloudRenderRT(RtxContext& ctx);
     friend void fork_hooks::dispatchScreenOverlay(RtxContext& ctx, Resources::RaytracingOutput& rtOutput);
   };
 } // namespace dxvk

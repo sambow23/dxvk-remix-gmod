@@ -30,7 +30,15 @@
 #include <rtx_shaders/multiscattering_lut.h>
 #include <rtx_shaders/sky_view_lut.h>
 #include <rtx_shaders/rtx_cloud_noise_baker.h>
+#include <rtx_shaders/cloud_sky_transmittance_lut.h>
+#include <rtx_shaders/cloud_sun_density_grid.h>
+#include <rtx_shaders/cloud_ambient_density_grid.h>
+#include <rtx_shaders/cloud_render.h>
+#include <rtx_shaders/cloud_secondary_lut.h>
+#include <rtx_shaders/cloud_height_lut_baker.h>
+#include <rtx_shaders/cloud_placement_map_baker.h>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <chrono>
 
@@ -82,6 +90,141 @@ namespace dxvk {
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudNoiseBakerShader);
+
+    // Fork: per-frame bake of the cloud-occluded sky-ambient transmittance LUT.
+    // 32x16 R16F keyed by (azimuth, elevation). Consumed by the volumetric pass.
+    class CloudSkyTransmittanceLutShader : public ManagedShader {
+      SHADER_SOURCE(CloudSkyTransmittanceLutShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_sky_transmittance_lut)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE2D(1)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudSkyTransmittanceLutShader);
+
+    // Fork (Nubis Cubed 2023, 2026-05-12): round-robin bake of the cloud
+    // voxel grids. 256x256x32 R16F precomputed optical depth along the sun
+    // direction (D_sun) and zenith (D_ambient). No consumer in this commit;
+    // the Nubis Cubed cloud-lighting rewrite (C4-C6) reads these via
+    // sampleDSun / sampleDAmbient.
+    class CloudSunDensityGridShader : public ManagedShader {
+      SHADER_SOURCE(CloudSunDensityGridShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_sun_density_grid)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE3D(1)
+        TEXTURE3D(2)
+        SAMPLER(3)
+        TEXTURE2D(4)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudSunDensityGridShader);
+
+    class CloudAmbientDensityGridShader : public ManagedShader {
+      SHADER_SOURCE(CloudAmbientDensityGridShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_ambient_density_grid)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE3D(1)
+        TEXTURE3D(2)
+        SAMPLER(3)
+        TEXTURE2D(4)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudAmbientDensityGridShader);
+
+    // Fork (Nubis Cubed 2023, 2026-05-12, C4): per-frame screen-space cloud
+    // raymarch using the Nubis Cubed lighting equations. Writes premultiplied
+    // rgb + transmittance alpha to AtmosphereCloudRender at downscale extent.
+    // Bindings (kept in lockstep with cloud_render.comp.slang):
+    //   0: ConstantBuffer<AtmosphereArgs>
+    //   1: Texture3D<float>      (AtmosphereCloudNoise3D)
+    //   2: SamplerState          (linear/REPEAT)
+    //   3: Texture3D<float>      (AtmosphereCloudDSun)
+    //   4: Texture3D<float>      (AtmosphereCloudDAmbient)
+    //   5: Texture2DArray<float2>(AtmosphereFastNoise)
+    //   6: RWTexture2D<float4>   output
+    //   7: Texture2D<float4>     (AtmosphereSkyViewLut)
+    //   8: Texture2D<float>      (AtmosphereCloudSkyTransmittanceLut)
+    //   9: SamplerState          (linear/CLAMP — sky-view LUT)
+    //  10: Texture2D<float>      (AtmosphereCloudHeightLut, slide 3 lift — fork 2026-05-15)
+    //  11: SamplerState          (linear/CLAMP — height LUT)
+    class CloudRenderShader : public ManagedShader {
+      SHADER_SOURCE(CloudRenderShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_render)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        TEXTURE3D(1)
+        SAMPLER(2)
+        TEXTURE3D(3)
+        TEXTURE3D(4)
+        TEXTURE2DARRAY(5)
+        RW_TEXTURE2D(6)
+        TEXTURE2D(7)
+        TEXTURE2D(8)
+        SAMPLER(9)
+        TEXTURE2D(10)
+        SAMPLER(11)
+        TEXTURE2D(12)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudRenderShader);
+
+    // Fork (2026-06-10, perf): per-frame bake of the secondary-ray cloud LUT.
+    // 256x128 RGBA16F dome holding the full Nubis cloud march per direction
+    // (rgb = premultiplied radiance, a = view transmittance). Consumed by
+    // evalSkyRadiance's non-primary branch in place of the per-ray analytical
+    // evalClouds march. Bindings 0-11 kept in lockstep with
+    // cloud_render.comp.slang (slot 6 is this pass's own RW output).
+    class CloudSecondaryLutShader : public ManagedShader {
+      SHADER_SOURCE(CloudSecondaryLutShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_secondary_lut)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        TEXTURE3D(1)
+        SAMPLER(2)
+        TEXTURE3D(3)
+        TEXTURE3D(4)
+        TEXTURE2DARRAY(5)
+        RW_TEXTURE2D(6)
+        TEXTURE2D(7)
+        TEXTURE2D(8)
+        SAMPLER(9)
+        TEXTURE2D(10)
+        SAMPLER(11)
+        TEXTURE2D(12)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudSecondaryLutShader);
+
+    // Fork (slide 3 lift — RDR2 SIGGRAPH 2019, 2026-05-15): one-shot bake of
+    // the 64x128 R8 cloud height LUT. Indexed (typeSlice, heightFrac) -> per-
+    // altitude shape modulator. Consumed by cloud_render.comp.slang via the
+    // cloudHeightProfile() helper to replace the procedural cloudTypeProfile
+    // trapezoid.
+    class CloudHeightLutBakerShader : public ManagedShader {
+      SHADER_SOURCE(CloudHeightLutBakerShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_height_lut_baker)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE2D(1)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudHeightLutBakerShader);
+
+    // Fork (column-shaping rework, 2026-06-11): bake of the 512x512 RGBA8
+    // cloud placement map (cluster field / top jitter / base lift). At init
+    // + re-baked live when cloudCellSizeKm or cloudNoiseTileKm changes.
+    class CloudPlacementMapBakerShader : public ManagedShader {
+      SHADER_SOURCE(CloudPlacementMapBakerShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_placement_map_baker)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE2D(1)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudPlacementMapBakerShader);
   }
 
 RtxAtmosphere::RtxAtmosphere(DxvkDevice* device)
@@ -105,6 +248,11 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
 
   createLutResources(ctx);
   dispatchCloudNoise3DBake(ctx);
+  cacheCloudNoiseBakeInputs();  // seed the re-bake gate with the launch-time inputs
+  dispatchCloudPlacementMapBake(ctx);
+  cacheCloudPlacementBakeInputs();
+  dispatchCloudHeightLutBake(ctx);
+  m_cachedHeightLutColumnMode = RtxOptions::cloudColumnShapingEnable();
   m_initialized = true;
   m_lutsNeedRecompute = true;
 }
@@ -191,6 +339,139 @@ namespace {
     m.darkSideBrightness = darkSide;
     m.roughnessAmount    = roughness;
   }
+
+  // Zero the AtmosphereArgs fields that animate every frame but feed only
+  // cloud / runtime-miss shaders — never the transmittance / multiscattering
+  // / sky-view LUT bakes. Used to derive a sky-LUT cache key so those LUTs
+  // only rebuild when their actual inputs change. Without this, timeSeconds
+  // + cloudWindOffset + the per-frame frame indices and camera basis cause
+  // the memcmp gate to fire every frame.
+  void normalizeForSkyLutCache(AtmosphereArgs& args) {
+    args.timeSeconds                 = 0.0f;
+    args.cloudWindOffset             = vec2(0.0f, 0.0f);
+    args.cloudRenderFrameIdx         = 0u;
+    args.cloudRenderForwardYUp       = vec3(0.0f, 0.0f, 0.0f);
+    args.cloudRenderRightYUp         = vec3(0.0f, 0.0f, 0.0f);
+    args.cloudRenderUpYUp            = vec3(0.0f, 0.0f, 0.0f);
+    args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
+    args.cloudVoxelGridSunDirty      = 0u;
+    args.cloudVoxelGridAmbientDirty  = 0u;
+    args.cloudVoxelGridFrameOffset   = 0.0f;
+  }
+
+  // Quantize one direction-vector component to the granularity step.
+  // Component-wise snapping of a unit vector: a step of S radians changes a
+  // component roughly every S radians of angular travel (within ~sqrt(3)x
+  // depending on direction), which is exactly the precision class needed —
+  // the option is a perceptual budget, not a geometric guarantee.
+  float quantizeDirComponent(float v, float stepRad) {
+    return std::floor(v / stepRad + 0.5f) * stepRad;
+  }
+
+  // Split cache key for the sky-view LUT bake (fork — 2026-06-11, perf).
+  // Extends normalizeForSkyLutCache by zeroing the star / Milky Way fields:
+  // they feed only the runtime miss shading (evalNightSky / evalStarField),
+  // never any LUT bake. starRotation in particular is game-driven per frame
+  // (sidereal animation — see atmosphere_args.h), which made the monolithic
+  // memcmp gate fire every frame at night and re-bake the entire
+  // transmittance → multiscatter → sky-view cascade for nothing.
+  //
+  // Sky-view re-bake granularity (fork — 2026-06-11, perf): when
+  // skyViewRebakeGranularityDeg > 0, the sun and moon directions are
+  // quantized INSIDE the key, so continuous time-of-day motion flips the
+  // memcmp only when a direction crosses a granularity step — one re-bake
+  // per ~0.1 deg of travel instead of one per frame. The LUT consumed
+  // between steps is stale by at most the step angle, which the in-game
+  // frozen-cascade bisect showed is imperceptible at far larger errors.
+  // Every non-direction field stays exact, so slider / preset changes
+  // re-bake immediately as before.
+  void normalizeForSkyViewLutKey(AtmosphereArgs& args) {
+    normalizeForSkyLutCache(args);
+
+    const float granularityDeg = RtxOptions::skyViewRebakeGranularityDeg();
+    if (granularityDeg > 0.0f) {
+      constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+      const float stepRad = granularityDeg * kDegToRad;
+      args.sunDirection.x = quantizeDirComponent(args.sunDirection.x, stepRad);
+      args.sunDirection.y = quantizeDirComponent(args.sunDirection.y, stepRad);
+      args.sunDirection.z = quantizeDirComponent(args.sunDirection.z, stepRad);
+      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
+        args.moons[i].direction.x = quantizeDirComponent(args.moons[i].direction.x, stepRad);
+        args.moons[i].direction.y = quantizeDirComponent(args.moons[i].direction.y, stepRad);
+        args.moons[i].direction.z = quantizeDirComponent(args.moons[i].direction.z, stepRad);
+      }
+    }
+  }
+
+  // Cache key for the D_sun / D_ambient voxel grid bakes (fork — 2026-06-11,
+  // perf). Starts from the sky-view key (per-frame fields zeroed, star /
+  // Milky Way fields zeroed, sun + moon directions quantized by
+  // skyViewRebakeGranularityDeg), then RE-INJECTS the two motion inputs the
+  // grid bake genuinely depends on — wind scroll and camera position, which
+  // the base normalization zeroes outright — quantized by the km granularity.
+  // Continuous wind / camera motion then flips the memcmp once per step of
+  // travel instead of every frame; each re-bake uses exact live values, so
+  // grid staleness is bounded by the step. Every cloud parameter stays exact
+  // in the key, so slider changes re-bake the same frame.
+  // quantizeDirComponent is a plain floor-snap — domain-agnostic, used here
+  // on km components.
+  void normalizeForVoxelGridKey(AtmosphereArgs& args) {
+    const vec2 windKm = args.cloudWindOffset;
+    const vec3 camKm  = args.cameraWorldPosYUpKm;
+    normalizeForSkyViewLutKey(args);
+
+    const float stepKm = std::max(RtxOptions::cloudVoxelGridRebakeGranularityKm(), 1e-5f);
+    args.cloudWindOffset.x     = quantizeDirComponent(windKm.x, stepKm);
+    args.cloudWindOffset.y     = quantizeDirComponent(windKm.y, stepKm);
+    args.cameraWorldPosYUpKm.x = quantizeDirComponent(camKm.x, stepKm);
+    args.cameraWorldPosYUpKm.y = quantizeDirComponent(camKm.y, stepKm);
+    args.cameraWorldPosYUpKm.z = quantizeDirComponent(camKm.z, stepKm);
+
+    args.starBrightness     = 0.0f;
+    args.starDensity        = 0.0f;
+    args.starTwinkleSpeed   = 0.0f;
+    args.nightSkyBrightness = 0.0f;
+    args.nightSkyColor      = vec3(0.0f, 0.0f, 0.0f);
+
+    args.starRotation      = 0.0f;
+    args.starAxisElevation = 0.0f;
+    args.starAxisRotation  = 0.0f;
+
+    args.starPsfSharpness            = 0.0f;
+    args.starCloudExtinctionPower    = 0.0f;
+    args.starAmbientCouplingStrength = 0.0f;
+
+    args.milkyWayEnabled              = 0.0f;
+    args.milkyWayDensityBoost         = 0.0f;
+    args.milkyWayBackgroundBrightness = 0.0f;
+    args.milkyWayBackgroundColor      = vec3(0.0f, 0.0f, 0.0f);
+    args.milkyWayDustAmount           = 0.0f;
+    args.milkyWayCoreColor            = vec3(0.0f, 0.0f, 0.0f);
+    args.milkyWayDustColor            = vec3(0.0f, 0.0f, 0.0f);
+  }
+
+  // Split cache key for the transmittance + multiscatter bakes (fork —
+  // 2026-06-11, perf). Neither bake reads the sun direction / illuminance /
+  // disk size (transmittance is parameterized by zenith angle; multiscatter
+  // integrates an isotropic phase over the hemisphere), the analytical /
+  // physical multiscatter blend weight (applied at sky-view bake time), or
+  // any moon field (moon atmospheric coupling lives in evalAtmosphereRadiance,
+  // i.e. the sky-view bake). Zeroing them here means a moving time-of-day sun
+  // or game-driven moons re-bake ONLY the sky-view LUT — the multiscatter
+  // bake alone is 32x32 texels × 64 directions × 20 steps of transmittance
+  // LUT taps, by far the heaviest dispatch of the cascade.
+  void normalizeForTransmittanceMsKey(AtmosphereArgs& args) {
+    normalizeForSkyViewLutKey(args);
+
+    args.sunDirection                 = vec3(0.0f, 0.0f, 0.0f);
+    args.sunIlluminance               = vec3(0.0f, 0.0f, 0.0f);
+    args.sunAngularRadius             = 0.0f;
+    args.mieAnisotropy                = 0.0f;
+    args.multiScatterPhysicalStrength = 0.0f;
+
+    args.moonAtmosphericCouplingStrength = 0.0f;
+    memset(&args.moons[0], 0, sizeof(args.moons));
+  }
 } // anonymous namespace
 
 AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
@@ -240,6 +521,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.ozoneLayerAltitude = RtxOptions::ozoneLayerAltitude();
   args.ozoneLayerWidth = RtxOptions::ozoneLayerWidth();
 
+  // Multiscattering blend: 0 = artistic (analytical inline), 1 = physical (LUT hemisphere).
+  args.multiScatterPhysicalStrength = RtxOptions::multiScatterPhysicalStrength();
+
   // View Altitude (converted m to km)
   args.viewAltitude = RtxOptions::altitude() * 0.001f;
 
@@ -254,7 +538,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.atmosphereRadius = args.planetRadius + args.atmosphereThickness;
   args.rayleighScaleHeight = kRayleighScaleHeight;
   args.mieScaleHeight = kMieScaleHeight;
-  args.sunVolumetricRadianceScale = RtxOptions::sunVolumetricRadianceScale();
 
   // ----- Night-sky shading (fork) -----
   args.starBrightness     = RtxOptions::starBrightness();
@@ -270,12 +553,31 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
 
   // Sidereal sky rotation. Default axis (elevation 90, rotation 0) keeps the
   // pre-rotation behavior; non-default values come from rtx.conf or game
-  // plugin pushes. starRotation is the only field expected to change frame-
-  // to-frame, so it is the only one flagged NoSave.
+  // plugin pushes. starRotation is game-drivable per-frame but also persists
+  // when saved (last writer wins during a session; cold start uses the saved
+  // value until any plugin push lands).
   args.starRotation      = RtxOptions::starRotation();
   args.starAxisElevation = RtxOptions::starAxisElevation();
   args.starAxisRotation  = RtxOptions::starAxisRotation();
   args.pad3              = 0.0f;
+
+  args.starPsfSharpness            = RtxOptions::starPsfSharpness();
+  args.starCloudExtinctionPower    = RtxOptions::starCloudExtinctionPower();
+  args.starAmbientCouplingStrength = RtxOptions::starAmbientCouplingStrength();
+  // Adaptive-march sample cap riding the former padStarCloud0 slot (fork —
+  // 2026-06-12, adaptive march sampling); CB layout unchanged.
+  args.cloudViewSamplesMax         = static_cast<float>(RtxOptions::cloudViewSamplesMax());
+
+  args.milkyWayEnabled               = RtxOptions::milkyWayEnabled() ? 1.0f : 0.0f;
+  args.milkyWayDensityBoost          = RtxOptions::milkyWayDensityBoost();
+  args.milkyWayBackgroundBrightness  = RtxOptions::milkyWayBackgroundBrightness();
+  args.padMilkyWay0                  = 0.0f;
+  args.milkyWayBackgroundColor       = RtxOptions::milkyWayBackgroundColor();
+  args.milkyWayDustAmount            = RtxOptions::milkyWayDustAmount();
+  args.milkyWayCoreColor             = RtxOptions::milkyWayCoreColor();
+  args.padMilkyWay1                  = 0.0f;
+  args.milkyWayDustColor             = RtxOptions::milkyWayDustColor();
+  args.padMilkyWay2                  = 0.0f;
 
   // ----- Per-moon parameters (fork) -----
   for (uint32_t i = 0; i < MAX_MOONS; ++i) {
@@ -288,26 +590,43 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.surfaceMoonBrightness           = RtxOptions::surfaceMoonBrightness();
   args.cloudMoonBrightness             = RtxOptions::cloudMoonBrightness();
   args.haloMoonBrightness              = RtxOptions::haloMoonBrightness();
-  args.padMoonNee0                     = 0.0f;
-  args.padMoonNee1                     = 0.0f;
-  args.padMoonNee2                     = 0.0f;
+  // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). Live in the
+  // former padMoonNee0/1 slots so the CB layout is unchanged.
+  args.sunShadowMaxSamples             = static_cast<uint32_t>(std::max(RtxOptions::sunShadowMaxSamples(), 0));
+  args.moonShadowMaxSamples            = static_cast<uint32_t>(std::max(RtxOptions::moonShadowMaxSamples(), 0));
+  // Perf-bisect shader gates (fork — 2026-06-11, diagnostic). Packed into
+  // the former padMoonNee2 slot: bit 0 = skip atmosphere NEE, bit 1 = flat
+  // sky miss. Both options default true (= bits clear = production path).
+  args.debugSkyBisectFlags             = (RtxOptions::debugEnableAtmosphereNee()  ? 0u : 1u)
+                                       | (RtxOptions::debugEnableSkyMissShading() ? 0u : 2u);
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
-  args.moonCloudDiffuseGain            = RtxOptions::moonCloudDiffuseGain();
-  args.moonCloudPhaseGain              = RtxOptions::moonCloudPhaseGain();
+  // moonSilverLiningIntensity / moonHaloGlowStrength are master multipliers
+  // applied here at args-population time so shaders see the pre-scaled value.
+  // Default 1.0 yields byte-identical behavior to pre-master-multiplier builds.
+  const float silverLining             = RtxOptions::moonSilverLiningIntensity();
+  const float haloGlow                 = RtxOptions::moonHaloGlowStrength();
+  args.moonCloudDiffuseGain            = RtxOptions::moonCloudDiffuseGain()  * silverLining;
+  args.moonCloudPhaseGain              = RtxOptions::moonCloudPhaseGain()    * silverLining;
   args.moonCloudAnisotropy             = RtxOptions::moonCloudAnisotropy();
-  args.moonHaloMagnitude               = RtxOptions::moonHaloMagnitude();
-  args.moonAmbientAirglow              = RtxOptions::moonAmbientAirglow();
-  args.padCloudLook0                   = 0.0f;
-  args.padCloudLook1                   = 0.0f;
-  args.padCloudLook2                   = 0.0f;
+  args.moonHaloMagnitude               = RtxOptions::moonHaloMagnitude()     * haloGlow;
+  args.moonAmbientAirglow              = RtxOptions::moonAmbientAirglow()    * haloGlow;
+  // Hex de-tiling gate (fork — 2026-06-11, stage A). Lives in the former
+  // padCloudLook0 slot so the CB layout is unchanged.
+  args.cloudHexTilingEnable            = RtxOptions::cloudHexTilingEnable() ? 1.0f : 0.0f;
+  // Bake frequency scale (fork — 2026-06-11, stage B). Lives in the former
+  // padCloudLook1 slot so the CB layout is unchanged.
+  args.cloudNoiseBaseFreqScale         = RtxOptions::cloudNoiseBaseFreqScale();
+  // Per-column cloud model gate (fork — 2026-06-11, column-shaping rework).
+  // Lives in the former padCloudLook2 slot so the CB layout is unchanged.
+  args.cloudColumnShapingEnable        = RtxOptions::cloudColumnShapingEnable() ? 1.0f : 0.0f;
 
   // Cloud parameters
   {
     args.cloudColor = RtxOptions::cloudColor();
     args.cloudDensity = RtxOptions::cloudDensity();
     args.cloudAltitude = RtxOptions::cloudAltitude();
-    args.cloudScale = RtxOptions::cloudScale();
+    args.cloudLayer2CoverageSpread = RtxOptions::cloudLayer2CoverageSpread();
     args.cloudEnabled = RtxOptions::cloudEnabled() ? 1.0f : 0.0f;
 
     // Accumulated wind offset. Wind scrolling is driven by timeSeconds so the
@@ -328,7 +647,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudShadowTint = RtxOptions::cloudShadowTint();
     args.cloudShadowTintStrength = RtxOptions::cloudShadowTintStrength();
     args.cloudThickness = RtxOptions::cloudThickness();
-    args.cloudDetailWeight = RtxOptions::cloudDetailWeight();
+    args.cloudLayer2TypeSpread = RtxOptions::cloudLayer2TypeSpread();
     args.cloudSunsetWarmth = RtxOptions::cloudSunsetWarmth();
     args.cloudViewSamples = RtxOptions::cloudViewSamples();
     args.cloudCurvature = RtxOptions::cloudCurvature();
@@ -339,15 +658,153 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudCoverageSpread = RtxOptions::cloudCoverageSpread();
     args.cloudCoverageNoiseScale = RtxOptions::cloudCoverageNoiseScale();
     args.cloudAnvilBias = RtxOptions::cloudAnvilBias();
-    args.cloudWindShearStrength = RtxOptions::cloudWindShearStrength();
-    args.pad4 = 0.0f;                // (was cloudMoonBrightness; retired in Phase 2)
-    args.pad5 = 0.0f;
-    args.pad6 = 0.0f;
-    args.pad7 = 0.0f;
+    args.cloudMsScale = RtxOptions::cloudMsScale();
+    args.cloudMultiScatterStrength = RtxOptions::cloudMultiScatterStrength();
+    args.cloudMultiScatterOctaves = RtxOptions::cloudMultiScatterOctaves();
+    args.cloudLayer2NoiseSeed = RtxOptions::cloudLayer2NoiseSeed();
     args.cloudNoiseTileKm = RtxOptions::cloudNoiseTileKm();
-    args.padCloudC0 = 0.0f;
-    args.padCloudC1 = 0.0f;
-    args.padCloudC2 = 0.0f;
+    // Volumetric sky-ambient illumination knobs (fork, 2026-05-12). Defaults
+    // applied here are the ship-state defaults: skyAmbientStrength = 0 keeps
+    // the feature off by default; cloudOcclusionStrength = 1 means full
+    // physical cloud occlusion when the feature is enabled.
+    args.cloudSkyAmbientStrength = RtxOptions::cloudSkyAmbientStrength();
+    args.cloudSkyAmbientCloudOcclusionStrength = RtxOptions::cloudSkyAmbientCloudOcclusionStrength();
+    // Cloud cluster footprint for the placement map bake (column-shaping
+    // rework). Lives in the former padCloudC2 slot; CB layout unchanged.
+    args.cloudCellSizeKm = RtxOptions::cloudCellSizeKm();
+
+    // Cloud voxel grid extent (Nubis Cubed 2023, fork — 2026-05-12).
+    // Horizontal: track cloudNoiseTileKm so the grid's frac-wrap stays aligned
+    // with the noise period at ALL tile values — the sampleDSun / sampleDAmbient
+    // math assumes extent == tile. Previously hardcoded 12 km, which only held
+    // at the default tile; non-divisor tiles (7-11) desynced the voxel-grid
+    // lighting from the density field. Vertical: track cloudThickness so the
+    // grid spans the slab vertically. cloudThickness is already in km per
+    // atmosphere_args.h:149.
+    // The Dirty flags are informational fields with no consumer in this
+    // commit; left zero here to avoid spurious LUT-recompute triggers via
+    // the memcmp in needsLutRecompute().
+    args.cloudVoxelGridExtentKm    = RtxOptions::cloudNoiseTileKm();
+    args.cloudVoxelGridVerticalKm  = args.cloudThickness;
+    args.cloudVoxelGridFrameOffset = 0.0f;
+    args.cloudVoxelGridSunDirty    = 0u;
+    args.cloudVoxelGridAmbientDirty = 0u;
+    // Bottom darkening + additive edge detail (fork — 2026-06-10). Live in the
+    // former pad_cloudVoxel0..2 slots so the CB layout is unchanged.
+    args.cloudBottomDarkening       = RtxOptions::cloudBottomDarkening();
+    args.cloudBottomDarkeningHeight = RtxOptions::cloudBottomDarkeningHeight();
+    args.cloudDetailStrength        = RtxOptions::cloudDetailStrength();
+  }
+
+  // Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4). Sourced from
+  // RTX_OPTIONs so the user can tune from ImGui without rebuilding shaders.
+  // The cloud_render compute pass consumes these via evalNubisCubedSample.
+  {
+    args.cloudPhaseG1         = RtxOptions::cloudPhaseG1();
+    args.cloudPhaseG2         = RtxOptions::cloudPhaseG2();
+    args.cloudMsSunDotMax     = RtxOptions::cloudMsSunDotMax();
+    args.cloudMsSigmaShallow  = RtxOptions::cloudMsSigmaShallow();
+    args.cloudMsSigmaDeep     = RtxOptions::cloudMsSigmaDeep();
+    args.cloudMsSdfDepth      = RtxOptions::cloudMsSdfDepth();
+    args.cloudRenderFrameIdx  = m_cloudRenderFrameIdx;
+    args.cloudDetailScale     = RtxOptions::cloudDetailScale();
+
+    args.cloudSunsetAmbientStrength    = RtxOptions::cloudSunsetAmbientStrength();
+    args.cloudSunsetAmbientReachInvKm  = RtxOptions::cloudSunsetAmbientReachInvKm();
+    args.cloudSunsetAmbientRampHighSun = RtxOptions::cloudSunsetAmbientRampHighSun();
+    // Adaptive-march step target riding the former pad_cloudSunsetAmbient0
+    // slot (fork — 2026-06-12, adaptive march sampling); CB layout unchanged.
+    args.cloudViewStepKm               = RtxOptions::cloudViewStepKm();
+    // Cloud-edge / halo tuning (fork — 2026-06-13). Live knobs for silhouette
+    // softness and the thin-edge ambient haze fade.
+    args.cloudEdgeSoftness             = RtxOptions::cloudEdgeSoftness();
+    args.cloudEdgeAmbientFade          = RtxOptions::cloudEdgeAmbientFade();
+
+    // Independent sun-only scale for volumetric fog in-scattering (issue #35).
+    args.atmosphereSunVolumetricRadianceScale = RtxOptions::atmosphereSunVolumetricRadianceScale();
+  }
+
+  // Cloud render camera basis (fork — 2026-05-12, C4). Pushed from
+  // updateAtmosphereConstants via setCloudRenderCameraBasis() before
+  // computeLuts runs, so the values here are this-frame-fresh. The Right /
+  // Up vectors are pre-scaled by tan(halfFovX/Y) and aspect ratio so the
+  // shader does just a weighted sum.
+  {
+    args.cloudRenderForwardYUp = m_cloudRenderForwardYUp;
+    args.cloudRenderRightYUp   = m_cloudRenderRightYUp;
+    args.cloudRenderUpYUp      = m_cloudRenderUpYUp;
+    // Column-shaping scalars riding the former pad_cr0..2 slots (fork —
+    // 2026-06-11, column-shaping rework); CB layout unchanged.
+    args.cloudColumnTopVariation   = RtxOptions::cloudColumnTopVariation();
+    args.cloudColumnTopShape       = RtxOptions::cloudColumnTopShape();
+    args.cloudColumnBaseVariation  = RtxOptions::cloudColumnBaseVariation();
+  }
+
+  // Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5).
+  // Drives the primary-ray-only branch in evalSkyRadiance that swaps
+  // analytical evalClouds for the prerendered AtmosphereCloudRender RT.
+  // Default false until visual confirmation; flipped to true in C7.
+  {
+    args.cloudRenderRTEnable = RtxOptions::cloudRenderRTEnable() ? 1u : 0u;
+    // Secondary-ray cloud LUT gate (fork — 2026-06-10, perf). Lives in the
+    // former pad_c5_0 slot so the CB layout is unchanged.
+    args.cloudSecondaryLutEnable = RtxOptions::cloudSecondaryLutEnable() ? 1u : 0u;
+    // Downscale extent for the half-res cloud-RT composite (fork —
+    // 2026-06-11). Zero until ensureCloudRenderRT has seen a real extent;
+    // the shader falls back to the legacy Load path in that case.
+    args.cloudRenderFullDimX = m_cloudRenderFullExtent.width;
+    args.cloudRenderFullDimY = m_cloudRenderFullExtent.height;
+  }
+
+  // Voxel-grid cloud-on-terrain shadow plumbing (fork — 2026-05-12, C6).
+  //   * cloudVoxelShadowsEnable / cloudShadowMarchStrength surface the C6
+  //     RTX_OPTIONs to the shader.
+  //   * worldUnitsPerKm derives from RtxOptions::sceneScale (cm per game
+  //     unit): 1 km = 100000 cm and 1 cm = sceneScale game units, so
+  //     1 km = 100000 * sceneScale game units. Matches the canonical
+  //     getMeterToWorldUnitScale = 100 * sceneScale (world units per meter)
+  //     convention used everywhere else in the runtime.
+  //   * cameraWorldPosYUpKm is pushed by setCloudShadowCameraPosition()
+  //     before computeLuts runs; default value is zero (no
+  //     setCloudShadowCameraPosition call yet → camera-relative reframe
+  //     reduces to "absolute frame", and the helper is gated off by default).
+  {
+    args.cloudVoxelShadowsEnable  = RtxOptions::cloudVoxelShadowsEnable() ? 1u : 0u;
+    args.cloudShadowMarchStrength = RtxOptions::cloudShadowMarchStrength();
+    const float sceneScale = std::max(RtxOptions::sceneScale(), 1e-5f);
+    args.worldUnitsPerKm = 100000.0f * sceneScale;
+    // Column presence feather band riding the former pad_c6_0 slot (fork —
+    // 2026-06-11, column-shaping rework); CB layout unchanged.
+    args.cloudColumnFeather = RtxOptions::cloudColumnFeather();
+    args.cameraWorldPosYUpKm = m_cameraWorldPosYUpKm;
+    // Per-column downwelling-light sigma riding the former pad_c6_1 slot
+    // (fork — 2026-06-12, column-shaping rev 3); CB layout unchanged.
+    args.cloudUndersideLightSigma = RtxOptions::cloudUndersideLightSigma();
+  }
+
+  // Cloud Height LUT + two-layer cloud map (slides 1 + 3 lift, fork — 2026-05-15).
+  // Pulled from RTX_OPTIONs so ImGui tuning works without rebuilding shaders.
+  // Default cloudLayer2Enable = false means today's single-layer Nubis Cubed
+  // look is preserved bit-for-bit until the user opts in.
+  {
+    args.cloudHeightLutEnable     = RtxOptions::cloudHeightLutEnable() ? 1u : 0u;
+
+    args.cloudLayer2Enable        = RtxOptions::cloudLayer2Enable() ? 1u : 0u;
+    args.cloudLayer2Altitude      = RtxOptions::cloudLayer2Altitude();
+    args.cloudLayer2Thickness     = RtxOptions::cloudLayer2Thickness();
+    args.cloudLayer2TypeMean      = RtxOptions::cloudLayer2TypeMean();
+    args.cloudLayer2CoverageMean  = RtxOptions::cloudLayer2CoverageMean();
+    args.cloudLayer2DensityScale  = RtxOptions::cloudLayer2DensityScale();
+    args.cloudVerticalStretch     = RtxOptions::cloudVerticalStretch();
+
+    // Worley carve params — consumed only by rtx_cloud_noise_baker. Changing
+    // these (or cloudNoiseTileKm) re-bakes the noise volume live via the
+    // needsCloudNoiseRebake() gate in computeLuts; no relaunch required.
+    args.cloudWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
+    args.cloudWorleyFrequency     = RtxOptions::cloudWorleyFrequency();
+    args.cloudWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
+    args.cloudAerialHazePerKm = RtxOptions::cloudAerialHazePerKm();
+    args.cloudAerialFadePerKm = RtxOptions::cloudAerialFadePerKm();
   }
 
   return args;
@@ -358,11 +815,48 @@ bool RtxAtmosphere::needsLutRecompute() const {
     return true;
   }
 
-  // Check if any parameters have changed
+  // Compare a normalized snapshot against the normalized cached snapshot.
+  // normalizeForSkyLutCache zeroes per-frame-animated fields (timeSeconds,
+  // cloudWindOffset, cloud render frame index + camera basis, camera world
+  // pos, voxel-grid dirty flags) that feed only cloud / runtime-miss
+  // shaders — they don't gate sky-LUT validity. Without normalization the
+  // memcmp fires every frame even when no real sky parameter changed.
   AtmosphereArgs currentArgs = getAtmosphereArgs();
-  
-  // Compare with cached args (simple memcmp would work for POD types)
+  normalizeForSkyLutCache(currentArgs);
   return memcmp(&currentArgs, &m_cachedArgs, sizeof(AtmosphereArgs)) != 0;
+}
+
+bool RtxAtmosphere::needsCloudNoiseRebake() const {
+  // Compares only the inputs rtx_cloud_noise_baker.comp.slang actually reads:
+  // cloudNoiseTileKm (world tile period) and the cloudWorley* carve controls.
+  // baseFreq / detailFreq / octave seeds are shader-side constants, so they
+  // never trigger a re-bake.
+  return m_cachedNoiseTileKm         != RtxOptions::cloudNoiseTileKm()
+      || m_cachedWorleyFrequency     != RtxOptions::cloudWorleyFrequency()
+      || m_cachedWorleyOctaves       != RtxOptions::cloudWorleyOctaves()
+      || m_cachedWorleyCarveStrength != RtxOptions::cloudWorleyCarveStrength()
+      || m_cachedBaseFreqScale       != RtxOptions::cloudNoiseBaseFreqScale();
+}
+
+void RtxAtmosphere::cacheCloudNoiseBakeInputs() {
+  m_cachedNoiseTileKm         = RtxOptions::cloudNoiseTileKm();
+  m_cachedWorleyFrequency     = RtxOptions::cloudWorleyFrequency();
+  m_cachedWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
+  m_cachedWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
+  m_cachedBaseFreqScale       = RtxOptions::cloudNoiseBaseFreqScale();
+}
+
+bool RtxAtmosphere::needsCloudPlacementRebake() const {
+  // Compares only the inputs cloud_placement_map_baker.comp.slang reads:
+  // cloudCellSizeKm (cluster footprint) and cloudNoiseTileKm (the map's tile
+  // period — the cells-per-tile rounding depends on both).
+  return m_cachedPlacementCellSizeKm != RtxOptions::cloudCellSizeKm()
+      || m_cachedPlacementTileKm     != RtxOptions::cloudNoiseTileKm();
+}
+
+void RtxAtmosphere::cacheCloudPlacementBakeInputs() {
+  m_cachedPlacementCellSizeKm = RtxOptions::cloudCellSizeKm();
+  m_cachedPlacementTileKm     = RtxOptions::cloudNoiseTileKm();
 }
 
 void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
@@ -429,46 +923,404 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     VkClearColorValue{}, // clearValue
     1 // mipLevels
   );
+
+  // Fork: cloud-occluded sky-ambient transmittance LUT (2D R16F, 32x16).
+  // Baked every frame from the camera position; consumed by the volumetric
+  // pass's sky-ambient hemisphere integration.
+  VkExtent3D cloudSkyTransmittanceLutExtent = {
+    kCloudSkyTransmittanceLutWidth, kCloudSkyTransmittanceLutHeight, 1
+  };
+  m_cloudSkyTransmittanceLut = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Sky Transmittance LUT",
+    cloudSkyTransmittanceLutExtent,
+    VK_FORMAT_R16_SFLOAT,
+    1, // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
+  // Fork (Nubis Cubed 2023, 2026-05-12): cloud D_sun voxel grid (3D R16F,
+  // 256x256x32). Camera-centered tile-wrapped precomputation of summed
+  // optical depth along the sun direction. Round-robin baked every 8 frames
+  // at offset 0. No consumer in this commit.
+  VkExtent3D cloudVoxelGridExtent = {
+    kCloudVoxelGridX, kCloudVoxelGridY, kCloudVoxelGridZ
+  };
+  m_cloudDSun = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud D_sun Voxel Grid",
+    cloudVoxelGridExtent,
+    VK_FORMAT_R16_SFLOAT,
+    1, // numLayers
+    VK_IMAGE_TYPE_3D,
+    VK_IMAGE_VIEW_TYPE_3D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implicit)
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
+  // Fork (Nubis Cubed 2023, 2026-05-12): cloud D_ambient voxel grid (3D R16F,
+  // 256x256x32). Round-robin baked every 8 frames at offset 4.
+  m_cloudDAmbient = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud D_ambient Voxel Grid",
+    cloudVoxelGridExtent,
+    VK_FORMAT_R16_SFLOAT,
+    1, // numLayers
+    VK_IMAGE_TYPE_3D,
+    VK_IMAGE_VIEW_TYPE_3D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
+  // EA Importance-Sampled FAST noise (128x128x32 RG8 Texture2DArray) used for
+  // cloud ray-march jitter. One-shot upload of the embedded byte data; no-op on
+  // subsequent calls.
+  m_fastNoise.initialize(ctx);
+
+  // Fork (slide 3 lift — RDR2 SIGGRAPH 2019, 2026-05-15): cloud height LUT
+  // (64x128 RG8 — 16 KB VRAM). Baked once at init by dispatchCloudHeightLutBake.
+  // Indexed (typeSlice, heightFrac) -> (R = density envelope, G = coverage
+  // threshold scale) by atmosphere_common.slangh's cloudHeightProfileFull
+  // inside cloud_render.comp.slang. The G channel is the lever with visible
+  // silhouette teeth — it widens cumulus tops by lowering the coverage
+  // threshold at the right altitudes.
+  VkExtent3D cloudHeightLutExtent = {
+    kCloudHeightLutWidth, kCloudHeightLutHeight, 1
+  };
+  m_cloudHeightLut = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Height LUT",
+    cloudHeightLutExtent,
+    VK_FORMAT_R8G8B8A8_UNORM,
+    1, // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implicit)
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
+  // Fork (2026-06-10, perf): secondary-ray cloud LUT (256x128 RGBA16F,
+  // 256 KB). Written every frame by dispatchCloudSecondaryLut; read by
+  // evalSkyRadiance's non-primary branch via
+  // BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT. Note the zero clear value means
+  // "no cloud but fully OPAQUE" in the (premultiplied rgb, transmittance)
+  // convention — harmless because the shader gate (cloudSecondaryLutEnable)
+  // and the dispatch gate are the same option, so the LUT is never sampled
+  // on a frame it wasn't baked.
+  VkExtent3D cloudSecondaryLutExtent = { kCloudSecondaryLutWidth, kCloudSecondaryLutHeight, 1 };
+  m_cloudSecondaryLut = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Secondary LUT",
+    cloudSecondaryLutExtent,
+    VK_FORMAT_R16G16B16A16_SFLOAT,
+    1, // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implicit)
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
+  // Fork (2026-06-11, column-shaping rework): cloud placement map (512x512
+  // RGBA8, 1 MB). R = cluster field, G = top-height jitter, B = base lift,
+  // tiled at cloudNoiseTileKm. Baked at init by dispatchCloudPlacementMapBake
+  // and re-baked live when cloudCellSizeKm / cloudNoiseTileKm change. Drives
+  // the per-column cloud model inside the density samplers.
+  VkExtent3D cloudPlacementMapExtent = { kCloudPlacementMapSize, kCloudPlacementMapSize, 1 };
+  m_cloudPlacementMap = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Placement Map",
+    cloudPlacementMapExtent,
+    VK_FORMAT_R8G8B8A8_UNORM,
+    1, // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implicit)
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
 }
 
 void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
-  if (!needsLutRecompute()) {
+  if (!m_initialized) {
     return;
   }
 
-  // Update cached args
-  m_cachedArgs = getAtmosphereArgs();
+  // Re-bake the 256^3 cloud noise volume if a bake input changed at runtime
+  // (e.g. dragging the ImGui cloudNoiseTileKm slider). The bake encodes the
+  // tile period into the texture's periodic structure; the runtime sampler
+  // divides world position by the live cloudNoiseTileKm. If they disagree the
+  // cloud feature size rescales and the sky bands toward the horizon. Gated by
+  // needsCloudNoiseRebake() so it fires only on an actual change, not per
+  // frame. Must run before the voxel-grid bakes and cloud render below — all
+  // read m_cloudNoise3D — so the write→read barrier orders the fresh volume
+  // ahead of those consumers this frame.
+  if (needsCloudNoiseRebake()) {
+    dispatchCloudNoise3DBake(ctx);
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    cacheCloudNoiseBakeInputs();
+    // The voxel grids integrate the noise volume — force their re-bake this
+    // frame regardless of the motion-granularity gate below.
+    memset(&m_cachedVoxelGridKey, 0, sizeof(m_cachedVoxelGridKey));
+  }
 
-  // Dispatch compute shaders to generate LUTs
-  // Note: Barriers are needed between dispatches since each LUT depends on previous ones
-  dispatchTransmittanceLut(ctx);
-  
-  // Barrier: Ensure transmittance LUT is written before reading in subsequent passes
-  ctx->emitMemoryBarrier(0,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_WRITE_BIT,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_READ_BIT);
-  
-  dispatchMultiscatteringLut(ctx);
-  
-  // Barrier: Ensure multiscattering LUT is written before reading in sky view pass
-  ctx->emitMemoryBarrier(0,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_WRITE_BIT,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_READ_BIT);
-  
-  dispatchSkyViewLut(ctx);
-  
+  // Column-shaping rework (fork — 2026-06-11): re-bake the cloud placement
+  // map when its inputs change (cloudCellSizeKm / cloudNoiseTileKm), and the
+  // height LUT when the column-shaping mode flips (it bakes a different
+  // curve family per mode). Same write→read barrier + voxel-grid key clear
+  // as the noise re-bake above — the D_sun / D_ambient grids integrate the
+  // column shapes, so they must refresh the same frame.
+  {
+    bool cloudShapeInputsRebaked = false;
+    if (needsCloudPlacementRebake()) {
+      dispatchCloudPlacementMapBake(ctx);
+      cacheCloudPlacementBakeInputs();
+      cloudShapeInputsRebaked = true;
+    }
+    if (m_cachedHeightLutColumnMode != RtxOptions::cloudColumnShapingEnable()) {
+      dispatchCloudHeightLutBake(ctx);
+      m_cachedHeightLutColumnMode = RtxOptions::cloudColumnShapingEnable();
+      cloudShapeInputsRebaked = true;
+    }
+    if (cloudShapeInputsRebaked) {
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+      memset(&m_cachedVoxelGridKey, 0, sizeof(m_cachedVoxelGridKey));
+    }
+  }
+
+  // Sky LUTs (transmittance / multiscattering / sky-view) only rebake when
+  // their inputs actually change. Animated fields that feed only cloud and
+  // runtime-miss shaders are excluded from the cache key by
+  // normalizeForSkyLutCache, so this gate stays false on frames where only
+  // wind / time / camera / frame-index advanced — saving the ~0.5 ms of
+  // dispatches + barriers per frame that the old memcmp burned.
+  //
+  // Split cache keys (fork — 2026-06-11, perf). With the split enabled, each
+  // bake compares against a key normalized down to the fields it actually
+  // reads: star / Milky Way animation (game-driven starRotation each frame)
+  // re-bakes nothing, and sun / moon motion (time-of-day) re-bakes only the
+  // sky-view LUT instead of dragging the heavy transmittance + multiscatter
+  // pair along. tmsDirty implies skyViewDirty — the transmittance/MS key is
+  // a strict sub-key of the sky-view key, and the sky-view bake consumes
+  // both LUTs, so the explicit OR keeps the data dependency obvious.
+  //
+  // Perf-bisect gate (fork — 2026-06-11, diagnostic): a continuously-
+  // animating time-of-day sun re-bakes the sky-view LUT every frame by
+  // design; the toggle freezes the whole cascade so a live session can
+  // read its per-frame cost. Sky colors stop tracking the sun while off.
+  if (!RtxOptions::debugDispatchSkyLuts()) {
+    // Frozen: skip all three bakes and leave caches untouched so the next
+    // enabled frame re-evaluates the gates normally.
+  } else if (RtxOptions::skyLutCacheKeySplitEnable()) {
+    AtmosphereArgs currentArgs = getAtmosphereArgs();
+    AtmosphereArgs tmsKey = currentArgs;
+    normalizeForTransmittanceMsKey(tmsKey);
+    AtmosphereArgs skyViewKey = currentArgs;
+    normalizeForSkyViewLutKey(skyViewKey);
+
+    const bool tmsDirty = m_lutsNeedRecompute
+        || memcmp(&tmsKey, &m_cachedTransmittanceMsKey, sizeof(AtmosphereArgs)) != 0;
+    const bool skyViewDirty = tmsDirty
+        || memcmp(&skyViewKey, &m_cachedSkyViewKey, sizeof(AtmosphereArgs)) != 0;
+
+    if (tmsDirty) {
+      dispatchTransmittanceLut(ctx);
+
+      // Barrier: Ensure transmittance LUT is written before reading in subsequent passes
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+
+      dispatchMultiscatteringLut(ctx);
+
+      // Barrier: Ensure multiscattering LUT is written before reading in sky view pass
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+
+      m_cachedTransmittanceMsKey = tmsKey;
+    }
+
+    if (skyViewDirty) {
+      dispatchSkyViewLut(ctx);
+
+      // Barrier: order sky-view writes ahead of the cloud-sky-transmittance
+      // bake below when the sky-view LUT actually changed this frame.
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+
+      m_cachedSkyViewKey = skyViewKey;
+      // Keep the legacy monolithic key coherent so toggling the split option
+      // off mid-session doesn't fire one spurious full re-bake.
+      m_cachedArgs = currentArgs;
+      normalizeForSkyLutCache(m_cachedArgs);
+      m_lutsNeedRecompute = false;
+    }
+  } else if (needsLutRecompute()) {
+    dispatchTransmittanceLut(ctx);
+
+    // Barrier: Ensure transmittance LUT is written before reading in subsequent passes
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+
+    dispatchMultiscatteringLut(ctx);
+
+    // Barrier: Ensure multiscattering LUT is written before reading in sky view pass
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+
+    dispatchSkyViewLut(ctx);
+
+    // Barrier: order sky-view writes ahead of the cloud-sky-transmittance
+    // bake below when the sky-view LUT actually changed this frame.
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+
+    // Cache the normalized snapshot for next frame's gate. The split keys are
+    // refreshed too so toggling the split option on mid-session is clean.
+    AtmosphereArgs currentArgs = getAtmosphereArgs();
+    m_cachedArgs = currentArgs;
+    normalizeForSkyLutCache(m_cachedArgs);
+    m_cachedSkyViewKey = currentArgs;
+    normalizeForSkyViewLutKey(m_cachedSkyViewKey);
+    m_cachedTransmittanceMsKey = currentArgs;
+    normalizeForTransmittanceMsKey(m_cachedTransmittanceMsKey);
+    m_lutsNeedRecompute = false;
+  }
+
+  // Perf-bisect gate (fork — 2026-06-11, diagnostic): each unconditional
+  // per-frame dispatch below gets a default-ON skip toggle so a live ImGui
+  // session can attribute frame-time per dispatch. Skipping leaves the
+  // consumer reading stale data — diagnostic only.
+  if (RtxOptions::debugDispatchCloudSkyTransmittance()) {
+    dispatchCloudSkyTransmittanceLut(ctx);
+  }
+
+  // Full-rate cloud voxel grid bake (Nubis Cubed 2023, fork — 2026-05-12;
+  // full-rate flip 2026-05-19). The original implementation amortized each
+  // grid's bake across 8 frames at staggered offsets (D_sun on frame%8==0,
+  // D_ambient on frame%8==4). Once the saturate-clamp fix landed and the
+  // cumulus-on-terrain shadows became visible, the 8-frame cadence read as
+  // a ~2 Hz update stutter on the terrain shadow pattern at 16 fps gameplay.
+  // The user asked for full-frame-rate updates — "no shortcuts here" — so
+  // both grids are now dispatched every frame.
+  //
+  // The two bakes run sequentially in the command buffer (not in parallel),
+  // separated by the existing write→read barriers, so they don't race for
+  // compute units. Cost is ~8× the prior amortized bake; profile if it
+  // becomes a frame-time bottleneck and revisit (a smaller grid resolution
+  // or per-tile dispatch would be the first cuts to consider).
+  // Voxel-grid re-bake granularity (fork — 2026-06-11, perf). At option 0
+  // the grids re-bake every frame (legacy). At > 0, they re-bake only when
+  // a bake input has moved past its step: wind scroll / camera travel by
+  // the km granularity, sun (and moon) direction by the sky-view angular
+  // granularity, any other parameter exactly. Cloud-body lighting and (when
+  // enabled) terrain cumulus shadows read grids that are stale by at most
+  // one step between re-bakes.
+  bool voxelGridsDirty = true;
+  if (RtxOptions::cloudVoxelGridRebakeGranularityKm() > 0.0f) {
+    AtmosphereArgs voxelKey = getAtmosphereArgs();
+    normalizeForVoxelGridKey(voxelKey);
+    voxelGridsDirty = memcmp(&voxelKey, &m_cachedVoxelGridKey, sizeof(AtmosphereArgs)) != 0;
+    if (voxelGridsDirty) {
+      m_cachedVoxelGridKey = voxelKey;
+    }
+  }
+
+  if (RtxOptions::debugDispatchCloudVoxelGrids() && voxelGridsDirty) {
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    dispatchCloudSunDensityGrid(ctx);
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    dispatchCloudAmbientDensityGrid(ctx);
+  }
+
+  // Cloud render compute pass (Nubis Cubed 2023, fork — 2026-05-12, C4).
+  // Runs every frame after the voxel grid bakes so it reads up-to-date
+  // D_sun / D_ambient. As of the full-rate flip 2026-05-19, both grids
+  // are rebaked every frame above, so the render reads zero-frame-stale
+  // data.
+  //
+  // NOTE: m_cloudRenderRT is allocated/resized externally via
+  // ensureCloudRenderRT() before this dispatch fires. dispatchCloudRender
+  // early-outs cleanly if the RT isn't valid yet (first frame, zero extent).
+  // Secondary-ray cloud LUT bake (fork — 2026-06-10, perf). Runs after the
+  // voxel-grid bakes (the march reads D_sun / D_ambient) behind the same
+  // write→read barrier pattern. Gated on the same option the shader-side
+  // consumer checks, so the LUT is always fresh on any frame it is sampled.
+  if (RtxOptions::cloudSecondaryLutEnable() && m_cloudSecondaryLut.isValid()) {
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    dispatchCloudSecondaryLut(ctx);
+  }
+
+  // NOTE (perf-bisect rationale): this dispatch runs whenever the RT is
+  // valid, INDEPENDENT of cloudRenderRTEnable — turning that option off
+  // switches the consumer to analytical clouds but leaves this pass
+  // running, so frame-time A/B via cloudRenderRTEnable never isolates the
+  // pass cost. The debug toggle is the only lever that actually skips it.
+  if (RtxOptions::debugDispatchCloudRender() && m_cloudRenderRT.isValid()) {
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    dispatchCloudRender(ctx);
+  }
+
   // Final barrier: Ensure all LUTs are written before use in ray tracing
   ctx->emitMemoryBarrier(0,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
     VK_ACCESS_SHADER_WRITE_BIT,
     VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
     VK_ACCESS_SHADER_READ_BIT);
-
-  m_lutsNeedRecompute = false;
 }
 
 void RtxAtmosphere::dispatchTransmittanceLut(Rc<DxvkContext> ctx) {
@@ -573,12 +1425,324 @@ void RtxAtmosphere::dispatchSkyViewLut(Rc<DxvkContext> ctx) {
   ctx->dispatch(groupsX, groupsY, 1);
 }
 
+void RtxAtmosphere::dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Sky Transmittance LUT");
+
+  // Update atmosphere args buffer (the SkyView dispatch above already updates,
+  // but the LUT-cascade dispatches each set their own copy to keep ordering
+  // explicit and to be safe against future refactors that reorder dispatches).
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  // Bind resources: ConstantBuffer<AtmosphereArgs> at slot 0, RWTexture2D<float> at slot 1.
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudSkyTransmittanceLut.view, nullptr);
+
+  // Track resources
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudSkyTransmittanceLut.image);
+
+  // Bind shader and dispatch
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudSkyTransmittanceLutShader::getShader());
+
+  // Dispatch with 8x8 thread groups (shader declares [numthreads(8, 8, 1)]).
+  uint32_t groupsX = (kCloudSkyTransmittanceLutWidth + 7) / 8;
+  uint32_t groupsY = (kCloudSkyTransmittanceLutHeight + 7) / 8;
+  ctx->dispatch(groupsX, groupsY, 1);
+}
+
+void RtxAtmosphere::dispatchCloudSunDensityGrid(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud D_sun Bake");
+
+  // Update atmosphere args buffer (mirrors the other dispatch sites — each
+  // bake refreshes the buffer to be safe against reordering refactors).
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  // Bind resources: ConstantBuffer<AtmosphereArgs> at 0, RWTexture3D<float>
+  // at 1, Texture3D<float> cloud noise volume at 2, linear/REPEAT sampler at 3,
+  // cloud placement map at 4 (column-shaping rework).
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudDSun.view, nullptr);
+  ctx->bindResourceView(2, m_cloudNoise3D.view, nullptr);
+
+  // Linear/REPEAT sampler — matches the frac()-tile-wrap convention used by
+  // sampleCloudDensityForShadow's texcoord math and by the voxel grid's
+  // own UVW mapping in cloudVoxelWorldToUVW.
+  DxvkSamplerCreateInfo samplerInfo = {};
+  samplerInfo.magFilter    = VK_FILTER_LINEAR;
+  samplerInfo.minFilter    = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
+  ctx->bindResourceSampler(3, cloudSampler);
+  ctx->bindResourceView(4, m_cloudPlacementMap.view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudDSun.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudSunDensityGridShader::getShader());
+
+  // Shader declares [numthreads(8, 8, 4)].
+  const uint32_t groupsX = (kCloudVoxelGridX + 7u) / 8u;
+  const uint32_t groupsY = (kCloudVoxelGridY + 7u) / 8u;
+  const uint32_t groupsZ = (kCloudVoxelGridZ + 3u) / 4u;
+  ctx->dispatch(groupsX, groupsY, groupsZ);
+}
+
+void RtxAtmosphere::dispatchCloudAmbientDensityGrid(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud D_ambient Bake");
+
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudDAmbient.view, nullptr);
+  ctx->bindResourceView(2, m_cloudNoise3D.view, nullptr);
+
+  DxvkSamplerCreateInfo samplerInfo = {};
+  samplerInfo.magFilter    = VK_FILTER_LINEAR;
+  samplerInfo.minFilter    = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
+  ctx->bindResourceSampler(3, cloudSampler);
+  ctx->bindResourceView(4, m_cloudPlacementMap.view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudDAmbient.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudAmbientDensityGridShader::getShader());
+
+  const uint32_t groupsX = (kCloudVoxelGridX + 7u) / 8u;
+  const uint32_t groupsY = (kCloudVoxelGridY + 7u) / 8u;
+  const uint32_t groupsZ = (kCloudVoxelGridZ + 3u) / 4u;
+  ctx->dispatch(groupsX, groupsY, groupsZ);
+}
+
+void RtxAtmosphere::ensureCloudRenderRT(Rc<DxvkContext> ctx,
+                                          const VkExtent2D& downscaleExtent) {
+  // Bail on degenerate extents (can happen during early frames before resize
+  // events have settled) — allocate on a later frame.
+  if (downscaleExtent.width == 0u || downscaleExtent.height == 0u) {
+    return;
+  }
+
+  // Half-res cloud RT (fork — 2026-06-11, perf). The RT is allocated at
+  // cloudRenderResolutionScale of the downscale extent; the sky-miss
+  // composite bilinearly upsamples using the full extent published via
+  // args.cloudRenderFullDimX/Y. Scale 1.0 reproduces the legacy native-res
+  // path bit-exactly (texel-center bilinear == Load). Live-tunable: a scale
+  // change shows up as an extent mismatch below and reallocates.
+  m_cloudRenderFullExtent = downscaleExtent;
+  const float renderScale = std::min(std::max(RtxOptions::cloudRenderResolutionScale(), 0.25f), 1.0f);
+  const VkExtent2D scaledExtent = {
+    std::max(1u, static_cast<uint32_t>(std::lround(downscaleExtent.width  * renderScale))),
+    std::max(1u, static_cast<uint32_t>(std::lround(downscaleExtent.height * renderScale))),
+  };
+
+  const bool extentsMatch = (m_cloudRenderExtent.width  == scaledExtent.width)
+                         && (m_cloudRenderExtent.height == scaledExtent.height);
+  if (extentsMatch && m_cloudRenderRT.isValid()) {
+    return;
+  }
+
+  const VkExtent3D extent3D = { scaledExtent.width, scaledExtent.height, 1u };
+  m_cloudRenderRT = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Render RT",
+    extent3D,
+    VK_FORMAT_R16G16B16A16_SFLOAT,
+    1,                          // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0,                          // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implied)
+    VkClearColorValue{},        // clearValue (zero -- "no cloud, full transmittance")
+    1);                         // mipLevels
+
+  m_cloudRenderExtent = downscaleExtent;
+}
+
+void RtxAtmosphere::setCloudRenderCameraBasis(const Vector3& forwardYUp,
+                                                const Vector3& rightYUp,
+                                                const Vector3& upYUp,
+                                                uint32_t frameIdx) {
+  m_cloudRenderForwardYUp = forwardYUp;
+  m_cloudRenderRightYUp   = rightYUp;
+  m_cloudRenderUpYUp      = upYUp;
+  m_cloudRenderFrameIdx   = frameIdx;
+}
+
+void RtxAtmosphere::setCloudShadowCameraPosition(const Vector3& cameraWorldPosYUpKm) {
+  m_cameraWorldPosYUpKm = cameraWorldPosYUpKm;
+}
+
+void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Render (Nubis Cubed)");
+
+  if (!m_cloudRenderRT.isValid()) {
+    return;  // ensureCloudRenderRT hasn't allocated yet (first frame with zero extent)
+  }
+
+  // Refresh the AtmosphereArgs buffer so the camera basis + Nubis Cubed
+  // tuning knobs land in the GPU CB before the dispatch reads them.
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  // Linear/REPEAT sampler for the cloud noise + voxel grid taps. REPEAT
+  // matches the frac()-tile-wrap convention used everywhere else in the
+  // cloud math (cloudVoxelWorldToUVW and sampleCloudDensityTextured).
+  DxvkSamplerCreateInfo samplerInfo = {};
+  samplerInfo.magFilter    = VK_FILTER_LINEAR;
+  samplerInfo.minFilter    = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
+
+  // Linear/CLAMP sampler for the sky-view LUT + cloud-sky-transmittance LUT.
+  // CLAMP is mandatory — sky-view LUT is keyed by (azimuth, elevation) and
+  // REPEAT would alias the south pole onto the north.
+  DxvkSamplerCreateInfo skyViewSamplerInfo = {};
+  skyViewSamplerInfo.magFilter    = VK_FILTER_LINEAR;
+  skyViewSamplerInfo.minFilter    = VK_FILTER_LINEAR;
+  skyViewSamplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  skyViewSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  skyViewSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  skyViewSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  Rc<DxvkSampler> skyViewSampler = m_device->createSampler(skyViewSamplerInfo);
+
+  // Linear/CLAMP sampler for the cloud height LUT. CLAMP because the LUT is
+  // parameterized on a bounded (typeSlice, heightFrac) domain — REPEAT would
+  // alias the cumulonimbus column back into stratus territory.
+  Rc<DxvkSampler> heightLutSampler = m_device->createSampler(skyViewSamplerInfo);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudNoise3D.view, nullptr);
+  ctx->bindResourceSampler(2, cloudSampler);
+  ctx->bindResourceView(3, m_cloudDSun.view, nullptr);
+  ctx->bindResourceView(4, m_cloudDAmbient.view, nullptr);
+  ctx->bindResourceView(5, m_fastNoise.getView(), nullptr);
+  ctx->bindResourceView(6, m_cloudRenderRT.view, nullptr);
+  ctx->bindResourceView(7, m_skyViewLut.isValid() ? m_skyViewLut.view : nullptr, nullptr);
+  ctx->bindResourceView(8, m_cloudSkyTransmittanceLut.isValid() ? m_cloudSkyTransmittanceLut.view : nullptr, nullptr);
+  ctx->bindResourceSampler(9, skyViewSampler);
+  ctx->bindResourceView(10, m_cloudHeightLut.isValid() ? m_cloudHeightLut.view : nullptr, nullptr);
+  ctx->bindResourceSampler(11, heightLutSampler);
+  ctx->bindResourceView(12, m_cloudPlacementMap.view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDAmbient.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudRenderRT.image);
+  if (m_skyViewLut.isValid()) {
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_skyViewLut.image);
+  }
+  if (m_cloudSkyTransmittanceLut.isValid()) {
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudSkyTransmittanceLut.image);
+  }
+  if (m_cloudHeightLut.isValid()) {
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudHeightLut.image);
+  }
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudRenderShader::getShader());
+
+  // Shader declares [numthreads(8, 8, 1)].
+  const uint32_t groupsX = (m_cloudRenderExtent.width  + 7u) / 8u;
+  const uint32_t groupsY = (m_cloudRenderExtent.height + 7u) / 8u;
+  ctx->dispatch(groupsX, groupsY, 1);
+}
+
+void RtxAtmosphere::dispatchCloudSecondaryLut(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Secondary LUT");
+
+  if (!m_cloudSecondaryLut.isValid()) {
+    return;
+  }
+
+  // Refresh the args buffer so the bake sees this frame's sun / wind /
+  // camera state (mirrors the other per-frame dispatch sites).
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  // Samplers mirror dispatchCloudRender: linear/REPEAT for the noise + voxel
+  // grids, linear/CLAMP for the sky-view + height LUTs.
+  DxvkSamplerCreateInfo samplerInfo = {};
+  samplerInfo.magFilter    = VK_FILTER_LINEAR;
+  samplerInfo.minFilter    = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
+
+  DxvkSamplerCreateInfo skyViewSamplerInfo = {};
+  skyViewSamplerInfo.magFilter    = VK_FILTER_LINEAR;
+  skyViewSamplerInfo.minFilter    = VK_FILTER_LINEAR;
+  skyViewSamplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  skyViewSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  skyViewSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  skyViewSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  Rc<DxvkSampler> skyViewSampler   = m_device->createSampler(skyViewSamplerInfo);
+  Rc<DxvkSampler> heightLutSampler = m_device->createSampler(skyViewSamplerInfo);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudNoise3D.view, nullptr);
+  ctx->bindResourceSampler(2, cloudSampler);
+  ctx->bindResourceView(3, m_cloudDSun.view, nullptr);
+  ctx->bindResourceView(4, m_cloudDAmbient.view, nullptr);
+  ctx->bindResourceView(5, m_fastNoise.getView(), nullptr);
+  ctx->bindResourceView(6, m_cloudSecondaryLut.view, nullptr);
+  ctx->bindResourceView(7, m_skyViewLut.isValid() ? m_skyViewLut.view : nullptr, nullptr);
+  ctx->bindResourceView(8, m_cloudSkyTransmittanceLut.isValid() ? m_cloudSkyTransmittanceLut.view : nullptr, nullptr);
+  ctx->bindResourceSampler(9, skyViewSampler);
+  ctx->bindResourceView(10, m_cloudHeightLut.isValid() ? m_cloudHeightLut.view : nullptr, nullptr);
+  ctx->bindResourceSampler(11, heightLutSampler);
+  ctx->bindResourceView(12, m_cloudPlacementMap.view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDAmbient.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudSecondaryLut.image);
+  if (m_skyViewLut.isValid()) {
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_skyViewLut.image);
+  }
+  if (m_cloudSkyTransmittanceLut.isValid()) {
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudSkyTransmittanceLut.image);
+  }
+  if (m_cloudHeightLut.isValid()) {
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudHeightLut.image);
+  }
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudSecondaryLutShader::getShader());
+
+  // Shader declares [numthreads(8, 8, 1)].
+  const uint32_t groupsX = (kCloudSecondaryLutWidth  + 7u) / 8u;
+  const uint32_t groupsY = (kCloudSecondaryLutHeight + 7u) / 8u;
+  ctx->dispatch(groupsX, groupsY, 1);
+}
+
 void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
   ScopedGpuProfileZone(ctx, "Atmosphere Cloud Noise 3D Bake");
 
-  // One-shot bake at atmosphere init. Runs the 3D Perlin FBM stack defined
-  // in rtx_cloud_noise_baker.comp.slang and writes 256-cubed voxels of R8 density.
-  // Mirrors dispatchSkyViewLut's structure but uses a 3D dispatch.
+  // Baked at atmosphere init and re-baked whenever a bake input changes (the
+  // needsCloudNoiseRebake() gate in computeLuts). Runs the 3D Perlin FBM stack
+  // defined in rtx_cloud_noise_baker.comp.slang and writes 256-cubed voxels of
+  // R8 density. Mirrors dispatchSkyViewLut's structure but uses a 3D dispatch.
 
   // Update atmosphere args buffer
   AtmosphereArgs args = getAtmosphereArgs();
@@ -600,6 +1764,139 @@ void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
   ctx->dispatch(groupCount, groupCount, groupCount);
 }
 
+void RtxAtmosphere::dispatchCloudHeightLutBake(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Height LUT Bake");
+
+  // Baked at atmosphere init + re-baked when cloudColumnShapingEnable flips
+  // (see computeLuts). Procedurally fills the 64x128 RG8 LUT with the
+  // per-type altitude shape family: the legacy trapezoid + anvil bump in
+  // global-slab mode, or the single-lobe per-cloud envelope in column mode
+  // (the curve-family switch lives in cloud_height_lut_baker.comp.slang).
+  //
+  // The baker reads only cloudColumnShapingEnable from the args CB at
+  // slot 0; output RWTexture2D moved to slot 1 (column-shaping rework).
+  // cloud_height_lut_baker.comp.slang declares `[numthreads(8, 8, 1)]`,
+  // matching the dispatch dimensions below.
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudHeightLut.view, nullptr);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudHeightLut.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudHeightLutBakerShader::getShader());
+
+  const uint32_t groupsX = (kCloudHeightLutWidth  + 7u) / 8u;
+  const uint32_t groupsY = (kCloudHeightLutHeight + 7u) / 8u;
+  ctx->dispatch(groupsX, groupsY, 1);
+}
+
+void RtxAtmosphere::dispatchCloudPlacementMapBake(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Placement Map Bake");
+
+  // Baked at atmosphere init + re-baked when a bake input changes (the
+  // needsCloudPlacementRebake() gate in computeLuts). Fills the 512x512
+  // RGBA8 placement map with the cluster / top-jitter / base-lift fields
+  // defined in cloud_placement_map_baker.comp.slang.
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudPlacementMap.view, nullptr);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudPlacementMap.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudPlacementMapBakerShader::getShader());
+
+  // Shader declares [numthreads(8, 8, 1)].
+  const uint32_t groupCount = (kCloudPlacementMapSize + 7u) / 8u;
+  ctx->dispatch(groupCount, groupCount, 1);
+}
+
+void RtxAtmosphere::onFrameAdvanceForCloudHistory(uint32_t currentFrameId) {
+  if (currentFrameId == m_cloudHistoryLastFrameId) {
+    return;  // already advanced this frame
+  }
+  // Don't swap on the very first observation — leaves swap = false so the
+  // initial frame writes to slot 0 and reads slot 1 (uninitialized -> zero ->
+  // disocclusion fallback). Subsequent frames toggle.
+  if (m_cloudHistoryLastFrameId != UINT32_MAX) {
+    m_cloudHistorySwap = !m_cloudHistorySwap;
+  }
+  m_cloudHistoryLastFrameId = currentFrameId;
+}
+
+void RtxAtmosphere::ensureCloudHistoryResources(Rc<DxvkContext> ctx, const VkExtent3D& downscaledExtent) {
+  // Bail on degenerate extents (can happen during early frames before resize
+  // events have settled) — we'll allocate on a later frame.
+  if (downscaledExtent.width == 0u || downscaledExtent.height == 0u) {
+    return;
+  }
+
+  const bool extentsMatch = (m_cloudHistoryExtent.width == downscaledExtent.width)
+                         && (m_cloudHistoryExtent.height == downscaledExtent.height);
+  if (extentsMatch && m_cloudHistory[0].isValid() && m_cloudHistory[1].isValid()) {
+    return;
+  }
+
+  // (Re)create both ping-pong slices at the requested screen extent.
+  // RGBA16F: rgb = premultiplied cloud radiance, a = cloud alpha. STORAGE bit
+  // for the RW write path; the read path uses the same view as a sampled image.
+  const VkExtent3D extent = { downscaledExtent.width, downscaledExtent.height, 1u };
+  for (uint32_t i = 0u; i < 2u; ++i) {
+    const char* names[2] = {
+      "Atmosphere Cloud History 0",
+      "Atmosphere Cloud History 1",
+    };
+    m_cloudHistory[i] = Resources::createImageResource(
+      ctx,
+      names[i],
+      extent,
+      VK_FORMAT_R16G16B16A16_SFLOAT,
+      1, // numLayers
+      VK_IMAGE_TYPE_2D,
+      VK_IMAGE_VIEW_TYPE_2D,
+      0, // imageCreateFlags
+      VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+      VkClearColorValue{}, // clearValue (zero -- treated as "no history" by shader disocclusion guard)
+      1 // mipLevels
+    );
+  }
+
+  // R16_UINT companion ping-pong (fork — 2026-05-13). Holds the frame index
+  // (mod 0x10000) at which each pixel of the color ping-pong was last
+  // refreshed by the sky-miss path. Cleared to 0xFFFF "never written" so the
+  // shader's age check rejects history at pixels that have never been
+  // written by the smoother (including foreground-occluded ones whose color
+  // slot retains pre-occlusion radiance). Drives the disocclusion fix for
+  // the bright-trail ghosting under the 2026-05-13 Nubis Cubed work — see
+  // atmosphere_sky.slangh's age-channel comment block for the mechanism.
+  VkClearColorValue frameIdClearValue{};
+  frameIdClearValue.uint32[0] = 0xFFFFu;
+  for (uint32_t i = 0u; i < 2u; ++i) {
+    const char* frameIdNames[2] = {
+      "Atmosphere Cloud History Frame ID 0",
+      "Atmosphere Cloud History Frame ID 1",
+    };
+    m_cloudHistoryFrameId[i] = Resources::createImageResource(
+      ctx,
+      frameIdNames[i],
+      extent,
+      VK_FORMAT_R16_UINT,
+      1, // numLayers
+      VK_IMAGE_TYPE_2D,
+      VK_IMAGE_VIEW_TYPE_2D,
+      0, // imageCreateFlags
+      VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+      frameIdClearValue,
+      1 // mipLevels
+    );
+  }
+
+  m_cloudHistoryExtent = extent;
+}
+
 void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipelineBindPoint) {
   // Bind atmosphere LUT resources to the pipeline.
   // Note: The active call site for runtime binding is bindAtmosphereLuts in
@@ -616,6 +1913,30 @@ void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipel
   if (m_cloudNoise3D.isValid()) {
     ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_NOISE_3D, m_cloudNoise3D.view, nullptr);
   }
+  if (m_fastNoise.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_FAST_NOISE, m_fastNoise.getView(), nullptr);
+  }
+  if (m_cloudSkyTransmittanceLut.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT, m_cloudSkyTransmittanceLut.view, nullptr);
+  }
+  if (m_cloudDSun.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_SUN, m_cloudDSun.view, nullptr);
+  }
+  if (m_cloudDAmbient.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT, m_cloudDAmbient.view, nullptr);
+  }
+  if (m_cloudRenderRT.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_RENDER_RT, m_cloudRenderRT.view, nullptr);
+  }
+  if (m_cloudSecondaryLut.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, m_cloudSecondaryLut.view, nullptr);
+  }
+  if (m_cloudPlacementMap.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP, m_cloudPlacementMap.view, nullptr);
+  }
+  // Cloud history bindings are wired in fork_hooks::bindAtmosphereLuts (the
+  // active call site) and depend on the downscaled-extent ensure step. Left
+  // unbound here to keep this method's contract minimal.
 }
 
 } // namespace dxvk

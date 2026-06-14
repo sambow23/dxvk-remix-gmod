@@ -118,3 +118,55 @@ Sampler3D<float4> ValueNoiseSampler;
 
 layout(binding = BINDING_SAMPLER_READBACK_BUFFER) 
 RWStructuredBuffer<uint32_t> SamplerFeedbackBuffer;
+
+// Atmosphere LUTs - use high binding slots to avoid conflicts with pass-specific bindings
+layout(binding = BINDING_ATMOSPHERE_TRANSMITTANCE_LUT)
+Texture2D AtmosphereTransmittanceLut;
+
+layout(binding = BINDING_ATMOSPHERE_MULTISCATTERING_LUT)
+Texture2D AtmosphereMultiscatteringLut;
+
+layout(binding = BINDING_ATMOSPHERE_SKY_VIEW_LUT)
+Texture2D AtmosphereSkyViewLut;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_3D)
+Texture3D<float> AtmosphereCloudNoise3D;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)
+SamplerState AtmosphereCloudNoise3DSampler;
+
+layout(binding = BINDING_ATMOSPHERE_FAST_NOISE)
+Texture2DArray<float2> AtmosphereFastNoise;
+
+layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)
+Texture2D<float4> AtmosphereCloudHistoryPrev;
+
+layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
+RWTexture2D<float4> AtmosphereCloudHistoryCurr;
+
+layout(r16ui, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV)
+Texture2D<uint> AtmosphereCloudHistoryFrameIdPrev;
+
+layout(r16ui, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_CURR)
+RWTexture2D<uint> AtmosphereCloudHistoryFrameIdCurr;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT)
+Texture2D<float> AtmosphereCloudSkyTransmittanceLut;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_RENDER_RT)
+Texture2D<float4> AtmosphereCloudRender;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_D_SUN)
+Texture3D<float> AtmosphereCloudDSun;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)
+Texture3D<float> AtmosphereCloudDAmbient;
+
+layout(binding = BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)
+SamplerState AtmosphereSkyViewSampler;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
+Texture2D<float4> AtmosphereCloudSecondaryLut;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
+Texture2D<float4> AtmosphereCloudPlacementMap;

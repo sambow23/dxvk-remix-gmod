@@ -217,6 +217,8 @@ namespace dxvk {
 
     GlobalTime::get().init(RtxOptions::timeDeltaBetweenFrames() * 0.001f);
     GlobalTime::get().setAdvanceTime(RtxOptions::advanceTime());
+
+    fork_hooks::initAtmosphere(*this);
   }
 
   RtxContext::~RtxContext() {
@@ -1393,8 +1395,7 @@ namespace dxvk {
     constants.resolveStochasticAlphaBlendThreshold = m_common->metaComposite().stochasticAlphaBlendOpacityThreshold();
 
     constants.skyBrightness = RtxOptions::skyBrightness();
-    constants.skyMode = 0u;
-    constants.atmosphereArgs = {};
+    fork_hooks::updateAtmosphereConstants(*this, constants);
     constants.isLastCompositeOutputValid = restirGI.isActive() && restirGI.getLastCompositeOutput().matchesWriteFrameIdx(frameIdx - 1);
     constants.isZUp = RtxOptions::zUp();
     constants.enableCullingSecondaryRays = RtxOptions::enableCullingInSecondaryRays();
@@ -1485,6 +1486,8 @@ namespace dxvk {
     bindResourceView(BINDING_VALUE_NOISE_SAMPLER, valueNoiseLut, nullptr);
     bindResourceSampler(BINDING_VALUE_NOISE_SAMPLER, linearSampler);
     bindResourceBuffer(BINDING_SAMPLER_READBACK_BUFFER, DxvkBufferSlice(samplerFeedbackBuffer, 0, samplerFeedbackBuffer.ptr() ? samplerFeedbackBuffer->info().size : 0));
+
+    fork_hooks::bindAtmosphereLuts(*this);
   }
 
   void RtxContext::bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView)
@@ -2736,6 +2739,10 @@ namespace dxvk {
   }
 
   void RtxContext::rasterizeSky(const DrawParameters& params, const DrawCallState& drawCallState) {
+    if (fork_hooks::injectRtxAtmosphereSkySkip()) {
+      return;
+    }
+
     // Grab and apply replacement texture if any
     // NOTE: only the original color texture will be replaced with albedo-opacity texture
     MaterialData* replacementMaterial = getSceneManager().getAssetReplacer()->getReplacementMaterial(drawCallState.getMaterialData().getHash());
