@@ -642,6 +642,12 @@ struct RtLight {
     m_externallyTrackedLightId = id;
   }
 
+  void setExternalApiHash(const XXH64_hash_t hash) {
+    if (hash != kEmptyHash) {
+      m_cachedInitialHash = hash;
+    }
+  }
+
   uint32_t isStaticCount = 0;
   bool isDynamic = false;
   bool ignoreViewModel = false;

@@ -11,7 +11,7 @@
 // m_externalActiveDomeLight, m_pendingExternalLightErases,
 // m_pendingExternalLightUpdates, m_pendingExternalActiveLights,
 // m_persistentExternalLights). This file requires that LightManager declare
-// the relevant hooks as friends — see rtx_light_manager.h.
+// the relevant hooks as friends - see rtx_light_manager.h.
 
 #include "rtx_fork_hooks.h"
 
@@ -38,7 +38,7 @@ namespace fork_hooks {
   // ACCESS NOTE: reads/writes m_pendingExternalLightErases,
   // m_externalLights, m_externalDomeLights, m_externalActiveLightList,
   // m_externalActiveDomeLight, m_pendingExternalLightUpdates,
-  // m_pendingExternalActiveLights, m_persistentExternalLights — all private.
+  // m_pendingExternalActiveLights, m_persistentExternalLights - all private.
   // Friend declarations in rtx_light_manager.h are required.
   // ---------------------------------------------------------------------------
   void flushPendingLightMutations(LightManager& mgr) {
@@ -114,46 +114,73 @@ namespace fork_hooks {
   // Stamps frameLastTouched unconditionally.
   //
   // Parameters:
-  //   light    — pointer to the existing RtLight to update in-place.
-  //   newLight — the incoming light data.
-  //   device   — used to stamp getCurrentFrameId() on frameLastTouched.
-  //   externalId — pass kInvalidExternallyTrackedLightId to skip id restore
+  //   light - pointer to the existing RtLight to update in-place.
+  //   newLight - the incoming light data.
+  //   device - used to stamp getCurrentFrameId() on frameLastTouched.
+  //   externalId - pass kInvalidExternallyTrackedLightId to skip id restore
   //               (hash-map / addExternalLight path).
   // ---------------------------------------------------------------------------
-  void updateLightStaticSleep(
+  StaticLightSleepUpdateDecision decideStaticLightSleepUpdate(
+      const RtLight& light,
+      const RtLight& newLight,
+      uint32_t numFramesToPutLightsToSleep,
+      bool suppressLightKeeping,
+      bool preserveIdentityOnDefinitionChange) {
+    if (newLight.isDynamic || suppressLightKeeping) {
+      return { true, newLight.isStaticCount, true, false };
+    }
+
+    const uint32_t isStaticCount = light.isStaticCount;
+    if (light.getTransformedHash() != newLight.getTransformedHash()) {
+      if (preserveIdentityOnDefinitionChange) {
+        return { true, 0, true, false };
+      }
+
+      if (isStaticCount < numFramesToPutLightsToSleep) {
+        return { true, 0, true, false };
+      }
+
+      return { true, 0, false, true };
+    }
+
+    if (isStaticCount < numFramesToPutLightsToSleep) {
+      return { true, isStaticCount + 1, true, false };
+    }
+
+    return { false, isStaticCount + 1, true, false };
+  }
+
+  StaticLightSleepUpdateDecision updateLightStaticSleep(
       RtLight* light,
       const RtLight& newLight,
       DxvkDevice* device,
-      uint64_t externalId) {
+      uint64_t externalId,
+      bool preserveIdentityOnDefinitionChange) {
 
     const uint16_t bufferIdx = light->getBufferIdx();
+    const StaticLightSleepUpdateDecision decision = decideStaticLightSleepUpdate(
+      *light,
+      newLight,
+      RtxOptions::getNumFramesToPutLightsToSleep(),
+      LightManager::suppressLightKeeping(),
+      preserveIdentityOnDefinitionChange);
 
-    if (!newLight.isDynamic && !LightManager::suppressLightKeeping()) {
-      const uint32_t isStaticCount = light->isStaticCount;
-
-      // If this light hasn't moved for N frames, put it to sleep to preserve
-      // temporal data
-      if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
-        *light = newLight;
-        light->setBufferIdx(bufferIdx);
-        if (externalId != kInvalidExternallyTrackedLightId) {
-          light->setExternallyTrackedLightId(externalId);
-        }
-        light->isStaticCount = isStaticCount + 1;  // Preserve and increment counter
-      } else {
-        // Light is asleep — don't update, just increment counter
-        light->isStaticCount = isStaticCount + 1;
-      }
-    } else {
-      // Dynamic lights always update
-      *light = newLight;
-      light->setBufferIdx(bufferIdx);
-      if (externalId != kInvalidExternallyTrackedLightId) {
-        light->setExternallyTrackedLightId(externalId);
-      }
+    if (!decision.copyDefinition) {
+      light->isStaticCount = decision.nextStaticCount;
+      light->setFrameLastTouched(device->getCurrentFrameId());
+      return decision;
     }
 
+    *light = newLight;
+    light->setBufferIdx(decision.preserveBufferIdx ? bufferIdx : kNewLightIdx);
+    if (externalId != kInvalidExternallyTrackedLightId) {
+      light->setExternallyTrackedLightId(externalId);
+    }
+
+    light->isStaticCount = decision.nextStaticCount;
     light->setFrameLastTouched(device->getCurrentFrameId());
+
+    return decision;
   }
 
   // ---------------------------------------------------------------------------

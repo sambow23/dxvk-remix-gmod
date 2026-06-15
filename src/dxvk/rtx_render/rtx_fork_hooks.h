@@ -208,17 +208,32 @@ namespace dxvk {
     // Implementation in rtx_fork_light.cpp.
     void flushPendingLightMutations(LightManager& mgr);
 
+    struct StaticLightSleepUpdateDecision {
+      bool copyDefinition;
+      uint32_t nextStaticCount;
+      bool preserveBufferIdx;
+      bool invalidateNrcHistory;
+    };
+
+    StaticLightSleepUpdateDecision decideStaticLightSleepUpdate(
+      const RtLight& light,
+      const RtLight& newLight,
+      uint32_t numFramesToPutLightsToSleep,
+      bool suppressLightKeeping,
+      bool preserveIdentityOnDefinitionChange = false);
+
     // Shared static-sleep update logic for both the indexed (externally-tracked)
     // and hash-map (external API) light paths. Preserves temporal denoiser data
     // by skipping the copy once isStaticCount >= numFramesToPutLightsToSleep.
     // Pass externalId = kInvalidExternallyTrackedLightId to skip id restoration
     // (hash-map path). Stamps frameLastTouched unconditionally.
     // Implementation in rtx_fork_light.cpp.
-    void updateLightStaticSleep(
+    StaticLightSleepUpdateDecision updateLightStaticSleep(
       RtLight* light,
       const RtLight& newLight,
       DxvkDevice* device,
-      uint64_t externalId);
+      uint64_t externalId,
+      bool preserveIdentityOnDefinitionChange = false);
 
     // Per-frame weather preset blender update. Reads __weather.target and
     // __weather.blend_seconds from the GameStateStore and writes blended weather

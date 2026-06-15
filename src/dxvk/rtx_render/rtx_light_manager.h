@@ -50,9 +50,12 @@ struct LightManager;
 // Forward declarations of fork_hooks functions that require friend access to
 // LightManager private members. Implementations live in rtx_fork_light.cpp.
 namespace fork_hooks {
+  struct StaticLightSleepUpdateDecision;
   void flushPendingLightMutations(LightManager& mgr);
-  void updateLightStaticSleep(RtLight* light, const RtLight& newLight,
-                              DxvkDevice* device, uint64_t externalId);
+  StaticLightSleepUpdateDecision updateLightStaticSleep(
+                              RtLight* light, const RtLight& newLight,
+                              DxvkDevice* device, uint64_t externalId,
+                              bool preserveIdentityOnDefinitionChange);
   void setExternalLightEmplace(LightManager& mgr,
                                remixapi_LightHandle handle,
                                const RtLight& rtlight);
@@ -77,7 +80,7 @@ struct LightManager : public CommonDeviceObject {
   // m_pendingExternalLightErases, m_pendingExternalLightUpdates,
   // m_pendingExternalActiveLights, m_persistentExternalLights).
   friend void fork_hooks::flushPendingLightMutations(LightManager&);
-  friend void fork_hooks::updateLightStaticSleep(RtLight*, const RtLight&, DxvkDevice*, uint64_t);
+  friend fork_hooks::StaticLightSleepUpdateDecision fork_hooks::updateLightStaticSleep(RtLight*, const RtLight&, DxvkDevice*, uint64_t, bool);
   friend void fork_hooks::setExternalLightEmplace(LightManager&, remixapi_LightHandle, const RtLight&);
   friend void fork_hooks::disableExternalLightQueue(LightManager&, remixapi_LightHandle);
   friend void fork_hooks::registerPersistentLight(LightManager&, remixapi_LightHandle);
@@ -136,6 +139,7 @@ public:
   void addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight);
   void removeExternalLight(remixapi_LightHandle handle);
   void addExternalLightInstance(remixapi_LightHandle enabledLight);
+  bool consumeNrcHistoryInvalidation();
   // Remix API integration helpers
   void registerPersistentExternalLight(remixapi_LightHandle handle);
   void unregisterPersistentExternalLight(remixapi_LightHandle handle);
@@ -163,6 +167,7 @@ private:
   std::unordered_set<remixapi_LightHandle> m_externalActiveLightList;
   remixapi_LightHandle m_externalActiveDomeLight = nullptr;
   DomeLightArgs m_gpuDomeLightArgs;
+  bool m_invalidateNrcHistory = false;
 
   // Pending external light mutations to be applied at the start of the frame
   std::vector<remixapi_LightHandle> m_pendingExternalLightErases{};
@@ -259,4 +264,3 @@ private:
 };
 
 }  // namespace dxvk
-

@@ -22,6 +22,7 @@
 #include "rtx_camera_manager.h"
 
 #include "dxvk_device.h"
+#include "rtx_fork_camera_origin.h"
 
 namespace {
   constexpr float kFovToleranceRadians = 0.001f;
@@ -178,9 +179,15 @@ namespace dxvk {
                                             const Matrix4& worldToView,
                                             const Matrix4& viewToProjection) {
     DecomposeProjectionParams decomposeProjectionParams = getOrDecomposeProjection(viewToProjection);
+    const uint32_t frameId = m_device->getCurrentFrameId();
 
-    getCamera(type).update(
-      m_device->getCurrentFrameId(),
+    RtCamera& camera = getCamera(type);
+    if (camera.getLastUpdateFrame() == frameId) {
+      return;
+    }
+
+    camera.update(
+      frameId,
       worldToView,
       viewToProjection,
       decomposeProjectionParams.fov,
@@ -188,6 +195,12 @@ namespace dxvk {
       decomposeProjectionParams.nearPlane,
       decomposeProjectionParams.farPlane,
       decomposeProjectionParams.isLHS);
+
+    camera.applyArtificialWorldOffset(fork_camera_origin::readWorldOriginOffsetFromGameState());
+
+    if (type == CameraType::Main && !camera.isFreeCameraEnabled() && camera.isCameraCut()) {
+      m_lastCameraCutFrameId = frameId;
+    }
   }
 
     DecomposeProjectionParams CameraManager::getOrDecomposeProjection(const Matrix4& viewToProjection) {

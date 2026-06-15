@@ -640,7 +640,7 @@ namespace dxvk {
       return;
     }
 
-    m_resetHistory = m_resetHistory || NrcOptions::resetHistory() || frameBeginCtx.resetHistory;
+    m_resetHistory = m_resetHistory || NrcOptions::resetHistory() || frameBeginCtx.resetHistory || frameBeginCtx.resetNrcHistory;
 
     // Set up NRC context settings
     {
@@ -689,7 +689,7 @@ namespace dxvk {
 
       // Set scene bounds
 
-      if (frameBeginCtx.isCameraCut && NrcOptions::resetSceneBoundsOnCameraCut()) {
+      if ((frameBeginCtx.isCameraCut && NrcOptions::resetSceneBoundsOnCameraCut()) || frameBeginCtx.resetNrcHistory) {
         m_initSceneBounds = true;
       }
 

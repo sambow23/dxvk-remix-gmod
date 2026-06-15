@@ -437,12 +437,13 @@ namespace dxvk {
 
     const RtCamera& mainCamera = getSceneManager().getCamera();
     m_resetHistory = m_resetHistory || mainCamera.isViewHistoryInvalidated(m_device->getCurrentFrameId());
+    const bool resetNrcHistory = getSceneManager().getLightManager().consumeNrcHistoryInvalidation();
 
     // Call onFrameBegin callbacks for RtxPases
     // Note: this needs to be called after resetScreenResolution() call in a frame
     // since an RtxPass may alias some of its resources with the ones created in createRaytracingOutput()
     getResourceManager().onFrameBegin(this, getCommonObjects()->getTextureManager(), getSceneManager(), downscaledExtent,
-                                      upscaledExtent, m_resetHistory, mainCamera.isCameraCut());
+                                      upscaledExtent, m_resetHistory, mainCamera.isCameraCut(), resetNrcHistory);
 
     // Force history reset on integrate indirect mode change to discard incompatible history 
     if (RtxOptions::integrateIndirectMode() != m_prevIntegrateIndirectMode) {

@@ -1,7 +1,7 @@
 subdir('unit')
 
 dxvkrt_test_root = meson.global_source_root().replace('\\', '/') + '/tests/rtx/dxvk_rt_testing/'
-if fs.is_dir('dxvk_rt_testing')
+if fs.is_dir('dxvk_rt_testing') and fs.is_file('dxvk_rt_testing/meson.build')
   subdir('dxvk_rt_testing')
 endif
 

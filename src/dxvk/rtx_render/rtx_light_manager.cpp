@@ -89,6 +89,7 @@ namespace dxvk {
     }
     m_lights.clear();
     m_linearizedLights.clear();
+    m_invalidateNrcHistory = false;
     m_lightDebugUILock.unlock();
   }
 
@@ -98,6 +99,7 @@ namespace dxvk {
     std::lock_guard<std::mutex> lock(m_lightUIMutex);
     m_lights.clear();
     m_linearizedLights.clear();
+    m_invalidateNrcHistory = false;
 
     // Note: Fallback light reset here so that changes to its settings will take effect, does not need to be part
     // of usual light clearing logic though.
@@ -716,19 +718,31 @@ namespace dxvk {
     assert(light->getExternallyTrackedLightId() != kInvalidExternallyTrackedLightId && " light passed to updateExternallyTrackedLight is not actually externally tracked.");
 
     const uint64_t externalId = light->getExternallyTrackedLightId();
-    fork_hooks::updateLightStaticSleep(light, newLight, m_device, externalId);
+    const fork_hooks::StaticLightSleepUpdateDecision decision =
+      fork_hooks::updateLightStaticSleep(light, newLight, m_device, externalId);
+    m_invalidateNrcHistory = m_invalidateNrcHistory || decision.invalidateNrcHistory;
   }
 
   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
+    RtLight externalLight = rtlight;
+    externalLight.setExternalApiHash(static_cast<XXH64_hash_t>(reinterpret_cast<uintptr_t>(handle)));
+
     auto found = m_externalLights.find(handle);
     if (found != m_externalLights.end()) {
       // Existing light - preserve temporal data for static lights
-      fork_hooks::updateLightStaticSleep(
-        &found->second, rtlight, m_device, kInvalidExternallyTrackedLightId);
+      const fork_hooks::StaticLightSleepUpdateDecision decision = fork_hooks::updateLightStaticSleep(
+        &found->second, externalLight, m_device, kInvalidExternallyTrackedLightId, true);
+      m_invalidateNrcHistory = m_invalidateNrcHistory || decision.invalidateNrcHistory;
     } else {
       // New light - copy it and set initial frame
-      fork_hooks::setExternalLightEmplace(*this, handle, rtlight);
+      fork_hooks::setExternalLightEmplace(*this, handle, externalLight);
     }
+  }
+
+  bool LightManager::consumeNrcHistoryInvalidation() {
+    const bool invalidateNrcHistory = m_invalidateNrcHistory;
+    m_invalidateNrcHistory = false;
+    return invalidateNrcHistory;
   }
 
   void LightManager::removeExternalLight(remixapi_LightHandle handle) {

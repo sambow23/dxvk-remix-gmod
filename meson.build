@@ -816,6 +816,6 @@ if dxvk_is_ninja
   endif
 endif # dxvk_is_ninja
 
-if fs.is_dir('nv-private')
+if fs.is_dir('nv-private') and fs.is_file('nv-private/meson.build')
   subdir('nv-private')
 endif

@@ -373,7 +373,8 @@ namespace dxvk {
     const VkExtent3D& downscaledExtent,
     const VkExtent3D& targetExtent,
     bool resetHistory,
-    bool isCameraCut) {
+    bool isCameraCut,
+    bool resetNrcHistory) {
 
     FrameBeginContext frameBeginCtx;
     frameBeginCtx.downscaledExtent = downscaledExtent;
@@ -381,6 +382,7 @@ namespace dxvk {
     frameBeginCtx.frameTimeMilliseconds = GlobalTime::get().deltaTimeMs();
     frameBeginCtx.resetHistory = resetHistory;
     frameBeginCtx.isCameraCut = isCameraCut;
+    frameBeginCtx.resetNrcHistory = resetNrcHistory;
 
     executeFrameBeginEventList(m_onFrameBegin, ctx, frameBeginCtx);
 
