@@ -35,6 +35,10 @@
 #include "rtx/concept/surface_material/opaque_surface_material_interaction.slangh"
 #include "rtx/pass/nrc/nrc_integrator_utilities.slangh"
 #include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#ifdef ATMOSPHERE_AVAILABLE
+#include "rtx/pass/atmosphere/atmosphere_sky.slangh"
+#endif
 
 // Input specular signal of low roughness material into restir gi
 static const uint kRestirGIAcceptLowRoughnessInput = false;
@@ -373,8 +377,18 @@ void integratePathVertex(
     {
       skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, pathState.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
     }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      // Physical atmosphere mode
+      skyRadiance = evalSkyRadiance(pathState.direction, cb.atmosphereArgs,
+                                     pathState.pixelCoordinate, cb.frameIdx,
+                                     cb.isZUp != 0);
+    }
+#endif
     else
     {
+      // Skybox rasterization mode
       skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(pathState.direction, 0);
     }
     
@@ -629,13 +643,15 @@ void integratePathVertex(
         if (isWithinGbuffer)
         {
           uint8_t sampledTransportPortalIndex = invalidRayPortalIndex;
-    
+
+          // Create synthetic customIndex for view model filtering.
+          uint customIndex = rayInteraction.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+
           // Select and sample a light for NEE via RTXDI
-    
           lightSampleValid = sampleLightRTXDI(
             pixelCoordinate,
             surfaceInteraction,
-            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx);
+            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
         }
       }
 
@@ -657,16 +673,36 @@ void integratePathVertex(
         }
         else
         {
+          // Create synthetic customIndex for view model filtering.
+          uint customIndex = rayInteraction.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+
           // Select and sample a light for NEE via RIS
           lightSampleValid = sampleLightRIS(
             randomState,
             surfaceInteraction, opaqueSurfaceMaterialInteraction, rayInteraction.viewDirection,
-            lightSample, invSelectionPdf, lightIdx);
+            lightSample, invSelectionPdf, lightIdx, customIndex);
         }
       }
 
 
       lightSample.solidAnglePdf = invSelectionPdf > 0 ? lightSample.solidAnglePdf / invSelectionPdf : 0.0;
+
+      // Cloud-on-terrain shadow on the atmosphere sun (real distant light) for
+      // secondary bounces — mirror of the primary path in integrator_direct.slangh.
+      // fork — experiment 2026-06-21.
+      if (lightSampleValid && cb.skyMode == 1 && cb.atmosphereArgs.cloudVoxelShadowsEnable != 0u
+          && lightIdx != kInvalidLightIdx)
+      {
+        const DecodedPolymorphicLight cloudShadowLight = decodePolymorphicLight(lights[lightIdx]);
+        if (cloudShadowLight.atmosphereCloudShadowed)
+        {
+          const vec3 dirToSun = normalize(lightSample.position - surfaceInteraction.position);
+          const float cloudT = sampleCloudGroundShadow_OptionB(
+              surfaceInteraction.position, dirToSun, cb.atmosphereArgs, cb.isZUp != 0);
+          lightSample.radiance *= pow(cloudT, cb.atmosphereArgs.cloudShadowFactorStrength);
+        }
+      }
+
       vec3 diffuseLight, specularLight;
       const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
       evaluateUnshadowedLight(lightSample, opaqueSurfaceMaterialInteraction, rayInteraction, normalize(lightSample.position - surfaceInteraction.position), diffuseLight, specularLight);
@@ -780,6 +816,7 @@ void integratePathVertex(
         }
       }
     }
+    
 
     // Terminate the path if NRC requested it
     if (ENABLE_NRC && nrcProgressState == NrcProgressState::TerminateAfterDirectLighting)
