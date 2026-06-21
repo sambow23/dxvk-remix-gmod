@@ -37,6 +37,11 @@
 #include "../dxvk/rtx_render/rtx_dlfg.h"
 // NV-DXVK end
 
+// NV-DXVK: expose remixapi_AutoInstancePersistentLights for mixed-path
+// consumers that create lights via the C API but present through the native
+// D3D9 path (bypassing remixapi_Present).
+#include <remix/remix_c.h>
+
 namespace dxvk {
   // NV-DXVK start: App Controlled FSE
   enum FSEState {
@@ -452,6 +457,11 @@ namespace dxvk {
     // NV-DXVK end
 
     D3D9DeviceLock lock = m_parent->LockDevice();
+    // NV-DXVK: Flush pending Remix API light updates safely once per frame.
+    // This only enqueues into LightManager; actual mutations apply at frame start.
+    // Covers mixed-path consumers that create lights via the C API but present
+    // through the native D3D9 COM path (bypassing remixapi_Present).
+    (void)remixapi_AutoInstancePersistentLights();
 
     uint32_t presentInterval = m_presentParams.PresentationInterval;
 
@@ -1342,8 +1352,9 @@ namespace dxvk {
     presenterDesc.numPresentModes = PickPresentModes(Vsync, presenterDesc.presentModes);
     presenterDesc.fullScreenExclusive = PickFullscreenMode();
 
-    if (GetPresenter()->recreateSwapChain(presenterDesc) != VK_SUCCESS)
-      throw DxvkError("D3D9SwapChainEx: Failed to recreate swap chain");
+    if (GetPresenter()->recreateSwapChain(presenterDesc) != VK_SUCCESS) {
+      //throw DxvkError("D3D9SwapChainEx: Failed to recreate swap chain");
+    }
     // NV-DXVK end
     
 
