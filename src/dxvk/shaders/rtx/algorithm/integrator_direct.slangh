@@ -37,6 +37,7 @@
 #include "rtx/algorithm/visibility.slangh"
 #include "rtx/algorithm/rtxcr/rtxcr_material.slangh"
 #include "integrator.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 // From 'Predictable and Targeted Softening of the Shadow Terminator'.
 // Returns a [0,1] weight to smooth the shadow terminator on the diffuse lobe.
@@ -437,6 +438,9 @@ void integrateDirectPath(
     // running RTXDI on secondary surfaces will attempt to use lights from the primary surface which results
     // in poor quality lighting if the surface is in a significantly different spatial location.
     uint16_t lightIdx = kInvalidLightIdx;
+    // Create synthetic customIndex based on geometry flags to forward view model status to light sampling.
+    uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+
     if (
       cb.enableRtxdi &&
       geometryFlags.primarySelectedIntegrationSurface)
@@ -445,7 +449,7 @@ void integrateDirectPath(
       rtxdiLightSampleValid = sampleLightRTXDI(
         pixelCoordinate,
         primarySurfaceInteraction,
-        lightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx);
+        lightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
     }
     else
     {
@@ -453,10 +457,30 @@ void integrateDirectPath(
       risLightSampleValid = sampleLightRIS(
         randomState,
         primarySurfaceInteraction, opaqueSurfaceMaterialInteraction, primaryMinimalRayInteraction.viewDirection,
-        lightSample, inverseSelectionPdf, lightIdx);
+        lightSample, inverseSelectionPdf, lightIdx, customIndex);
     }
 
     const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
+
+    // Cloud-on-terrain shadow on the atmosphere sun (real distant light): fold the
+    // per-pixel cloud transmittance onto the flagged light's NEE radiance. This is
+    // the physically-correct successor to the bespoke sampleAtmosphereSunLight fold
+    // — applied to a real light so it is per-pixel, correct indoors (the light's own
+    // shadow ray handles the roof), denoised, and free for every surface type.
+    // fork — experiment 2026-06-21.
+    if ((rtxdiLightSampleValid || risLightSampleValid)
+        && cb.skyMode == 1 && cb.atmosphereArgs.cloudVoxelShadowsEnable != 0u
+        && lightIdx != kInvalidLightIdx)
+    {
+      const DecodedPolymorphicLight cloudShadowLight = decodePolymorphicLight(lights[lightIdx]);
+      if (cloudShadowLight.atmosphereCloudShadowed)
+      {
+        const vec3 dirToSun = normalize(lightSample.position - primarySurfaceInteraction.position);
+        const float cloudT = sampleCloudGroundShadow_OptionB(
+            primarySurfaceInteraction.position, dirToSun, cb.atmosphereArgs, cb.isZUp != 0);
+        lightSample.radiance *= pow(cloudT, cb.atmosphereArgs.cloudShadowFactorStrength);
+      }
+    }
 
     // Evaluate NEE
     if (rtxdiLightSampleValid || risLightSampleValid || isDiffusionProfileSss)
@@ -482,6 +506,7 @@ void integrateDirectPath(
         RAB_StoreReservoir(reservoir, pixelCoordinate, RTXDI_GetSpatialOutputPage());
       }
     }
+    
   }
 
   // Output direct lighting radiance information

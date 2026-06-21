@@ -131,18 +131,34 @@ namespace dxvk {
                args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.volumetrics", bool, enableTranslucentShadows, false,
                "Calculate coloured shadows from translucent materials (i.e. glass, water) in volumetric lighting. In engineering terms: include OBJECT_MASK_TRANSLUCENT into volumetric visibility rays.");
-    RTX_OPTION_ARGS("rtx.volumetrics", Vector3, transmittanceColor, Vector3(0.999f, 0.999f, 0.999f),
+    RTX_OPTION_ARGS("rtx.volumetrics", Vector3, transmittanceColor, Vector3(0.995f, 0.995f, 0.995f),
                "The color to use for calculating transmittance measured at a specific distance.\n"
                "Note that this color is assumed to be in sRGB space and gamma encoded as it will be converted to linear for use in volumetrics.",
                args.minValue = Vector3(0.0f, 0.0f, 0.0f), args.maxValue = Vector3(1.0f, 1.0f, 1.0f));
-    RTX_OPTION_ARGS("rtx.volumetrics", float, transmittanceMeasurementDistanceMeters, 200.0f, "The distance the specified transmittance color was measured at. Lower distances indicate a denser medium.  The unit of measurement is meters, respects scene scale.",
+    RTX_OPTION_ARGS("rtx.volumetrics", float, transmittanceMeasurementDistanceMeters, 500.0f, "The distance the specified transmittance color was measured at. Lower distances indicate a denser medium.  The unit of measurement is meters, respects scene scale.",
                     args.minValue = 0.0f);
     RTX_OPTION_ARGS("rtx.volumetrics", Vector3, singleScatteringAlbedo, Vector3(0.999f, 0.999f, 0.999f),
                "The single scattering albedo (otherwise known as the particle albedo) representing the ratio of scattering to absorption.\n"
                "While color-like in many ways this value is assumed to be more of a mathematical albedo (unlike material albedo which is treated more as a color), and is therefore treated as linearly encoded data (not gamma).",
                args.minValue = Vector3(0.0f, 0.0f, 0.0f), args.maxValue = Vector3(1.0f, 1.0f, 1.0f));
-    RTX_OPTION_ARGS("rtx.volumetrics", float, anisotropy, 0.0f, "The anisotropy of the scattering phase function (-1 being backscattering, 0 being isotropic, 1 being forward scattering).",
+    RTX_OPTION_ARGS("rtx.volumetrics", float, anisotropy, 0.05f, "The anisotropy of the scattering phase function (-1 being backscattering, 0 being isotropic, 1 being forward scattering).",
                     args.minValue = -1.0f, args.maxValue = 1.0f);
+    RTX_OPTION_ARGS("rtx.volumetrics", float, fogSunVisibilityGain, 1.0f,
+                    "Artistic visibility gain applied to the sun's contribution to volumetric fog in-scattering. "
+                    "Scales fog-side sun visibility without affecting surface lighting (decals/particles/PSR/SAB read the cache straight). "
+                    "Default 1.0 = physical (no boost); raise it if fog reads too weak at normal exposure. "
+                    "The gmod-rtx port historically baked in a ~5x artistic gain here.",
+                    args.minValue = 0.0f, args.maxValue = 50.0f);
+    RTX_OPTION_ARGS("rtx.volumetrics", float, volumetricConsumerGain, 0.008f,
+                    "Gain on the volumetric froxel radiance cache as read by surface consumers "
+                    "(alpha-blended particles/decals, PSR, and SAB Path B) through evalVolumetricNEE. "
+                    "This was a hardcoded 0.0 that left those surfaces unlit by the volumetric cache "
+                    "(black particles). The cache is filled by per-froxel sun-visibility rays from "
+                    "positions in the air, so large values can produce false glow on alpha-blended "
+                    "surfaces that are actually in shadow; the small default (0.008, tuned against "
+                    "GTA IV) restores atmospheric tint on smoke/dust without obvious leaking. Set to "
+                    "0.0 to fully disable (the prior hardcoded behavior) if a game shows false glow.",
+                    args.minValue = 0.0f, args.maxValue = 1.0f);
     RTX_OPTION("rtx.volumetrics", bool, enableInPortals, false,
                "Enables using extra frustum-aligned volumes for lighting in portals.\n"
                "Note that enabling this option will require 3x the memory of the typical froxel grid as well as degrade performance in some cases.\n"

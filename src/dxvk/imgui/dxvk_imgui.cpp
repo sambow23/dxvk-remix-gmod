@@ -36,6 +36,7 @@
 #include "imgui_impl_dxvk.hpp"
 #include "imgui_impl_win32.h"
 #include "implot.h"
+#include "imgui_remix_exports.h"
 #include "dxvk_imgui.h"
 #include "rtx_render/rtx_imgui.h"
 #include "dxvk_device.h"
@@ -72,6 +73,7 @@
 #include "rtx_render/rtx_particle_system.h"
 #include "rtx_render/rtx_point_instancer_system.h"
 #include "rtx_render/rtx_overlay_window.h"
+#include "rtx_render/rtx_fork_hooks.h"
 
 
 namespace dxvk {
@@ -665,6 +667,7 @@ namespace dxvk {
   }
 
   void ImGUI::wndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    fork_hooks::imguiContextPin(m_context, m_plotContext);
     if (m_overlayWin.ptr() != nullptr) {
       m_overlayWin->gameWndProcHandler(hWnd, msg, wParam, lParam);
     } else {
@@ -1026,6 +1029,10 @@ namespace dxvk {
       // Tab Bar
       if (ImGui::BeginTabBar("Developer Tabs", tab_bar_flags)) {
         for (int n = 0; n < kTab_Count; n++) {
+          // Only surface the Plugin tab when an external wrapper has registered a draw callback.
+          if (n == kTab_Wrapper && !remixapi_imgui_HasDrawCallback()) {
+            continue;
+          }
           auto tabItemFlags = tab_item_flags;
           if(n == m_triggerTab) {
             tabItemFlags |= ImGuiTabItemFlags_SetSelected;
@@ -1048,6 +1055,9 @@ namespace dxvk {
               break;
             case kTab_Development:
               showDevelopmentSettings(ctx);
+              break;
+            case kTab_Wrapper:
+              fork_hooks::wrapperTabDraw();
               break;
             case kTab_Count:
               assert(false && "kTab_Count hit in ImGUI::showMainMenu");
@@ -2840,7 +2850,7 @@ namespace dxvk {
 
       if (RemixGui::CollapsingHeader("Sky Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
-        RemixGui::DragFloat("Sky Brightness", &RtxOptions::skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
+        fork_hooks::showAtmosphereUI();
         RemixGui::InputInt("First N Untextured Draw Calls", &RtxOptions::skyDrawcallIdThresholdObject(), 1, 1, 0);
         RemixGui::SliderFloat("Sky Min Z Threshold", &RtxOptions::skyMinZThresholdObject(), 0.0f, 1.0f);
         skyAutoDetectCombo.getKey(&RtxOptions::skyAutoDetectObject());
@@ -3944,24 +3954,9 @@ namespace dxvk {
 
       if (RemixGui::CollapsingHeader("Tonemapping", collapsingHeaderClosedFlags))
       {
-        RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
-        RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
         RemixGui::Separator();
-        RemixGui::Combo("Tonemapping Mode", &RtxOptions::tonemappingModeObject(), "Global\0Local\0");
-        if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
-          common->metaToneMapping().showImguiSettings();
-        } else {
-          common->metaLocalToneMapping().showImguiSettings();
-        }
-        if (RtxOptions::showLegacyACESOption()) {
-          RemixGui::Separator();
-          RemixGui::Checkbox("Use Legacy ACES", &RtxOptions::useLegacyACESObject());
-          if (!RtxOptions::useLegacyACES()) {
-            ImGui::Indent();
-            ImGui::TextWrapped("WARNING: Non-legacy ACES is currently experimental and the implementation is a subject to change.");
-            ImGui::Unindent();
-          }
-        }
+        common->metaToneMapping().showImguiSettings();
+        RemixGui::Separator();
       }
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))
