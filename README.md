@@ -8,8 +8,8 @@ and led by [Kim2091](https://github.com/Kim2091) — that extends the
 Remix SDK API for modern-game plugin integrations. It
 brings the SDK extensions developed in the gmod-rtx community fork —
 batched mesh and light creation, plugin-injected game state, UI state
-plumbing, VRAM control, additional tonemap operators, the Hillaire
-atmosphere model, and more — onto a clean, NVIDIA-rebase-friendly
+plumbing, VRAM control, additional tonemap operators, the Numos
+sky system, and more — onto a clean, NVIDIA-rebase-friendly
 base, so plugin authors and game integrations can build on a
 maintained codebase that's API-compatible with the broader Remix
 ecosystem.
@@ -73,9 +73,9 @@ tonemapper, the dynamic tone curve / Tuning Mode sliders, the User
 Brightness slider, and the exposure-compensation curve are removed —
 the apply pass always runs in operator-only mode.
 
-### Atmosphere
+### Numos sky system
 
-- **Hillaire atmosphere** — physically-based atmospheric scattering
+- **Numos atmosphere (Hillaire scattering)** — physically-based atmospheric scattering
   ported from the gmod-rtx community fork. Daylight, sunset, and
   twilight all behave correctly without manual fog tuning.
 - **Volumetric clouds** — procedural FBM cloud layer with
@@ -138,9 +138,9 @@ The short version:
 2. Branch on your fork — any name is fine.
 3. Keep PRs small and focused.
 4. Build clean (release flavor, exit code 0, zero errors).
-5. Open a PR against canonical's `modern-games-sdk-api` branch.
+5. Open a PR against canonical's `main` branch.
 6. Add yourself to `src/dxvk/imgui/dxvk_imgui_about.cpp` under
-   "GitHub Contributors".
+   "Github Contributors".
 
 If you touch any upstream file, update
 [`docs/fork-touchpoints.md`](docs/fork-touchpoints.md) in the same
@@ -153,40 +153,62 @@ Questions? File an issue or ask on the
 
 Detailed requirements and walkthrough live in
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). The compressed
-version, assuming you have Visual Studio 2019, the Windows SDK,
-Meson 1.8.2+, the Vulkan SDK 1.4.313.2+, and Python 3.9+:
+version, assuming you have Visual Studio 2019 (with the v142
+toolchain), the Windows SDK, Meson 1.8.2+, the Vulkan SDK
+1.4.313.2+, and Python 3.9+:
 
 ```powershell
 git clone --recursive https://github.com/<your-fork>/dxvk-remix.git
 cd dxvk-remix
-.\build_dxvk_all_ninja.ps1
+.\scripts\build.ps1
 ```
 
-Output `d3d9.dll` lands in `_Comp64Release/src/d3d9/`. Configure
-game targets via `gametargets.conf` (copy `gametargets.example.conf`)
-and the build will deploy automatically.
+`scripts/build.ps1` is the fork-side runtime build entry point — it
+discovers Visual Studio via vswhere, runs `meson setup`/`compile`/
+`install`, and verifies artifacts. It defaults to the `release`
+flavor; pass `-Flavor debug` or `-Flavor debugoptimized` for the
+instrumented flavors, `-Clean` for a fresh build dir, or
+`-EnableTracy` for the Tracy profiler.
+
+Output `d3d9.dll` lands in `_Comp64Release/src/d3d9/` and is
+installed to `_output/`. Configure game targets via
+`gametargets.conf` (copy `gametargets.example.conf`) and the build
+will deploy automatically.
+
+To build the 32-bit-to-64-bit bridge separately, use the fork-side
+bridge wrapper `.\bridge\scripts\build.ps1` (builds the x64 server
+and x86 client + launcher into `bridge/_output/`).
 
 ## Remix API
 
 If you're integrating Remix into a game with available source, you
 can either use the D3D9 surface directly (Remix's `d3d9.dll`
 implements D3D9) or program against the Remix C API to push game
-data into the renderer. See
-[`docs/RemixSDK.md`](docs/RemixSDK.md) for the full SDK
-documentation.
+data into the renderer. Start with
+[`docs/RemixSDK.md`](docs/RemixSDK.md) for setup and the mental
+model, then see [`docs/RemixApi.md`](docs/RemixApi.md) for the full
+API reference. The C header is
+[`public/include/remix/remix_c.h`](public/include/remix/remix_c.h),
+with a type-safe C++ wrapper at
+[`public/include/remix/remix.h`](public/include/remix/remix.h).
 
 ## Project documentation
 
 - [Anti-Culling System](docs/AntiCullingSystem.md)
+- [Cloud System](docs/CloudSystem.md)
 - [Contributing Guide](docs/CONTRIBUTING.md)
+- [Contributing Style Guide](docs/CONTRIBUTING-style-guide.md)
 - [Foliage System](docs/FoliageSystem.md)
 - [Fork Touchpoints](docs/fork-touchpoints.md)
 - [GPU Print](docs/GpuPrint.md)
 - [Opacity Micromap](docs/OpacityMicromap.md)
-- [Remix API](docs/RemixSDK.md)
+- [Remix API (hub reference)](docs/RemixApi.md)
 - [Remix API Changelog](docs/RemixApiChangelog.md)
+- [Remix API Surface (auto-generated)](RemixApiSurface.md)
 - [Remix Config](docs/RemixConfig.md)
 - [Remix Logic](docs/RemixLogic.md)
+- [Remix SDK Setup](docs/RemixSDK.md)
+- [Remix Sky API](docs/RemixSkyAPI.md)
 - [Rtx Options](RtxOptions.md)
 - [Terrain System](docs/TerrainSystem.md)
 - [Unit Test](docs/UnitTest.md)
