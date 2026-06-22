@@ -44,7 +44,7 @@ want to make this fork better — you're in the right place.
    git remote add canonical https://github.com/RemixProjGroup/dxvk-remix.git
    ```
 
-The canonical repo's default branch is `modern-games-sdk-api`. Your
+The canonical repo's default branch is `main`. Your
 fork has a tracking copy of that branch — it's where shipped work
 lives, and it's the target of every PR.
 
@@ -82,19 +82,17 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
 From the project root, in PowerShell:
 
 ```powershell
-.\build_dxvk_all_ninja.ps1
+.\scripts\build.ps1
 ```
 
-This builds three flavors into `_Comp64Debug/`, `_Comp64DebugOptimized/`,
-and `_Comp64Release/`. The release flavor is fastest at runtime; the
-debug flavors carry instrumentation.
-
-If you only need the release flavor (the most common case while
-iterating), invoke the build directly:
+This builds the release flavor into `_Comp64Release/` and installs
+`d3d9.dll` to `_output/`. Use `-Flavor debug` or `-Flavor debugoptimized`
+for the instrumented flavors, `-Clean` to wipe the build dir first, and
+`-EnableTracy` to enable the Tracy profiler:
 
 ```powershell
-. .\build_common.ps1
-PerformBuild -BuildFlavour release -BuildSubDir _Comp64Release -Backend ninja -EnableTracy false
+.\scripts\build.ps1 -Flavor debugoptimized
+.\scripts\build.ps1 -Clean -EnableTracy
 ```
 
 The build copies `d3d9.dll` to any game targets configured in
@@ -230,13 +228,13 @@ with comment fences:
 1. **Build clean.** Compile-check release flavor; you should see
    exit code 0 and zero compile errors. The `rtx-build` skill (or
    the PowerShell command above) does this.
-2. **Fast-forward** your fork's `modern-games-sdk-api` to your
+2. **Fast-forward** your fork's `main` to your
    feature-branch tip. Fast-forward only — never `--force` on
-   `modern-games-sdk-api`.
+   `main`.
 3. **Push** both your feature branch and your updated
-   `modern-games-sdk-api` to your fork.
-4. **Open a PR** from your fork's `modern-games-sdk-api` →
-   canonical's `modern-games-sdk-api`.
+   `main` to your fork.
+4. **Open a PR** from your fork's `main` →
+   canonical's `main`.
 5. **Squash on merge.** Maintainers squash PRs at merge time, so
    each merged PR shows up as a single commit on the canonical
    branch. You don't need to squash locally.
