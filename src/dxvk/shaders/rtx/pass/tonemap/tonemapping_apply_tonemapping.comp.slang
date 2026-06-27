@@ -107,11 +107,18 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
   // Apply dithering to the output to break up banding artifacts. First-order
   // only; ideally we would dither in linear space using sRGB range info, but
   // the resulting error is small.
+  // fork — 2026-06-27 (experimental): only dither when this pass actually
+  // encoded to gamma. The fork's tonemap refactor defers sRGB conversion to the
+  // dedicated srgb_dither pass (performSRGBConversion=false here), so dithering
+  // here would add the ±0.5/255 perturbation in LINEAR space — which the later
+  // linearToGamma in srgb_dither amplifies ~13x in the near-black toe, producing
+  // a heavy boiling grain only in dark regions (plus a redundant double-dither).
+  // Gating on performSRGBConversion ties the dither to the space it is valid in.
   return ditherTo8Bit(
     color,
     pixelPosition,
     cb.frameIndex,
-    cb.ditherMode != ditherModeNone,
+    cb.performSRGBConversion > 0 && cb.ditherMode != ditherModeNone,
     cb.ditherMode == ditherModeSpatialTemporal
   );
 }
