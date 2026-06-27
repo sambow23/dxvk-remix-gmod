@@ -80,6 +80,8 @@ namespace dxvk {
 
   private:
     std::array<RtCamera, CameraType::Count> m_cameras;
+    std::array<Vector3, CameraType::Count> m_externalCameraOrigins {};
+    std::array<bool, CameraType::Count> m_externalCameraOriginValid {};
     CameraType::Enum m_lastSetCameraType = CameraType::Unknown;
     uint32_t m_lastCameraCutFrameId = -1;
     uint32_t m_lastCameraViewHistoryInvalidationFrameId = -1;
