@@ -53,5 +53,16 @@ namespace dxvk {
       return Vector3(x, y, z);
     }
 
+    Vector3 calculatePreviousCameraHistoryOffset(
+      bool hasPreviousOrigin,
+      const Vector3& previousOrigin,
+      const Vector3& currentOrigin) {
+      if (!hasPreviousOrigin) {
+        return Vector3(0.0f);
+      }
+
+      return previousOrigin - currentOrigin;
+    }
+
   } // namespace fork_camera_origin
 } // namespace dxvk

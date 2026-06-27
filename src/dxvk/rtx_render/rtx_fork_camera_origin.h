@@ -13,6 +13,10 @@ namespace dxvk {
 
     bool tryParseWorldOriginComponent(const std::string& raw, float& outValue);
     Vector3 readWorldOriginOffsetFromGameState();
+    Vector3 calculatePreviousCameraHistoryOffset(
+      bool hasPreviousOrigin,
+      const Vector3& previousOrigin,
+      const Vector3& currentOrigin);
 
   } // namespace fork_camera_origin
 } // namespace dxvk

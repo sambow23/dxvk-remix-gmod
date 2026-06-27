@@ -67,6 +67,28 @@ void invalidPublishedWorldOriginFallsBackToZero() {
   require(offset == dxvk::Vector3(0.0f), "invalid origin offset falls back to zero");
 }
 
+void calculatesPreviousHistoryOffsetAcrossOriginHops() {
+  const dxvk::Vector3 previousOrigin(-1024.0f, 0.0f, 0.0f);
+  const dxvk::Vector3 currentOrigin(0.0f, 0.0f, 0.0f);
+
+  const dxvk::Vector3 offset =
+    dxvk::fork_camera_origin::calculatePreviousCameraHistoryOffset(true, previousOrigin, currentOrigin);
+
+  requireNear(offset.x, -1024.0f, "history offset x");
+  requireNear(offset.y, 0.0f, "history offset y");
+  requireNear(offset.z, 0.0f, "history offset z");
+}
+
+void missingPreviousOriginDoesNotOffsetHistory() {
+  const dxvk::Vector3 previousOrigin(-1024.0f, 0.0f, 0.0f);
+  const dxvk::Vector3 currentOrigin(0.0f, 0.0f, 0.0f);
+
+  const dxvk::Vector3 offset =
+    dxvk::fork_camera_origin::calculatePreviousCameraHistoryOffset(false, previousOrigin, currentOrigin);
+
+  require(offset == dxvk::Vector3(0.0f), "missing previous origin leaves history unshifted");
+}
+
 } // anonymous namespace
 
 int main() {
@@ -74,6 +96,8 @@ int main() {
     std::cout << "Begin external camera origin tests" << std::endl;
     readsPublishedWorldOriginOffset();
     invalidPublishedWorldOriginFallsBackToZero();
+    calculatesPreviousHistoryOffsetAcrossOriginHops();
+    missingPreviousOriginDoesNotOffsetHistory();
     std::cout << "All external camera origin tests passed" << std::endl;
   } catch (const std::exception& e) {
     std::cerr << e.what() << std::endl;

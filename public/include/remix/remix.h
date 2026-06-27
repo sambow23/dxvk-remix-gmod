@@ -205,6 +205,7 @@ namespace remix {
     // Plugin-injected game-state write; stored in the fork-owned thread-safe
     // string/string map read by graph components and fork-side subsystems.
     Result< void >                    SetGameValue(const char* key, const char* value);
+    Result< void >                    RequestPresentedScreenshot(const char* absolutePath);
     Result< void >                    SetFogState(const remixapi_FogInfo& info);
     Result< void >                    AddTextureHash(const char* textureCategory, const char* textureHash);
     Result< void >                    RemoveTextureHash(const char* textureCategory, const char* textureHash);
@@ -251,7 +252,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 336,
+      static_assert(sizeof(remixapi_Interface) == 344,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -300,6 +301,13 @@ namespace remix {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.SetGameValue(key, value);
+  }
+
+  inline Result< void > Interface::RequestPresentedScreenshot(const char* absolutePath) {
+    if (!m_CInterface.RequestPresentedScreenshot) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.RequestPresentedScreenshot(absolutePath);
   }
 
   inline Result< void > Interface::SetFogState(const remixapi_FogInfo& info) {

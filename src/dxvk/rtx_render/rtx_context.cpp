@@ -29,6 +29,7 @@
 #include "dxvk_device.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_fork_hooks.h"
+#include "rtx_fork_screenshot.h"
 #include "rtx_shader_manager.h"
 #include "dxvk_adapter.h"
 #include "rtx_context.h"
@@ -905,6 +906,12 @@ namespace dxvk {
           takeScreenshot("rtxImageDxvkView", targetImage);
         }
       }
+    }
+    if (auto screenshotPath = dxvk::fork_hooks::consumePresentedScreenshotRequest()) {
+      if (targetImage == nullptr) {
+        targetImage = m_state.om.renderTargets.color[0].view->image();
+      }
+      dxvk::fork_hooks::exportPresentedScreenshot(*this, targetImage, *screenshotPath);
     }
     s_triggerScreenshot = false;
 

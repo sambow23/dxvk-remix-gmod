@@ -186,6 +186,15 @@ namespace dxvk {
       return;
     }
 
+    const Vector3 currentOrigin = fork_camera_origin::readWorldOriginOffsetFromGameState();
+    const Vector3 previousHistoryOffset = fork_camera_origin::calculatePreviousCameraHistoryOffset(
+      m_externalCameraOriginValid[type],
+      m_externalCameraOrigins[type],
+      currentOrigin);
+    if (previousHistoryOffset != Vector3(0.0f)) {
+      camera.applyArtificialWorldOffset(previousHistoryOffset);
+    }
+
     camera.update(
       frameId,
       worldToView,
@@ -196,7 +205,8 @@ namespace dxvk {
       decomposeProjectionParams.farPlane,
       decomposeProjectionParams.isLHS);
 
-    camera.applyArtificialWorldOffset(fork_camera_origin::readWorldOriginOffsetFromGameState());
+    m_externalCameraOrigins[type] = currentOrigin;
+    m_externalCameraOriginValid[type] = true;
 
     if (type == CameraType::Main && !camera.isFreeCameraEnabled() && camera.isCameraCut()) {
       m_lastCameraCutFrameId = frameId;
