@@ -877,7 +877,7 @@ initializer list and can't be lifted into a separate TU.
 **Category:** migrate
 
 - **Block** at `(file scope)` (atmosphere include) — ~1 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
-  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`.*
+  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`. 2026-06-27: moved this include ahead of `rtxcr_material.slangh` so the SSS NEE code can call `sampleCloudGroundShadow_OptionB` for the SSS cloud-shadow fold (see the rtxcr_material.slangh touchpoint).*
 
 - **Block** at `evalAtmosphereSunNEE` (full function) — ~40 LOC, planned target `fork_hooks::evalAtmosphereSunNEEDirect` in `rtx_fork_atmosphere.slangh`.
   *Implements primary-bounce sun NEE for physical atmosphere: samples sun direction + cone angle, traces multiple jittered shadow rays for soft shadows, averages visibility, evaluates BRDF split-weight, and accumulates diffuse/specular sun radiance. As of the 2026-06-19 sun-only cloud-shadow re-architecture this function no longer touches clouds at all — the cloud-on-terrain shadow folds onto the sun's radiance inside `sampleAtmosphereSunLight` (atmosphere_common.slangh), so the per-pixel `PrimaryCloudShadowFactor` write, the sealed-interior zenith up-ray gate, and the viewmodel/decal/normal-flip origin corrections were all deleted here. 2026-06-20: taught the shadow ray about thin-opaque subsurface — it now traces with `visibilityModeEnableSubsurfaceMaterials` and skips the `NdotL <= 0` early-out (both the up-front check and the per-sample jitter skip) for thin-opaque materials, so backlit translucency works under the physical-atmosphere sun (it is the only sun NEE in skyMode==1; the SSS-capable standard path only runs for RTXDI/RIS lights).*
@@ -959,6 +959,9 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `evalSingleScatteringTransmission` (second call site, ~line 423) — 3-line addition for view-model customIndex.
   *Same customIndex pattern for the second single-scattering transmission light sample.*
+
+- **Block** at file scope (`sssApplyAtmosphereCloudShadow` helper) + 3 call sites — fork — 2026-06-27.
+  *Folds the cloud-on-terrain shadow onto SSS NEE. The opaque direct/indirect integrators fold the per-pixel cloud transmittance onto the flagged atmosphere sun's `lightSample.radiance` (the `atmosphereCloudShadowed` real-light fold), but `evalSssDiffusionProfile` / `evalSingleScatteringTransmission` sample their own lights internally, so the diffusion-profile, transmission, and single-scattering terms stayed fully sunlit under heavy cloud while surrounding opaque diffuse darkened. Adds a file-local `sssApplyAtmosphereCloudShadow(inout LightSample, lightIdx, surfacePos)` mirroring the integrator fold (same `skyMode==1` / `cloudVoxelShadowsEnable` / `atmosphereCloudShadowed` / `cloudShadowFactorStrength` gating) and calls it at all three SSS light-sample sites. Depends on `sampleCloudGroundShadow_OptionB` from atmosphere_common.slangh, which is why the integrator_direct.slangh include of atmosphere_common was reordered ahead of this header.*
 
 ---
 
