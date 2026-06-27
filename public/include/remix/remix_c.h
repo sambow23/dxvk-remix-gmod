@@ -756,6 +756,11 @@ extern "C" {
     uint32_t    in_buffer_size,
     uint32_t*   out_actual_size);
 
+  // Queues one final presented-image screenshot to be written to an exact
+  // caller-owned path. The path extension controls the exported file format.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RequestPresentedScreenshot)(
+    const char* absolutePath);
+
   typedef struct remixapi_FogInfo {
     remixapi_StructType       sType;
     void*                     pNext;
@@ -1147,6 +1152,7 @@ extern "C" {
     PFN_remixapi_RegisterUITexture          RegisterUITexture;
     PFN_remixapi_FreeUITexture              FreeUITexture;
     PFN_remixapi_SubmitUIDrawList           SubmitUIDrawList;
+    PFN_remixapi_RequestPresentedScreenshot RequestPresentedScreenshot;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

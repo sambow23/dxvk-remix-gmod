@@ -22,6 +22,7 @@
 #include "rtx_camera_manager.h"
 
 #include "dxvk_device.h"
+#include "rtx_fork_camera_origin.h"
 
 namespace {
   constexpr float kFovToleranceRadians = 0.001f;
@@ -178,9 +179,24 @@ namespace dxvk {
                                             const Matrix4& worldToView,
                                             const Matrix4& viewToProjection) {
     DecomposeProjectionParams decomposeProjectionParams = getOrDecomposeProjection(viewToProjection);
+    const uint32_t frameId = m_device->getCurrentFrameId();
 
-    getCamera(type).update(
-      m_device->getCurrentFrameId(),
+    RtCamera& camera = getCamera(type);
+    if (camera.getLastUpdateFrame() == frameId) {
+      return;
+    }
+
+    const Vector3 currentOrigin = fork_camera_origin::readWorldOriginOffsetFromGameState();
+    const Vector3 previousHistoryOffset = fork_camera_origin::calculatePreviousCameraHistoryOffset(
+      m_externalCameraOriginValid[type],
+      m_externalCameraOrigins[type],
+      currentOrigin);
+    if (previousHistoryOffset != Vector3(0.0f)) {
+      camera.applyArtificialWorldOffset(previousHistoryOffset);
+    }
+
+    camera.update(
+      frameId,
       worldToView,
       viewToProjection,
       decomposeProjectionParams.fov,
@@ -188,6 +204,13 @@ namespace dxvk {
       decomposeProjectionParams.nearPlane,
       decomposeProjectionParams.farPlane,
       decomposeProjectionParams.isLHS);
+
+    m_externalCameraOrigins[type] = currentOrigin;
+    m_externalCameraOriginValid[type] = true;
+
+    if (type == CameraType::Main && !camera.isFreeCameraEnabled() && camera.isCameraCut()) {
+      m_lastCameraCutFrameId = frameId;
+    }
   }
 
     DecomposeProjectionParams CameraManager::getOrDecomposeProjection(const Matrix4& viewToProjection) {
