@@ -41,6 +41,36 @@ SssDiffusionProfileResult createEmptySssDiffusionProfileResult()
   return sssDiffusionProfileResult;
 }
 
+// fork — 2026-06-27: cloud-on-terrain shadow fold for SSS NEE.
+// The opaque diffuse NEE path folds the per-pixel cloud transmittance onto the
+// atmosphere sun's radiance in integrator_direct/indirect (the
+// `atmosphereCloudShadowed` real-light fold). SSS samples its own lights
+// internally — diffusion-profile disk samples, transmission, and single
+// scattering — so without this mirror the SSS terms stay fully sunlit under
+// heavy cloud while the surrounding opaque diffuse correctly goes dark, making
+// skin/wax/foliage read as if still in direct sun. Apply the identical fold to
+// each internally-sampled light.
+// Depends on sampleCloudGroundShadow_OptionB from atmosphere_common.slangh,
+// which integrator_direct.slangh includes before this header.
+void sssApplyAtmosphereCloudShadow(inout LightSample lightSample, uint16_t lightIdx, vec3 surfacePos)
+{
+  if (cb.skyMode != 1 || cb.atmosphereArgs.cloudVoxelShadowsEnable == 0u || lightIdx == kInvalidLightIdx)
+  {
+    return;
+  }
+
+  const DecodedPolymorphicLight cloudShadowLight = decodePolymorphicLight(lights[lightIdx]);
+  if (!cloudShadowLight.atmosphereCloudShadowed)
+  {
+    return;
+  }
+
+  const vec3 dirToSun = normalize(lightSample.position - surfacePos);
+  const float cloudT = sampleCloudGroundShadow_OptionB(
+      surfacePos, dirToSun, cb.atmosphereArgs, cb.isZUp != 0);
+  lightSample.radiance *= pow(cloudT, cb.atmosphereArgs.cloudShadowFactorStrength);
+}
+
 SssTracingResult traceSssRay(
   const Ray sssSampleRay,
   const uint8_t rayMask,
@@ -208,6 +238,9 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
       }
     }
 
+    // fork: fold cloud-on-terrain shadow onto the SSS light (mirror of the opaque NEE fold).
+    sssApplyAtmosphereCloudShadow(sssLightSample, lightIdx, sssTracingResult.sssMinimalSurfaceInteraction.position);
+
     /// Visibility Check
 
     // Create surface interaction for the sample position
@@ -343,6 +376,9 @@ float3 evalSingleScatteringTransmission(
         continue;
       }
 
+      // fork: fold cloud-on-terrain shadow onto the back-surface SSS light.
+      sssApplyAtmosphereCloudShadow(transmissionLightSample, lightIdx, transmissionTracingResult.sssMinimalSurfaceInteraction.position);
+
       /// Visibility Check
 
       // Trace Visibilty Ray
@@ -441,6 +477,9 @@ float3 evalSingleScatteringTransmission(
       {
         continue;
       }
+
+      // fork: fold cloud-on-terrain shadow onto the single-scattering SSS light.
+      sssApplyAtmosphereCloudShadow(singleScatteringLightSample, singleScatteringLightIdx, singleScatteringTracingResult.sssMinimalSurfaceInteraction.position);
 
       /// Visibility Check
 

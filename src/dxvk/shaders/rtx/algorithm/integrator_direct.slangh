@@ -35,9 +35,12 @@
 #include "rtx/algorithm/lighting.slangh"
 #include "rtx/algorithm/resolve.slangh"
 #include "rtx/algorithm/visibility.slangh"
+// fork — 2026-06-27: atmosphere_common must precede rtxcr_material so the SSS
+// NEE paths can fold the cloud-on-terrain shadow onto their internally-sampled
+// lights (sampleCloudGroundShadow_OptionB lives in atmosphere_common).
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 #include "rtx/algorithm/rtxcr/rtxcr_material.slangh"
 #include "integrator.slangh"
-#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 // From 'Predictable and Targeted Softening of the Shadow Terminator'.
 // Returns a [0,1] weight to smooth the shadow terminator on the diffuse lobe.
