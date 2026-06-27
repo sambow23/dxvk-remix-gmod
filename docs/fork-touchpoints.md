@@ -1261,6 +1261,9 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false, ..., adaptiveStateBT709);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`. The 2026-05-XX cleanup also stripped the dead helpers (`reinhardToneMapper`, `filmicToneMapper`, `dynamicToneMapper`, `lumaAverage`, `setSaturationAverage`) and the `InToneCurve` binding. `adaptiveStateBT709` is the observer adaptive state in post-AE-exposure BT.709 space — currently `(0.18, 0.18, 0.18)` because the perceptual auto-exposure brings the geometric-mean scene Yf to mid-gray; consumed by psycho17, ignored by other operators.
   *Global apply pass routes through the fork dispatcher for operator selection.*
 
+- **Inline tweak** at `applyToneMapping` (dither gate) — fork — 2026-06-27 (experimental). Adds `cb.performSRGBConversion > 0 &&` to the `enableDithering` argument of the inline `ditherTo8Bit` call.
+  *The fork's tonemap refactor defers sRGB conversion + dithering to the dedicated `srgb_dither` pass, calling the tonemapper with `performSRGBConversion=false`. The inline dither was left active, so it added its ±0.5/255 perturbation in LINEAR space; the later `linearToGamma` in `srgb_dither` amplifies that ~13x in the near-black sRGB toe, producing a heavy boiling grain visible only in dark regions (plus a redundant double-dither with the dedicated pass). Gating on `performSRGBConversion` disables the inline dither in the current pipeline (the gamma-space `srgb_dither` pass owns dithering) and keeps it correct should the tonemapper ever do its own sRGB encode. AWAITING in-game look check.*
+
 ---
 
 ## src/dxvk/shaders/rtx/pass/volume_args.h
