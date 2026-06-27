@@ -51,6 +51,10 @@ namespace dxvk {
       exportImage(ctx, str::format(dir, filename), image);
     }
 
+    void dumpImageToExactPath(Rc<DxvkContext> ctx, const std::string& absolutePath, Rc<DxvkImage> image) {
+      exportImage(ctx, absolutePath, image);
+    }
+
     void copyBufferFromGPU(Rc<DxvkContext> ctx, const DxvkBufferSlice& buffer, BufferCallback bufferCallback) {
       exportBuffer(ctx, buffer, bufferCallback);
     }

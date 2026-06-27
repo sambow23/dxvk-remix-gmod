@@ -38,6 +38,7 @@
 #include "../dxvk_objects.h"
 #include "../imgui/dxvk_imgui.h"
 #include "rtx_context.h"
+#include "rtx_fork_screenshot.h"
 #include "rtx_ray_portal_manager.h"
 #include "rtx_texture_manager.h"
 
@@ -2873,6 +2874,15 @@ extern "C"
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestPresentedScreenshot(const char* absolutePath) {
+    if (absolutePath == nullptr || absolutePath[0] == '\0') {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    std::lock_guard lock { s_mutex };
+    return dxvk::fork_hooks::requestPresentedScreenshot(absolutePath);
+  }
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,
                                                                        remixapi_Interface* out_result) {
     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO) {
@@ -2932,10 +2942,11 @@ extern "C"
       interf.RegisterUITexture = remixapi_RegisterUITexture;
       interf.FreeUITexture = remixapi_FreeUITexture;
       interf.SubmitUIDrawList = remixapi_SubmitUIDrawList;
+      interf.RequestPresentedScreenshot = remixapi_RequestPresentedScreenshot;
       // Fork-added vtable slots (extern-C exported; delegated to fork hook)
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 360, "Add/remove function registration");
+    static_assert(sizeof(interf) == 368, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

@@ -112,4 +112,19 @@ exe = executable('test_f16tof32',  files('test_f16tof32.cpp'),  include_director
 test('test_f16tof32', exe, env: test_env)
 tests += exe
 
+exe = executable('test_external_camera_origin',  files('test_external_camera_origin.cpp'), include_directories : [test_include_path, remix_api_include_path], dependencies : test_unit_deps, link_with: [ dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_external_camera_origin', exe, env: test_env)
+tests += exe
+
+exe = executable('test_presented_screenshot_request',
+  files('test_presented_screenshot_request.cpp',
+        '../../../src/dxvk/rtx_render/rtx_fork_screenshot.cpp',
+        '../../../src/dxvk/rtx_render/rtx_fork_png.cpp'),
+  include_directories : [test_include_path, remix_api_include_path],
+  dependencies : test_unit_deps,
+  win_subsystem : 'console',
+  override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_presented_screenshot_request', exe, env: test_env)
+tests += exe
+
 alias_target('unit_tests', tests)

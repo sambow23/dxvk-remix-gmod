@@ -20,6 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx_asset_exporter.h"
+#include "rtx_fork_png.h"
 #include "rtx_types.h"
 #include "rtx_context.h"
 #include "../../util/sync/sync_signal.h"
@@ -32,6 +33,7 @@
 #include <gli/save.hpp>
 #include <string>
 #include <charconv>
+#include <cstdint>
 #include <functional>
 
 namespace {
@@ -64,6 +66,18 @@ namespace {
       static_cast<uint32_t>(ext.y),
       1
     };
+  }
+
+  bool hasPngExtension(const std::string& filename) {
+    if (filename.size() < 4) {
+      return false;
+    }
+
+    const std::size_t offset = filename.size() - 4;
+    return filename[offset] == '.'
+        && (filename[offset + 1] == 'p' || filename[offset + 1] == 'P')
+        && (filename[offset + 2] == 'n' || filename[offset + 2] == 'N')
+        && (filename[offset + 3] == 'g' || filename[offset + 3] == 'G');
   }
 }
 
@@ -115,6 +129,7 @@ namespace dxvk {
     // We want to retain most of the src image state
     DxvkImageCreateInfo srcDesc = image->info();
     DxvkImageCreateInfo dstDesc = image->info();
+    const bool exportPng = hasPngExtension(filename);
 
     // NOTE: Some image formats arent well supported by DDS tools, like B8G8R8A8...  So we might want to blit rather than copy for such formats.
 
@@ -126,6 +141,10 @@ namespace dxvk {
     }
 
     dstDesc.format = normalizeTargetFormat(dstDesc.format);
+    if (exportPng) {
+      dstDesc.format = VK_FORMAT_R8G8B8A8_UNORM;
+      dstDesc.mipLevels = 1;
+    }
 
     const bool useBlit = srcDesc.format != dstDesc.format;
 
@@ -252,7 +271,7 @@ namespace dxvk {
     ctx->signal(m_readbackSignal, syncValue);
 
     // Spawn a thread so we dont sync with the GPU here (GPU runs async with CPU)
-    Future<void> result = getExporterThread()->Schedule([this, device = ctx->getDevice(), pBlitDests, pBlitTemps, syncValue, filename, outFormat, dstDesc, swizzle] {
+    Future<void> result = getExporterThread()->Schedule([this, device = ctx->getDevice(), pBlitDests, pBlitTemps, syncValue, filename, outFormat, dstDesc, swizzle, exportPng] {
       ScopedCpuProfileZoneN("Export Image Finalize");
       // Stall until the GPU has completed its copy to system memory (GPU->CPU)
       this->m_readbackSignal->wait(syncValue);
@@ -298,8 +317,20 @@ namespace dxvk {
                             subresource.aspectMask);
       }
 
-      // Write our file, converting its format first if nessecary
-      const bool success = gli::save(exportTex, filename);
+      bool success = false;
+      if (exportPng) {
+        const gli::extent2d pngExtent = exportTex.extent(0);
+        const auto* pngPixels = reinterpret_cast<const std::uint8_t*>(
+          exportTex.data(exportTex.base_layer(), exportTex.base_face(), 0));
+        success = dxvk::fork_hooks::writeRgba8PngFile(
+          filename,
+          static_cast<std::uint32_t>(pngExtent.x),
+          static_cast<std::uint32_t>(pngExtent.y),
+          pngPixels);
+      } else {
+        // Write our file, converting its format first if nessecary
+        success = gli::save(exportTex, filename);
+      }
       if (!success) {
         Logger::err(str::format("RTX: Failed to write texture \"", filename, "\""));
       }
