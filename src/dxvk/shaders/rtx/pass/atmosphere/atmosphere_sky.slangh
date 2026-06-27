@@ -924,9 +924,21 @@ vec3 evalSkyRadiance(
     // and a sampler with mipmapLodMax > 0 (the shared sky-view sampler sets it).
     const float kBleedMip = 4.0f;
     vec4 bleedCloud = AtmosphereCloudSecondaryLut.SampleLevel(AtmosphereSkyViewSampler, bleedUv, kBleedMip);
+    // Fade the bleed out toward the zenith (fork — 2026-06-27, experimental).
+    // cloudDomeDirToUv's azimuth (atan2(x,z)) is singular as the ray approaches
+    // vertical — all azimuths converge to the pole, so adjacent near-zenith
+    // pixels read very different LUT columns. Sampled at a coarse mip this is an
+    // azimuthal pinwheel/funnel that the bleed strength amplifies (the "weird
+    // artifact at the top of the sky" when Sky Cloud Bleed is turned up). The
+    // secondary LUT only has 6 mips (max 8x4), so it can't be blurred
+    // azimuth-flat at the pole; instead fade the contribution over the top of
+    // the dome, where the slab is thinnest (≈4 km edge-on, the least cloud color
+    // to bleed) and the singularity lives. viewDirYUp.y = sin(elevation): the
+    // band 0.95..0.9995 is ≈72°..88° elevation.
+    const float zenithFade = 1.0f - smoothstep(0.95f, 0.9995f, viewDirYUp.y);
     // bleedCloud.rgb is premultiplied (now wide-blurred) cloud radiance; the blur
     // makes it non-zero in gaps near clouds, so the sky picks up their color.
-    radiance += args.cloudSkyBleedStrength * bleedCloud.rgb;
+    radiance += (args.cloudSkyBleedStrength * zenithFade) * bleedCloud.rgb;
   }
 
   // Temporal cloud smoothing (fork). Per-frame FAST-noise jitter on the cloud
