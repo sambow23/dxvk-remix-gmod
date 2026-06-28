@@ -1,10 +1,10 @@
 #pragma once
 
 // rtx_fork_weather.h — fork-owned weather preset declarations.
-// Defines 588 RTX_OPTIONs (12 presets x 49 fields) under the
+// Defines 624 RTX_OPTIONs (12 presets x 52 fields) under the
 // rtx.weather.preset.<presetName> namespace.
 //
-// Field bucket breakdown: 16 cloud + 3 atmosphere + 3 sky/moon mood + 27 volumetric.
+// Field bucket breakdown: 16 cloud + 5 atmosphere + 4 sky/moon mood + 27 volumetric.
 //
 // Usage: invoke DECLARE_ALL_WEATHER_PRESETS() inside the RtxOptions struct body
 // (see rtx_options.h). The macro expands all 12 preset declarations inline.
@@ -36,8 +36,8 @@ namespace dxvk { namespace fork_weather {
 } }
 
 // ---------------------------------------------------------------------------
-// Field table X-macro - THE single source of truth for the 49 weather fields
-// (16 cloud + 3 atmosphere + 3 sky/moon mood + 27 volumetric). Every consumer
+// Field table X-macro - THE single source of truth for the 52 weather fields
+// (16 cloud + 5 atmosphere + 4 sky/moon mood + 27 volumetric). Every consumer
 // (WeatherSnapshot members, the per-field descriptor table, the generated
 // ImGui panel, and the blend/read/write loops) is driven from here, so a field
 // added here propagates everywhere with no second site to keep in sync.
@@ -74,43 +74,46 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f,  WK_Scalar, "Clouds", "Lighting", "Bottom Darkening",  0.0f, 1.0f, 0.01f,  "%.2f") \
   X(float, cloudAerialFadePerKm,     0.15f, WK_Scalar, "Clouds", "Distance", "Horizon Fade",      0.0f, 1.0f, 0.005f, "%.3f") \
   X(float, cloudAerialHazePerKm,     0.05f, WK_Scalar, "Clouds", "Distance", "Distance Haze",     0.0f, 1.0f, 0.005f, "%.3f") \
-  /* Atmosphere (3) */ \
-  X(float,   airDensity,                         1.0f,                            WK_Scalar,     "Atmosphere",     "Atmosphere",       "Air Density",                0.0f,    5.0f,    0.05f,   "%.2f") \
-  X(float,   aerosolDensity,                     1.0f,                            WK_Scalar,     "Atmosphere",     "Atmosphere",       "Aerosol Density",            0.0f,    5.0f,    0.05f,   "%.2f") \
+  /* Atmosphere (5) */ \
+  X(float,   airDensity,                         1.0f,                            WK_Scalar,     "Atmosphere",     "Atmosphere",       "Air",                        0.0f,    5.0f,    0.05f,   "%.2f") \
+  X(float,   aerosolDensity,                     1.0f,                            WK_Scalar,     "Atmosphere",     "Atmosphere",       "Dust",                       0.0f,    5.0f,    0.05f,   "%.2f") \
   X(Vector3, sunIlluminance,                     Vector3(20.0f, 20.0f, 20.0f),    WK_Color,      "Atmosphere",     "Atmosphere",       "Sun Illuminance",            0.0f,    100.0f,  0.5f,    "%.1f") \
-  /* Sky/moon mood (3) */ \
+  X(Vector3, rayleighScattering,                 Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f), WK_Color, "Atmosphere",     "Atmosphere",       "Air Color (Base)",           0.0f,    0.05f,   0.0005f, "%.4f") \
+  X(float,   skyIndirectRadianceScale,           1.0f,                            WK_Scalar,     "Atmosphere",     "Atmosphere",       "Sky Indirect Scale",         0.0f,    20.0f,   0.01f,   "%.2f") \
+  /* Sky/moon mood (4) */ \
   X(float,   nightSkyBrightness,                 0.008f,                          WK_Scalar,     "Sky & Moon",     "Sky & Moon",       "Night Sky Brightness",       0.0f,    1.0f,    0.001f,  "%.3f") \
-  X(float,   moonNeeStrength,                    1.0f,                            WK_Scalar,     "Sky & Moon",     "Sky & Moon",       "Moon NEE Strength",          0.0f,    10.0f,   0.05f,   "%.2f") \
-  X(float,   moonAtmosphericCouplingStrength,    1.0f,                            WK_Scalar,     "Sky & Moon",     "Sky & Moon",       "Moon Atm Coupling",          0.0f,    10.0f,   0.05f,   "%.2f") \
+  X(Vector3, nightSkyColor,                      Vector3(0.15f, 0.2f, 0.4f),      WK_Color,      "Sky & Moon",     "Sky & Moon",       "Night Sky Color",            0.0f,    1.0f,    0.005f,  "%.3f") \
+  X(float,   moonNeeStrength,                    1.0f,                            WK_Scalar,     "Sky & Moon",     "Sky & Moon",       "NEE Strength",               0.0f,    10.0f,   0.05f,   "%.2f") \
+  X(float,   moonAtmosphericCouplingStrength,    1.0f,                            WK_Scalar,     "Sky & Moon",     "Sky & Moon",       "Atmospheric Coupling",       0.0f,    10.0f,   0.05f,   "%.2f") \
   /* Volumetric (27); volumetricAnisotropy avoids clash with the old cloudAnisotropy */ \
   X(Vector3, transmittanceColor,                 Vector3(0.999f, 0.999f, 0.999f), WK_Color,      "Volumetric Fog", "Medium",           "Transmittance Color",        0.0f,    1.0f,    0.005f,  "%.3f") \
-  X(float,   transmittanceMeasurementDistanceMeters, 200.0f,                      WK_Extinction, "Volumetric Fog", "Medium",           "Transmittance Distance (m)", 1.0f,    2000.0f, 5.0f,    "%.0f") \
+  X(float,   transmittanceMeasurementDistanceMeters, 200.0f,                      WK_Extinction, "Volumetric Fog", "Medium",           "Transmittance Measurement Distance", 1.0f, 2000.0f, 5.0f,  "%.0f") \
   X(Vector3, singleScatteringAlbedo,             Vector3(0.999f, 0.999f, 0.999f), WK_Color,      "Volumetric Fog", "Medium",           "Single Scattering Albedo",   0.0f,    1.0f,    0.005f,  "%.3f") \
   /* Volumetric appearance (fork - full set) */ \
-  X(float, fogSunVisibilityGain, 1.0f, WK_Scalar, "Volumetric Fog", "Medium", "Sun Visibility Gain", 0.0f, 4.0f, 0.05f, "%.2f") \
+  X(float, fogSunVisibilityGain, 1.0f, WK_Scalar, "Volumetric Fog", "Medium", "Fog Sun Visibility Gain", 0.0f, 4.0f, 0.05f, "%.2f") \
   X(float, volumetricConsumerGain, 0.008f, WK_Scalar, "Volumetric Fog", "Medium", "Fog Brightness Gain", 0.0f, 0.05f, 0.0005f, "%.4f") \
   X(bool, enableHeterogeneousFog, false, WK_Step, "Volumetric Fog", "Heterogeneous", "Enable Heterogeneous Fog", 0.0f, 1.0f, 1.0f, "%.0f") \
-  X(float, noiseFieldDensityScale, 1.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Density", 0.0f, 5.0f, 0.05f, "%.2f") \
-  X(float, noiseFieldDensityExponent, 2.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Contrast", 0.1f, 8.0f, 0.05f, "%.2f") \
-  X(float, noiseFieldInitialFrequencyPerMeter, 8.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Frequency", 0.1f, 64.0f, 0.1f, "%.2f") \
-  X(float, noiseFieldLacunarity, 2.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Lacunarity", 0.1f, 4.0f, 0.05f, "%.2f") \
-  X(float, noiseFieldGain, 0.5f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Gain", 0.0f, 1.0f, 0.01f, "%.2f") \
-  X(float, noiseFieldTimeScale, 0.5f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Time Scale", 0.0f, 4.0f, 0.05f, "%.2f") \
-  X(float, noiseFieldSubStepSizeMeters, 10.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Step Size (m)", 0.5f, 50.0f, 0.5f, "%.1f") \
-  X(float, froxelMaxDistanceMeters, 20.0f, WK_Scalar, "Volumetric Fog", "Reach", "Fog Max Distance (m)", 1.0f, 200.0f, 1.0f, "%.0f") \
-  X(bool, enableFogRemap, false, WK_Step, "Volumetric Fog", "Fog Remap", "Enable Fog Remap", 0.0f, 1.0f, 1.0f, "%.0f") \
-  X(bool, enableFogColorRemap, false, WK_Step, "Volumetric Fog", "Fog Remap", "Remap Fog Color", 0.0f, 1.0f, 1.0f, "%.0f") \
-  X(bool, enableFogMaxDistanceRemap, true, WK_Step, "Volumetric Fog", "Fog Remap", "Remap Max Distance", 0.0f, 1.0f, 1.0f, "%.0f") \
-  X(float, fogRemapMaxDistanceMinMeters, 1.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Remap Dist Min (m)", 0.0f, 200.0f, 0.5f, "%.1f") \
-  X(float, fogRemapMaxDistanceMaxMeters, 40.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Remap Dist Max (m)", 0.0f, 500.0f, 1.0f, "%.1f") \
-  X(float, fogRemapTransmittanceMeasurementDistanceMinMeters, 20.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Remap Transmit Min (m)", 1.0f, 500.0f, 1.0f, "%.1f") \
-  X(float, fogRemapTransmittanceMeasurementDistanceMaxMeters, 100.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Remap Transmit Max (m)", 1.0f, 2000.0f, 5.0f, "%.0f") \
-  X(float, fogRemapColorMultiscatteringScale, 0.1f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Remap Multiscatter", 0.0f, 2.0f, 0.01f, "%.2f") \
-  X(bool,  enableTranslucentShadows, false, WK_Step,   "Volumetric Fog", "Medium",        "Translucent Shadows", 0.0f, 1.0f,  1.0f,  "%.0f") \
-  X(float, atmosphereSunFogScale,    1.0f,  WK_Scalar, "Volumetric Fog", "Medium",        "Sun Fog Scale",       0.0f, 50.0f, 0.05f, "%.2f") \
+  X(float, noiseFieldDensityScale, 1.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Density Scale", 0.0f, 5.0f, 0.05f, "%.2f") \
+  X(float, noiseFieldDensityExponent, 2.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Density Exponent", 0.1f, 8.0f, 0.05f, "%.2f") \
+  X(float, noiseFieldInitialFrequencyPerMeter, 8.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Initial Frequency", 0.1f, 64.0f, 0.1f, "%.2f") \
+  X(float, noiseFieldLacunarity, 2.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Lacunarity", 0.1f, 4.0f, 0.05f, "%.2f") \
+  X(float, noiseFieldGain, 0.5f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Gain", 0.0f, 1.0f, 0.01f, "%.2f") \
+  X(float, noiseFieldTimeScale, 0.5f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Time Scale", 0.0f, 4.0f, 0.05f, "%.2f") \
+  X(float, noiseFieldSubStepSizeMeters, 10.0f, WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Substep Size", 0.5f, 50.0f, 0.5f, "%.1f") \
+  X(float, froxelMaxDistanceMeters, 20.0f, WK_Scalar, "Volumetric Fog", "Reach", "Froxel Max Distance", 1.0f, 200.0f, 1.0f, "%.0f") \
+  X(bool, enableFogRemap, false, WK_Step, "Volumetric Fog", "Fog Remap", "Enable Legacy Fog Remapping", 0.0f, 1.0f, 1.0f, "%.0f") \
+  X(bool, enableFogColorRemap, false, WK_Step, "Volumetric Fog", "Fog Remap", "Enable Fog Color Remapping", 0.0f, 1.0f, 1.0f, "%.0f") \
+  X(bool, enableFogMaxDistanceRemap, true, WK_Step, "Volumetric Fog", "Fog Remap", "Enable Fog Max Distance Remapping", 0.0f, 1.0f, 1.0f, "%.0f") \
+  X(float, fogRemapMaxDistanceMinMeters, 1.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Legacy Max Distance Min", 0.0f, 200.0f, 0.5f, "%.1f") \
+  X(float, fogRemapMaxDistanceMaxMeters, 40.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Legacy Max Distance Max", 0.0f, 500.0f, 1.0f, "%.1f") \
+  X(float, fogRemapTransmittanceMeasurementDistanceMinMeters, 20.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Remapped Transmittance Measurement Distance Min", 1.0f, 500.0f, 1.0f, "%.1f") \
+  X(float, fogRemapTransmittanceMeasurementDistanceMaxMeters, 100.0f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Remapped Transmittance Measurement Distance Max", 1.0f, 2000.0f, 5.0f, "%.0f") \
+  X(float, fogRemapColorMultiscatteringScale, 0.1f, WK_Scalar, "Volumetric Fog", "Fog Remap", "Color Multiscattering Scale", 0.0f, 2.0f, 0.01f, "%.2f") \
+  X(bool,  enableTranslucentShadows, false, WK_Step,   "Volumetric Fog", "Medium",        "Enable Translucent Shadows", 0.0f, 1.0f,  1.0f,  "%.0f") \
+  X(float, atmosphereSunFogScale,    1.0f,  WK_Scalar, "Volumetric Fog", "Medium",        "Atmosphere Sun Fog Scale", 0.0f, 50.0f, 0.05f, "%.2f") \
   X(float, depthOffset,              0.5f,  WK_Scalar, "Volumetric Fog", "Medium",        "Depth Offset",        0.0f, 1.0f,  0.01f, "%.2f") \
-  X(float, noiseFieldOctaves,        2.0f,  WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Octaves",       1.0f, 8.0f,  1.0f,  "%.0f") \
-  X(float,   volumetricAnisotropy,               0.0f,                            WK_Scalar,     "Volumetric Fog", "Medium",           "Volumetric Anisotropy",     -1.0f,    1.0f,    0.01f,   "%.2f")
+  X(float, noiseFieldOctaves,        2.0f,  WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Number of Octaves", 1.0f, 8.0f,  1.0f,  "%.0f") \
+  X(float,   volumetricAnisotropy,               0.0f,                            WK_Scalar,     "Volumetric Fog", "Medium",           "Anisotropy",                -1.0f,    1.0f,    0.01f,   "%.2f")
 
 // ---------------------------------------------------------------------------
 // Per-field RTX_OPTION generator. Takes the preset name plus the X-macro's
@@ -146,17 +149,10 @@ namespace dxvk { namespace fork_weather {
 #define WEATHER_PRESET_BIND_smoggy(type, name, def)        WEATHER_PRESET_RTX_OPTION_FOR(smoggy,        type, name, def);
 
 // ---------------------------------------------------------------------------
-// Per-preset value X-macros — one per archetype, 49 fields each, in the same
+// Per-preset value X-macros — one per archetype, 52 fields each, in the same
 // order as WEATHER_PRESET_FIELD_LIST. Fields not explicitly tuned use the
-// neutral default from WEATHER_PRESET_FIELD_LIST.
-// Field order: cloudDensity, cloudCoverageMean, cloudCoverageSpread,
-//   cloudCoverageNoiseScale, cloudTypeMean, cloudTypeSpread,
-//   cloudTypeNoiseScale, cloudAnvilBias, cloudColor, cloudWindSpeed,
-//   cloudWindDirection, cloudShadowStrength, cloudThickness, airDensity,
-//   aerosolDensity, sunIlluminance, nightSkyBrightness, moonNeeStrength,
-//   moonAtmosphericCouplingStrength, transmittanceColor,
-//   transmittanceMeasurementDistanceMeters, singleScatteringAlbedo,
-//   volumetricAnisotropy.
+// neutral default from WEATHER_PRESET_FIELD_LIST, which is also the canonical
+// field order — see that macro above rather than duplicating the list here.
 // ---------------------------------------------------------------------------
 
 // clear — sunny, crisp, low haze
@@ -177,6 +173,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                0.95f)                                         \
   X(float,   aerosolDensity,                            0.7f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(20.0f, 20.0f, 20.0f))                  \
@@ -229,6 +228,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.0f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(19.0f, 19.0f, 19.0f))                  \
@@ -281,6 +283,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.1f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(15.0f, 15.0f, 15.0f))                  \
@@ -333,6 +338,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.1f)                                          \
   X(float,   aerosolDensity,                            1.5f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(17.0f, 16.0f, 14.0f))                  \
@@ -385,6 +393,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.2f)                                          \
   X(float,   aerosolDensity,                            2.0f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(10.0f, 10.0f, 10.0f))                  \
@@ -437,6 +448,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.1f)                                          \
   X(float,   aerosolDensity,                            1.5f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(11.0f, 12.0f, 14.0f))                  \
@@ -489,6 +503,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.4f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(7.0f, 8.0f, 10.0f))                    \
@@ -543,6 +560,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.3f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(4.0f, 4.0f, 6.0f))                     \
@@ -595,6 +615,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.3f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(12.0f, 13.0f, 14.0f))                  \
@@ -647,6 +670,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.6f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(6.0f, 7.0f, 8.0f))                     \
@@ -699,6 +725,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            2.5f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(10.0f, 8.0f, 5.0f))                    \
@@ -751,6 +780,9 @@ namespace dxvk { namespace fork_weather {
   X(float, cloudBottomDarkening,     1.0f) \
   X(float, cloudAerialFadePerKm,     0.15f) \
   X(float, cloudAerialHazePerKm,     0.05f) \
+  X(Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f)) \
+  X(Vector3, nightSkyColor,      Vector3(0.15f, 0.2f, 0.4f)) \
+  X(float, skyIndirectRadianceScale, 1.0f) \
   X(float,   airDensity,                                1.1f)                                          \
   X(float,   aerosolDensity,                            1.8f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(12.0f, 10.0f, 8.0f))                   \
@@ -787,15 +819,15 @@ namespace dxvk { namespace fork_weather {
 
 // ---------------------------------------------------------------------------
 // Single-preset macro. Walks WEATHER_PRESET_VALUES_<N> via the binder for
-// preset N, emitting all 42 RTX_OPTION declarations with archetype-tuned
+// preset N, emitting all 52 RTX_OPTION declarations with archetype-tuned
 // defaults. Must be invoked inside a class body (RTX_OPTION declares inline
 // static members).
 // ---------------------------------------------------------------------------
 #define DECLARE_WEATHER_PRESET(N) WEATHER_PRESET_VALUES_##N(WEATHER_PRESET_BIND_##N)
 
 // ---------------------------------------------------------------------------
-// Umbrella macro. Invoke inside RtxOptions struct body to declare all 504
-// RTX_OPTIONs (12 presets x 42 fields).
+// Umbrella macro. Invoke inside RtxOptions struct body to declare all 624
+// RTX_OPTIONs (12 presets x 52 fields).
 // ---------------------------------------------------------------------------
 #define DECLARE_ALL_WEATHER_PRESETS()   \
   DECLARE_WEATHER_PRESET(clear)         \
@@ -822,7 +854,7 @@ namespace dxvk { namespace fork_weather {
 namespace dxvk { namespace fork_weather {
 
   // -------------------------------------------------------------------------
-  // WeatherSnapshot — a plain-value copy of all 49 renderer weather params.
+  // WeatherSnapshot — a plain-value copy of all 52 renderer weather params.
   // Members are auto-generated from the single-source-of-truth X-macro so
   // that any field addition automatically propagates here.
   // -------------------------------------------------------------------------
@@ -870,10 +902,11 @@ namespace dxvk { namespace fork_weather {
     std::string m_previousPresetName;
     std::string m_targetPresetName;
 
-    // Blend timeline.
-    float m_blendStartTimeSec  = 0.0f;
-    float m_blendDurationSec   = 1.0f;
-    float m_currentTimeSec     = 0.0f;
+    // Blend timeline. Wall-clock accumulators are double so sub-frame precision
+    // survives multi-hour sessions (a 32-bit float erodes to ~4 ms after ~9 h).
+    double m_blendStartTimeSec = 0.0;
+    float  m_blendDurationSec  = 1.0f;
+    double m_currentTimeSec    = 0.0;
 
     bool m_paused = false;
 
@@ -889,7 +922,7 @@ namespace dxvk { namespace fork_weather {
     // m_driftPhaseSeconds is monotonically advanced each frame by
     // dt * m_driftSpeedSmoothed. Smoothed values are one-pole filtered toward
     // the GameStateStore-supplied raw values with tau = 1.0s.
-    float m_driftPhaseSeconds      = 0.0f;
+    double m_driftPhaseSeconds     = 0.0;
     float m_driftSpeedSmoothed     = 1.0f;
     float m_driftIntensitySmoothed = 1.0f;
 

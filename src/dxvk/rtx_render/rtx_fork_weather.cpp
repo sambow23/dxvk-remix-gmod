@@ -1,7 +1,7 @@
 // src/dxvk/rtx_render/rtx_fork_weather.cpp
 //
 // Fork-owned file. Full implementation of WeatherBlender: the per-frame lerp
-// pipeline that blends 49 weather params (cloud, atmosphere, sky/moon mood,
+// pipeline that blends 52 weather params (cloud, atmosphere, sky/moon mood,
 // volumetric fog) between named presets over a plugin-specified duration.
 //
 // Reads:
@@ -138,12 +138,13 @@ namespace dxvk { namespace fork_weather { namespace {
 
   constexpr float kDriftSlowPeriodSec = 300.0f;
 
-  float driftNoise1D(float phaseSeconds, float periodSeconds, float fieldSeed) {
-    constexpr float kTwoPi = 6.28318530718f;
-    const float p = phaseSeconds / periodSeconds;
-    return 0.50f * std::sin(kTwoPi * (p / 1.000f) + fieldSeed * 1.000f)
-         + 0.30f * std::sin(kTwoPi * (p / 1.527f) + fieldSeed * 1.731f)
-         + 0.20f * std::sin(kTwoPi * (p / 0.701f) + fieldSeed * 2.331f);
+  float driftNoise1D(double phaseSeconds, float periodSeconds, float fieldSeed) {
+    constexpr double kTwoPi = 6.28318530718;
+    const double p = phaseSeconds / static_cast<double>(periodSeconds);
+    return static_cast<float>(
+        0.50 * std::sin(kTwoPi * (p / 1.000) + fieldSeed * 1.000)
+      + 0.30 * std::sin(kTwoPi * (p / 1.527) + fieldSeed * 1.731)
+      + 0.20 * std::sin(kTwoPi * (p / 0.701) + fieldSeed * 2.331));
   }
 
   // Per-field slow drift offset, normalized to ~[-relativeAmp, +relativeAmp].
@@ -151,7 +152,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // layer's shortest inner period is ~210 s (3.5 min), so there is no short-cycle
   // tell. fieldIndex still seeds the phase so the few remaining fields stay
   // decorrelated from each other.
-  float driftOffsetForField(int fieldIndex, float phaseSeconds, float relativeAmp) {
+  float driftOffsetForField(int fieldIndex, double phaseSeconds, float relativeAmp) {
     constexpr float kFieldSeedStep = 0.6180f;  // golden-ratio-ish for low correlation
     const float seedSlow = static_cast<float>(fieldIndex) * kFieldSeedStep + 100.0f;
     const float nSlow = driftNoise1D(phaseSeconds, kDriftSlowPeriodSec, seedSlow);
@@ -220,7 +221,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // offsets. intensity scales the entire modulation; intensity == 0 short-
   // circuits and leaves interp untouched.
   // ---------------------------------------------------------------------------
-  void applyDriftToSnapshot(WeatherSnapshot& interp, float phaseSeconds, float intensity) {
+  void applyDriftToSnapshot(WeatherSnapshot& interp, double phaseSeconds, float intensity) {
     if (intensity <= 0.0f) {
       return;
     }
@@ -300,9 +301,13 @@ namespace dxvk { namespace fork_weather { namespace {
   }
   bool weatherDrag(const char* l, RtxOption<Vector3>* o, float st, float mn, float mx, const char* fmt, ImGuiSliderFlags fl, WeatherFieldKind kind) {
     if (kind == WK_Color) {
-      // HDR/float picker for values that exceed 1 (e.g. sun illuminance); plain
-      // 0-1 swatch otherwise (matches the main panel's cloud/sky color pickers).
-      const ImGuiColorEditFlags cflags = (mx > 1.5f) ? (ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR) : 0;
+      // HDR/float picker for radiometric values that exceed 1 (e.g. sun
+      // illuminance); float-entry picker for sub-unit coefficient colors like the
+      // sky scattering tint (~0.005-0.05, where an 8-bit 0-255 swatch is useless);
+      // plain 0-1 swatch for normal colors (cloud / sky / night tints).
+      ImGuiColorEditFlags cflags = 0;
+      if (mx > 1.5f)      cflags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR;
+      else if (mx < 1.0f) cflags = ImGuiColorEditFlags_Float;
       return RemixGui::ColorEdit3(l, o, cflags);
     }
     return RemixGui::DragFloat3(l, o, st, mn, mx, fmt, fl);
@@ -517,7 +522,10 @@ namespace dxvk { namespace fork_weather { namespace {
     if (std::strcmp(name, "airDensity") == 0) return RtxOptions::airDensityObject().getDescription();
     if (std::strcmp(name, "aerosolDensity") == 0) return RtxOptions::aerosolDensityObject().getDescription();
     if (std::strcmp(name, "sunIlluminance") == 0) return RtxOptions::sunIlluminanceObject().getDescription();
+    if (std::strcmp(name, "rayleighScattering") == 0) return RtxOptions::rayleighScatteringObject().getDescription();
+    if (std::strcmp(name, "skyIndirectRadianceScale") == 0) return RtxOptions::skyIndirectRadianceScaleObject().getDescription();
     if (std::strcmp(name, "nightSkyBrightness") == 0) return RtxOptions::nightSkyBrightnessObject().getDescription();
+    if (std::strcmp(name, "nightSkyColor") == 0) return RtxOptions::nightSkyColorObject().getDescription();
     if (std::strcmp(name, "moonNeeStrength") == 0) return RtxOptions::moonNeeStrengthObject().getDescription();
     if (std::strcmp(name, "moonAtmosphericCouplingStrength") == 0) return RtxOptions::moonAtmosphericCouplingStrengthObject().getDescription();
     if (std::strcmp(name, "transmittanceColor") == 0) return RtxGlobalVolumetrics::transmittanceColorObject().getDescription();
@@ -560,6 +568,85 @@ namespace dxvk { namespace fork_weather { namespace {
     return false;
   }
 
+  // ---------------------------------------------------------------------------
+  // Derived "Fog Density" / "Fog Tint" controls (fork).
+  //
+  // The raw volumetric model is a transmittance pair (colour + measurement
+  // distance) where THICKER fog means a SHORTER distance, and the fog's apparent
+  // colour comes from single-scattering albedo rather than the transmittance
+  // colour. Both fight intuition. These two derived widgets sit on top of the raw
+  // sliders and present the familiar mental model:
+  //   Fog Density  0..1   -> transmittanceMeasurementDistanceMeters, exp-mapped
+  //                          so shorter distance = denser (0 = clear, 1 = whiteout).
+  //   Fog Tint     colour -> singleScatteringAlbedo (the colour fog scatters).
+  // The raw sliders remain below for power users; both views read/write the same
+  // option objects via get()/setDeferred(), so they stay in lockstep.
+  // ---------------------------------------------------------------------------
+  constexpr float kFogVisMinM = 10.0f;    // maps to density 1.0 (whiteout)
+  constexpr float kFogVisMaxM = 2000.0f;  // maps to density 0.0 (clear)
+
+  float fogDistanceToDensity(float distM) {
+    const float d = std::min(std::max(distM, kFogVisMinM), kFogVisMaxM);
+    return saturate(std::log(kFogVisMaxM / d) / std::log(kFogVisMaxM / kFogVisMinM));
+  }
+  float fogDensityToDistance(float density) {
+    return kFogVisMaxM * std::pow(kFogVisMinM / kFogVisMaxM, saturate(density));
+  }
+
+  // Per-preset RtxOption pointer accessors for the two underlying fog options the
+  // derived widgets drive. Same option objects the raw sliders bind to.
+#define WEATHER_PRESET_OBJPTR(FIELD, TYPE, FN)                                   \
+  RtxOption<TYPE>* FN(int p) {                                                   \
+    switch (p) {                                                                 \
+      case WP_clear:        return &RtxOptions::clear_##FIELD##Object();         \
+      case WP_partlyCloudy: return &RtxOptions::partlyCloudy_##FIELD##Object();  \
+      case WP_overcast:     return &RtxOptions::overcast_##FIELD##Object();      \
+      case WP_hazy:         return &RtxOptions::hazy_##FIELD##Object();          \
+      case WP_foggy:        return &RtxOptions::foggy_##FIELD##Object();         \
+      case WP_drizzle:      return &RtxOptions::drizzle_##FIELD##Object();       \
+      case WP_rainstorm:    return &RtxOptions::rainstorm_##FIELD##Object();     \
+      case WP_thunderstorm: return &RtxOptions::thunderstorm_##FIELD##Object();  \
+      case WP_snow:         return &RtxOptions::snow_##FIELD##Object();          \
+      case WP_blizzard:     return &RtxOptions::blizzard_##FIELD##Object();      \
+      case WP_sandstorm:    return &RtxOptions::sandstorm_##FIELD##Object();     \
+      case WP_smoggy:       return &RtxOptions::smoggy_##FIELD##Object();        \
+      default:              return nullptr;                                      \
+    }                                                                            \
+  }
+  WEATHER_PRESET_OBJPTR(transmittanceMeasurementDistanceMeters, float,   presetFogDistanceObj)
+  WEATHER_PRESET_OBJPTR(singleScatteringAlbedo,                 Vector3, presetFogTintObj)
+#undef WEATHER_PRESET_OBJPTR
+
+  // Renders the derived Fog Density + Fog Tint widgets for one preset, honoring
+  // the panel's name filter. Returns true if it rendered anything.
+  bool renderDerivedFogControls(int presetIdx, const char* filter) {
+    RtxOption<float>*   distObj = presetFogDistanceObj(presetIdx);
+    RtxOption<Vector3>* tintObj = presetFogTintObj(presetIdx);
+    if (!distObj || !tintObj) {
+      return false;
+    }
+
+    bool rendered = false;
+    if (matchesFilter("Fog Density", filter)) {
+      float density = fogDistanceToDensity(distObj->get());
+      if (ImGui::SliderFloat("Fog Density", &density, 0.0f, 1.0f, "%.2f")) {
+        distObj->setDeferred(fogDensityToDistance(density));
+      }
+      RemixGui::SetTooltipToLastWidgetOnHover(
+        "Intuitive thickness dial. 0 = clear, 1 = whiteout (~10 m visibility). "
+        "Drives Transmittance Distance below (shorter distance = denser fog).");
+      rendered = true;
+    }
+    if (matchesFilter("Fog Tint", filter)) {
+      RemixGui::ColorEdit3("Fog Tint", tintObj);
+      RemixGui::SetTooltipToLastWidgetOnHover(
+        "The colour the fog scatters (single-scattering albedo). This, not "
+        "Transmittance Color, is what tints the fog you actually see.");
+      rendered = true;
+    }
+    return rendered;
+  }
+
   // Renders the per-preset editor in the main panel's design language: nested
   // TreeNodes (group -> section), default-open, ColorEdit swatches for colors.
   // Generated from the field table, so new fields appear automatically. With a
@@ -592,6 +679,13 @@ namespace dxvk { namespace fork_weather { namespace {
 
         ImGui::SetNextItemOpen(true, filtering ? ImGuiCond_Always : ImGuiCond_Once);
         if (!ImGui::TreeNode(section)) continue;
+        // Friendly derived controls ride at the top of Volumetric Fog -> Medium,
+        // above the raw transmittance sliders they remap.
+        if (std::strcmp(group, "Volumetric Fog") == 0 && std::strcmp(section, "Medium") == 0) {
+          if (renderDerivedFogControls(presetIdx, filter)) {
+            ImGui::Separator();
+          }
+        }
         for (int fi = 0; fi < kFieldCount; ++fi) {
           const WeatherFieldDesc& d = kFieldDescs[fi];
           if (std::strcmp(d.group, group) != 0 || std::strcmp(d.section, section) != 0) continue;
@@ -620,7 +714,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // ---------------------------------------------------------------------------
   WeatherSnapshot snapshotRenderer() {
     WeatherSnapshot s;
-    // Cloud (13)
+    // Cloud (16)
     s.cloudDensity               = RtxOptions::cloudDensity();
     s.cloudCoverageMean          = RtxOptions::cloudCoverageMean();
     s.cloudCoverageSpread        = RtxOptions::cloudCoverageSpread();
@@ -637,12 +731,15 @@ namespace dxvk { namespace fork_weather { namespace {
     s.cloudBottomDarkening     = RtxOptions::cloudBottomDarkening();
     s.cloudAerialFadePerKm     = RtxOptions::cloudAerialFadePerKm();
     s.cloudAerialHazePerKm     = RtxOptions::cloudAerialHazePerKm();
-    // Atmosphere (3)
+    // Atmosphere (5)
     s.airDensity                 = RtxOptions::airDensity();
     s.aerosolDensity             = RtxOptions::aerosolDensity();
     s.sunIlluminance             = RtxOptions::sunIlluminance();
-    // Sky/moon mood (3)
+    s.rayleighScattering         = RtxOptions::rayleighScattering();
+    s.skyIndirectRadianceScale   = RtxOptions::skyIndirectRadianceScale();
+    // Sky/moon mood (4)
     s.nightSkyBrightness         = RtxOptions::nightSkyBrightness();
+    s.nightSkyColor              = RtxOptions::nightSkyColor();
     s.moonNeeStrength            = RtxOptions::moonNeeStrength();
     s.moonAtmosphericCouplingStrength = RtxOptions::moonAtmosphericCouplingStrength();
     // Volumetric (27) — class is RtxGlobalVolumetrics
@@ -691,6 +788,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // are gated on it (recomputed each frame so editor tuning takes effect).
   bool weatherNeq(float a, float b) { return a != b; }
   bool weatherNeq(bool a, bool b)   { return a != b; }
+  bool weatherNeq(const Vector3& a, const Vector3& b) { return a.x != b.x || a.y != b.y || a.z != b.z; }
 #define WVARIES(name)                                          \
   bool weatherVaries_##name() {                                \
     const auto v0 = RtxOptions::clear_##name();                \
@@ -733,9 +831,14 @@ namespace dxvk { namespace fork_weather { namespace {
   WVARIES(cloudBottomDarkening)
   WVARIES(cloudAerialFadePerKm)
   WVARIES(cloudAerialHazePerKm)
+  WVARIES(moonNeeStrength)
+  WVARIES(moonAtmosphericCouplingStrength)
+  WVARIES(rayleighScattering)
+  WVARIES(nightSkyColor)
+  WVARIES(skyIndirectRadianceScale)
 #undef WVARIES
   void writeBlendedToDerivedLayer(const WeatherSnapshot& interp) {
-    // Cloud (13)
+    // Cloud (16)
     RtxOptions::cloudDensityObject().setImmediately(interp.cloudDensity);
     RtxOptions::cloudCoverageMeanObject().setImmediately(interp.cloudCoverageMean);
     RtxOptions::cloudCoverageSpreadObject().setImmediately(interp.cloudCoverageSpread);
@@ -752,14 +855,22 @@ namespace dxvk { namespace fork_weather { namespace {
     if (weatherVaries_cloudBottomDarkening())     RtxOptions::cloudBottomDarkeningObject().setImmediately(interp.cloudBottomDarkening);
     if (weatherVaries_cloudAerialFadePerKm())     RtxOptions::cloudAerialFadePerKmObject().setImmediately(interp.cloudAerialFadePerKm);
     if (weatherVaries_cloudAerialHazePerKm())     RtxOptions::cloudAerialHazePerKmObject().setImmediately(interp.cloudAerialHazePerKm);
-    // Atmosphere (3)
+    // Atmosphere (5); rayleighScattering (daytime sky colour) and skyIndirectRadianceScale
+    // (sky light) are neutral in every preset today, so gate them to avoid clobbering
+    // the game's own sky tint / sky-fill brightness.
     RtxOptions::airDensityObject().setImmediately(interp.airDensity);
     RtxOptions::aerosolDensityObject().setImmediately(interp.aerosolDensity);
     RtxOptions::sunIlluminanceObject().setImmediately(interp.sunIlluminance);
-    // Sky/moon mood (3)
+    if (weatherVaries_rayleighScattering())       RtxOptions::rayleighScatteringObject().setImmediately(interp.rayleighScattering);
+    if (weatherVaries_skyIndirectRadianceScale()) RtxOptions::skyIndirectRadianceScaleObject().setImmediately(interp.skyIndirectRadianceScale);
+    // Sky/moon mood (4); nightSkyBrightness varies, so always write. nightSkyColor
+    // and the two moon
+    // gains are 1.0 in every preset today, so gate them like the other invariant
+    // fields to avoid clobbering a game's own moon config when they don't differ.
     RtxOptions::nightSkyBrightnessObject().setImmediately(interp.nightSkyBrightness);
-    RtxOptions::moonNeeStrengthObject().setImmediately(interp.moonNeeStrength);
-    RtxOptions::moonAtmosphericCouplingStrengthObject().setImmediately(interp.moonAtmosphericCouplingStrength);
+    if (weatherVaries_nightSkyColor())                   RtxOptions::nightSkyColorObject().setImmediately(interp.nightSkyColor);
+    if (weatherVaries_moonNeeStrength())                 RtxOptions::moonNeeStrengthObject().setImmediately(interp.moonNeeStrength);
+    if (weatherVaries_moonAtmosphericCouplingStrength()) RtxOptions::moonAtmosphericCouplingStrengthObject().setImmediately(interp.moonAtmosphericCouplingStrength);
     // Volumetric (27) — class is RtxGlobalVolumetrics
     RtxGlobalVolumetrics::transmittanceColorObject().setImmediately(interp.transmittanceColor);
     RtxGlobalVolumetrics::transmittanceMeasurementDistanceMetersObject().setImmediately(interp.transmittanceMeasurementDistanceMeters);
@@ -890,8 +1001,8 @@ namespace dxvk { namespace fork_weather {
       } else {
         // Mid-blend retarget: capture the partially-blended state.
         // Lerp logic lives in lerpSnapshot (anonymous namespace).
-        float currentT = saturate(
-          (m_currentTimeSec - m_blendStartTimeSec) / std::max(0.001f, m_blendDurationSec));
+        float currentT = saturate(static_cast<float>(
+          (m_currentTimeSec - m_blendStartTimeSec) / std::max(0.001f, m_blendDurationSec)));
 
         WeatherSnapshot oldTargetValues;
         readPresetValues(m_targetPresetName, oldTargetValues);
@@ -907,7 +1018,7 @@ namespace dxvk { namespace fork_weather {
     }
 
     // Step 5: compute interpolation parameter.
-    float t = saturate((m_currentTimeSec - m_blendStartTimeSec) / m_blendDurationSec);
+    float t = saturate(static_cast<float>((m_currentTimeSec - m_blendStartTimeSec) / m_blendDurationSec));
 
     // Step 6 + 7.
     applyBlendedValues(t);
@@ -957,7 +1068,7 @@ namespace dxvk { namespace fork_weather {
     {
       float currentT = 0.0f;
       if (!m_targetPresetName.empty() && m_blendDurationSec > 0.001f) {
-        currentT = saturate((m_currentTimeSec - m_blendStartTimeSec) / m_blendDurationSec);
+        currentT = saturate(static_cast<float>((m_currentTimeSec - m_blendStartTimeSec) / m_blendDurationSec));
       }
       const std::string& dominantName = (currentT > 0.5f) ? m_targetPresetName : m_previousPresetName;
       const char* currentDisplay  = m_targetPresetName.empty()   ? "(dormant)" : dominantName.c_str();
@@ -1082,6 +1193,19 @@ namespace dxvk { namespace fork_weather {
       RemixGui::SetTooltipToLastWidgetOnHover(
         "Snap the blender to this preset (0 s blend) and freeze variation so edits show "
         "on a held image. Unchecking restores the previous variation intensity.");
+
+      // While pinned, keep the held image on whatever preset is being edited, so
+      // changing the Editing Preset combo above re-snaps the frozen view to it
+      // (blend is already 0 s, so the switch is instant).
+      static int s_appliedPinIndex = -1;
+      if (m_pinnedForTuning) {
+        if (s_editIndex != s_appliedPinIndex) {
+          fork_game_state::GameStateStore::get().set("__weather.target", kEditNames[s_editIndex]);
+          s_appliedPinIndex = s_editIndex;
+        }
+      } else {
+        s_appliedPinIndex = -1;
+      }
 
       static int s_copyFrom = 0;
       ImGui::SetNextItemWidth(160.0f);
