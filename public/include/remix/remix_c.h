@@ -56,9 +56,15 @@
 #define REMIXAPI_VERSION_GET_MINOR(version) (((uint64_t)(version) >> 16) & (uint64_t)0xFFFFFFFF)
 #define REMIXAPI_VERSION_GET_PATCH(version) (((uint64_t)(version)      ) & (uint64_t)0xFFFF)
 
+// Remix Plus carries its own ABI line, distinct from stock NVIDIA dxvk-remix
+// (which is 0.6.x). The reserved MINOR (1000) marks this fork and, because the
+// compat check treats every minor as breaking while MAJOR==0, makes the runtime
+// reject binaries built against stock Remix 0.6.x or older Remix Plus 0.6.x —
+// the struct layout and category-bit ABI differ. Bump MINOR again on any
+// further breaking ABI change.
 #define REMIXAPI_VERSION_MAJOR 0
-#define REMIXAPI_VERSION_MINOR 6
-#define REMIXAPI_VERSION_PATCH 4
+#define REMIXAPI_VERSION_MINOR 1000
+#define REMIXAPI_VERSION_PATCH 0
 
 
 // External
@@ -470,6 +476,11 @@ extern "C" {
     uint32_t                       objectPickingValue;
   } remixapi_InstanceInfoObjectPickingEXT;
 
+  // Bit values match upstream NVIDIA dxvk-remix exactly. These are a published
+  // ABI contract — do NOT reorder or reassign. (An earlier fork build shifted
+  // IGNORE_ALPHA_CHANNEL to bit 8 to mirror the internal InstanceCategories
+  // order; that was reverted because the C<->internal mapping is by-name in
+  // toRtCategories(), so the bit values are free to match upstream and must.)
   typedef enum remixapi_InstanceCategoryBit {
     REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI                  = 1 << 0,
     REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_MATTE               = 1 << 1,
@@ -479,20 +490,20 @@ extern "C" {
     REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ANTI_CULLING       = 1 << 5,
     REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_MOTION_BLUR        = 1 << 6,
     REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_OPACITY_MICROMAP   = 1 << 7,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL      = 1 << 8,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_HIDDEN                    = 1 << 9,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE                  = 1 << 10,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_BEAM                      = 1 << 11,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_STATIC              = 1 << 12,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_DYNAMIC             = 1 << 13,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_SINGLE_OFFSET       = 1 << 14,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_NO_OFFSET           = 1 << 15,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_ALPHA_BLEND_TO_CUTOUT     = 1 << 16,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_TERRAIN                   = 1 << 17,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_ANIMATED_WATER            = 1 << 18,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_MODEL = 1 << 19,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY  = 1 << 20,
-    REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING     = 1 << 21,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_HIDDEN                    = 1 << 8,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE                  = 1 << 9,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_BEAM                      = 1 << 10,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_STATIC              = 1 << 11,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_DYNAMIC             = 1 << 12,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_SINGLE_OFFSET       = 1 << 13,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_NO_OFFSET           = 1 << 14,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_ALPHA_BLEND_TO_CUTOUT     = 1 << 15,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_TERRAIN                   = 1 << 16,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_ANIMATED_WATER            = 1 << 17,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_MODEL = 1 << 18,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY  = 1 << 19,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING     = 1 << 20,
+    REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL      = 1 << 21,
     REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_TRANSPARENCY_LAYER = 1 << 22,
     REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE_EMITTER          = 1 << 23,
     REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS            = 1 << 24,
@@ -991,6 +1002,8 @@ extern "C" {
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetVramStats)(
     remixapi_VramStats* out_stats);
 
+  // NOTE: If adding a new function, append it at the END of the struct.
+  //       Reordering or inserting in the middle breaks backwards compatibility.
   typedef struct remixapi_Interface {
     PFN_remixapi_Shutdown           Shutdown;
     PFN_remixapi_CreateMaterial     CreateMaterial;
@@ -999,7 +1012,6 @@ extern "C" {
     PFN_remixapi_CreateMeshBatched  CreateMeshBatched;
     PFN_remixapi_DestroyMesh        DestroyMesh;
     PFN_remixapi_SetupCamera        SetupCamera;
-    PFN_remixapi_SetCameraMediumMaterial SetCameraMediumMaterial;
     PFN_remixapi_DrawInstance       DrawInstance;
     PFN_remixapi_CreateLight        CreateLight;
     PFN_remixapi_CreateLightBatched CreateLightBatched;
@@ -1026,6 +1038,10 @@ extern "C" {
 
     PFN_remixapi_Startup            Startup;
     PFN_remixapi_Present            Present;
+    // Camera-in-medium material. Kept adjacent to Present to mirror the
+    // canonical upstream layout (upstream commit 2bac8874 moved it here to
+    // fix backwards-compat); fork extension functions are appended below.
+    PFN_remixapi_SetCameraMediumMaterial SetCameraMediumMaterial;
 
     // NOTE: REMIXAPI_PTR is required so the calling convention matches the
     // actual remixapi_GetUIState / remixapi_SetUIState entry functions
