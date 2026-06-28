@@ -70,6 +70,7 @@ PathState pathStateCreateEmpty(GeometryFlags geometryFlags)
   pathState.restirGiHasFoundRoughSurface = false;
   pathState.restirGiHasHitGeometry = false;
   pathState.restirGiHasHitOpaque = false;
+  pathState.skyGatherEligible = false;
   pathState.segmentHitDistance = 0.0;
 
   pathState.rayMask = OBJECT_MASK_ALL | (geometryFlags.objectMask & OBJECT_MASK_ALL_DYNAMIC);
@@ -380,10 +381,17 @@ void integratePathVertex(
 #ifdef ATMOSPHERE_AVAILABLE
     else if (cb.skyMode == 1)
     {
-      // Physical atmosphere mode
+      // Physical atmosphere mode. Opt into skyIndirectRadianceScale only when the
+      // ray that missed was a diffuse sky gather (set at the previous bounce);
+      // reflections / refractions / cutouts keep physical sky brightness.
       skyRadiance = evalSkyRadiance(pathState.direction, cb.atmosphereArgs,
                                      pathState.pixelCoordinate, cb.frameIdx,
-                                     cb.isZUp != 0);
+                                     cb.isZUp != 0,
+                                     /*enableCloudTemporalSmoothing=*/ false,
+                                     vec2(0.0f, 0.0f),
+                                     uint2(0u, 0u),
+                                     /*isPrimaryRay=*/ false,
+                                     /*applySkyIndirectRadianceScale=*/ pathState.skyGatherEligible);
     }
 #endif
     else
@@ -585,6 +593,18 @@ void integratePathVertex(
       pathState.coneRadius = sampledRay.coneRadius;
       pathState.direction = sampledRay.direction;
       pathState.solidAnglePdf = solidAnglePdf;
+
+      // Classify the lobe that generated this ray for skyIndirectRadianceScale.
+      // Computed here, where materialType is known, so the opaque lobe enum is
+      // only trusted for opaque surfaces — translucent (glass/water) lobes use a
+      // different enum and are never eligible, and an opaque alpha-cutout
+      // (opacity transmission) is a straight-through view, also not eligible.
+      // Only a genuine diffuse gather (opaque diffuse reflection / transmission)
+      // opts in.
+      pathState.skyGatherEligible =
+        (materialType == surfaceMaterialTypeOpaque) &&
+        (continuationLobe == opaqueLobeTypeDiffuseReflection ||
+         continuationLobe == opaqueLobeTypeDiffuseTransmission);
     }
     
     // Set the material medium index if a medium was entered or exited
@@ -1313,7 +1333,12 @@ void integrateIndirectPath(
   pathState.enableNeeCacheAfterFirstBounce =
     (geometryFlags.performPSRR || NEECache.shouldUseHigherBounceNeeCache(geometryFlags.firstSampledLobeIsSpecular, calcRoughness(firstHitPerceptualRoughness)));
   pathState.gbufferPerceptualRoughness = firstHitPerceptualRoughness;
-  
+  // The first indirect ray inherits its sky-scale eligibility from the primary
+  // surface's first sampled lobe: diffuse (non-specular) gather is eligible.
+  // (firstSampledLobeIsSpecular is the only lobe class available here; an
+  // edge-case first-bounce alpha-cutout would read as eligible, accepted.)
+  pathState.skyGatherEligible = !geometryFlags.firstSampledLobeIsSpecular;
+
   initNrc(pathState, gbufferPixelCoordinate, isNrcUpdate, geometryFlags, firstSampledSolidAnglePdf);
 
   initReSTIRGI(pathState, geometryFlags, firstHitPerceptualRoughness, firstSampledLobePdf, firstSampledSolidAnglePdf);

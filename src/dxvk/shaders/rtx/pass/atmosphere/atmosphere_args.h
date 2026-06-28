@@ -231,8 +231,8 @@ struct AtmosphereArgs {
   float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
 
   vec2 cloudWindOffset;     // Accumulated wind-driven UV offset (km)
-  float pad_cloudAnisotropy;// was cloudAnisotropy (removed 2026-06-21 — no shader consumer; lighting
-                            // uses cloudPhaseG1/G2). Reclaimable pad; CB layout unchanged.
+  float skyIndirectRadianceScale; // Diffuse-indirect sky radiance multiplier (>=0). Reuses the
+                                  // former pad_cloudAnisotropy slot; CB layout unchanged.
   float cloudCurvature;     // 0 = Earth-scale dome, 1 = tight dome
 
   // ----- Cloud volumetric / appearance enhancements (fork) -----

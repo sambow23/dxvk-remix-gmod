@@ -1164,6 +1164,13 @@ namespace fork_hooks {
               ">1 amplifies the warm horizon hues the physical model renders accurately but undersaturated; 1.0 = no change. "
               "Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
 
+          RemixGui::DragFloat("Sky Indirect Scale", &RtxOptions::skyIndirectRadianceScaleObject(), 0.01f, 0.0f, 20.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Multiplier for sky radiance gathered by diffuse indirect bounces only. 1.0 = physical. "
+              "Raise it to brighten diffuse sky fill (the distant-light sun out-radiates the sky, so indirect "
+              "lighting reads dull). Sky seen via reflection, refraction, alpha-cutout, or the primary view stays "
+              "at physical brightness, so reflections keep matching the visible sky.");
+
           // Sky perf workstream knobs (fork — 2026-06-11) are conf-only by
           // design: skyLutCacheKeySplitEnable, skyViewRebakeGranularityDeg and
           // the debug* bisect toggles all default to their validated production

@@ -722,7 +722,12 @@ vec3 evalSkyRadiance(
   bool enableCloudTemporalSmoothing = false,
   vec2 motionVectorPixels = vec2(0.0f, 0.0f),
   uint2 historyResolution = uint2(0u, 0u),
-  bool isPrimaryRay = false
+  bool isPrimaryRay = false,
+  // Opt-in: scale the result by args.skyIndirectRadianceScale. Only diffuse
+  // indirect sky-gather call sites pass true (see integrator_indirect). Primary,
+  // PSR, and specular/refraction/cutout misses leave it false so the sky they
+  // show stays at physical brightness and matches the visible sky.
+  bool applySkyIndirectRadianceScale = false
 ) {
   // Perf bisect (fork — 2026-06-11, diagnostic): flat sky miss. Returns a
   // constant mid-grey immediately so a live session can read the full
@@ -1068,5 +1073,10 @@ vec3 evalSkyRadiance(
     radiance += starLayer * starThroughMoons * starExt;
   }
 
-  return max(radiance, vec3(0.0f));
+  radiance = max(radiance, vec3(0.0f));
+  if (applySkyIndirectRadianceScale) {
+    radiance *= max(args.skyIndirectRadianceScale, 0.0f);
+  }
+
+  return radiance;
 }
