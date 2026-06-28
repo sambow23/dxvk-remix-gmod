@@ -81,8 +81,8 @@ check will enforce it if discipline slips.
 
 **Category:** migrate
 
-- **Block** at `REMIXAPI_VERSION_PATCH` (file scope) — ~1 LOC, planned target `N/A (public header)` in `N/A (public header)`.
-  *Bumps the patch version number to track fork-side ABI additions.*
+- **Block** at `REMIXAPI_VERSION_MAJOR/MINOR/PATCH` (file scope) — ~3 LOC, planned target `N/A (public header)` in `N/A (public header)`.
+  *Sets the Remix Plus ABI version to `0.1000.0` (reserved MINOR `1000`), distinct from stock NVIDIA `0.6.x`. Because `isVersionCompatible` treats each minor as breaking while MAJOR==0, this makes the runtime reject binaries built against stock Remix `0.6.x` or older Remix Plus `0.6.x` — whose `remixapi_Interface` layout and category-bit ABI differ. Bump MINOR on any further breaking ABI change.*
 
 - **Block** at `remixapi_StructType` enum (file scope) — ~3 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Adds `REMIXAPI_STRUCT_TYPE_TEXTURE_INFO`, `INSTANCE_INFO_PARTICLE_SYSTEM_EXT`, and `INSTANCE_INFO_GPU_INSTANCING_EXT` enumerators.*
@@ -91,7 +91,7 @@ check will enforce it if discipline slips.
   *Declares the opaque `remixapi_TextureHandle_T*` handle type for the texture upload API.*
 
 - **Block** at `REMIXAPI_INSTANCE_CATEGORY_BIT_*` enum (file scope) — ~16 LOC, planned target `N/A (public header)` in `N/A (public header)`.
-  *Replaces the upstream numeric layout with a corrected bit-assignment that matches the gmod/plugin ABI (including `LEGACY_EMISSIVE` at bit 24 and corrected bit positions for all other category flags).*
+  *Bit values match upstream NVIDIA exactly (reverted 2026-06-27 from an earlier fork build that shifted `IGNORE_ALPHA_CHANNEL` to bit 8 to mirror the internal `InstanceCategories` order). The C↔internal mapping in `toRtCategories()` is by-name, so the public bit values are free to match upstream and now do. The only remaining fork delta is `LEGACY_EMISSIVE` retained as a deprecated alias of the upstream `SMOOTH_NORMALS` (both bit 24) for source back-compat.*
 
 - **Block** at `IDirect3DTexture9` forward declaration (file scope) — ~1 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Forward-declares `IDirect3DTexture9` so the dxvk-extension function signatures compile without pulling in d3d9 headers.*
@@ -136,7 +136,7 @@ check will enforce it if discipline slips.
   *Declares the function-pointer type for the plugin-injected game-state write API introduced in workstream 10. The entrypoint stores a single string/string pair under a caller-chosen key in a fork-owned thread-safe map; graph components `GameValueReadBool` / `GameValueReadNumber` read those values by name. The contract doc block above the typedef describes key/value semantics, validation, and lifetime (store survives `Shutdown` / re-init).*
 
 - **Block** at `remixapi_Interface` vtable additions (struct fields) — ~15 LOC spread across the vtable struct, planned target `N/A (public header)` in `N/A (public header)`.
-  *Appends new function-pointer slots to `remixapi_Interface`: `AddTextureHash`, `RemoveTextureHash`, `CreateTexture`, `DestroyTexture`, `dxvk_GetTextureHash`, `CreateMeshBatched`, `GetUIState`/`SetUIState`, `DrawScreenOverlay`, `RegisterCallbacks`, `AutoInstancePersistentLights`, `UpdateLightDefinition`, `CreateLightBatched`, `dxvk_GetSharedD3D11TextureHandle`, `SetGameValue`.*
+  *Appends new function-pointer slots to `remixapi_Interface`: `AddTextureHash`, `RemoveTextureHash`, `CreateTexture`, `DestroyTexture`, `dxvk_GetTextureHash`, `CreateMeshBatched`, `GetUIState`/`SetUIState`, `DrawScreenOverlay`, `RegisterCallbacks`, `AutoInstancePersistentLights`, `UpdateLightDefinition`, `CreateLightBatched`, `dxvk_GetSharedD3D11TextureHandle`, `SetGameValue`. 2026-06-27: the upstream `SetCameraMediumMaterial` slot was moved out of the middle of the struct (it had been inherited between `SetupCamera` and `DrawInstance`) to immediately after `Present`, mirroring upstream's canonical tail layout (upstream `2bac8874`); fork slots remain appended after it. Size-neutral move — the `sizeof` sentinel is unchanged. An append-at-end warning comment was restored above the struct.*
 
 ---
 
@@ -172,7 +172,7 @@ check will enforce it if discipline slips.
   *Logs `hDestWindowOverride` pointer at the top of `D3D9SwapChainEx::Present` to trace the native present path during diagnostics.*
 
 - **Inline tweak** at `D3D9SwapChainEx::Present` (after remix API call site) — 6-line addition for `remixapi_AutoInstancePersistentLights` flush.
-  *Calls `remixapi_AutoInstancePersistentLights()` once per frame on the native D3D9 present path so persistent lights submitted via the Remix C API are auto-instanced even when the caller bypasses `remixapi_Present`.*
+  *Calls `remixapi_AutoInstancePersistentLights()` once per frame on the native D3D9 present path so persistent lights submitted via the Remix C API are auto-instanced even when the caller bypasses `remixapi_Present`. The callee early-outs cheaply for native-only consumers (see its body entry below), so this call is effectively free unless the C-API light path is in use.*
 
 ---
 
@@ -729,9 +729,10 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `(anonymous namespace)` frame-boundary callback infrastructure — `s_pendingLightCreates`, `s_pendingLightUpdates`, `s_pendingDomeUpdates`, `s_pendingLightDestroys`, `s_pendingMeshCreates`, `s_handlesDeletedThisFrame`. Not migrated. The pending-queue state stays in upstream because it is accessed by too many anonymous-namespace functions (`flushPendingMeshes`, `remixapi_CreateMeshBatched`, `remixapi_CreateLight`, `remixapi_DestroyLight`, `remixapi_Present`, `remixapi_UpdateLightDefinition`) — moving it would require either lifting all those callers or exposing a wide accessor surface. Tracked here per the fridge-list invariant.
 
 - **Inline tweak** at `remixapi_AutoInstancePersistentLights` / `remixapi_UpdateLightDefinition` bodies (extern-C fork-owned functions) — not extracted to hooks. These are `REMIXAPI`-exported entry points; their bodies are the fork's implementation of those API calls. The pending-queue state they access is documented as staying inline above. Tracked here per the fridge-list invariant.
+  *2026-06-27: `remixapi_AutoInstancePersistentLights` now early-outs (skips the per-frame `LockDevice`+`EmitCs`) when no C-API scene work is queued and no external light has ever been registered, gated on the file-scope sticky `s_externalLightApiUsed` (set in `remixapi_CreateLight`, `remixapi_CreateLightBatched`, `remixapi_UpdateLightDefinition`). Fixes native-only consumers seeing all lights flicker from the empty per-frame dispatch on the native present path. The self-gating overlay flush still runs.*
 
-- **Inline tweak** at `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` routing (in category conversion) — ~1 LOC. Not migrated (latent ABI: bit 24 semantic).
-  *Routes `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` (bit 24) to `InstanceCategories::SmoothNormals` in the category-bit conversion function.*
+- **Inline tweak** at bit-24 category routing (in `toRtCategories`) — ~1 LOC. Not migrated.
+  *Routes `REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS` (bit 24, upstream name) to `InstanceCategories::SmoothNormals`. The deprecated `LEGACY_EMISSIVE` alias resolves to the same bit, so old callers still compile.*
 
 - **Inline tweak** at `(anonymous namespace)` `remixapi_SetGameValue` — ~15 LOC. Not migrated (fork-owned store + direct inline body fits the surrounding `remixapi_SetConfigVariable` pattern; no anonymous-namespace state to share with other TUs).
   *Implements the plugin-injected game-state write API introduced in workstream 10. Validates args, constructs `std::string` copies of the incoming C strings, and forwards to `dxvk::fork_game_state::GameStateStore::get().set(key, value)`. Does not take `s_mutex` — the store owns its own lock, and funnelling high-frequency plugin writes through the API-wide mutex has no benefit.*

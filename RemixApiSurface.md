@@ -25,8 +25,8 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 | `REMIXAPI_VERSION_GET_MINOR(version)` | `(((uint64_t)(version) >> 16) & (uint64_t)0xFFFFFFFF)` |
 | `REMIXAPI_VERSION_GET_PATCH(version)` | `(((uint64_t)(version)      ) & (uint64_t)0xFFFF)` |
 | `REMIXAPI_VERSION_MAJOR` | `0` |
-| `REMIXAPI_VERSION_MINOR` | `6` |
-| `REMIXAPI_VERSION_PATCH` | `4` |
+| `REMIXAPI_VERSION_MINOR` | `1000` |
+| `REMIXAPI_VERSION_PATCH` | `0` |
 | `REMIX_WINAPI_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` | `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` |
 | `REMIX_WINAPI_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` | `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` |
 | `REMIX_WINAPI_MAX_PATH` | `MAX_PATH` |
@@ -137,6 +137,12 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 
 ### `remixapi_InstanceCategoryBit`
 
+Bit values match upstream NVIDIA dxvk-remix exactly. These are a published
+ABI contract — do NOT reorder or reassign. (An earlier fork build shifted
+IGNORE_ALPHA_CHANNEL to bit 8 to mirror the internal InstanceCategories
+order; that was reverted because the C<->internal mapping is by-name in
+toRtCategories(), so the bit values are free to match upstream and must.)
+
 | Member | Value | Notes |
 | :-- | :-: | :-- |
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI` | `1 << 0` |  |
@@ -147,23 +153,24 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ANTI_CULLING` | `1 << 5` |  |
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_MOTION_BLUR` | `1 << 6` |  |
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_OPACITY_MICROMAP` | `1 << 7` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL` | `1 << 8` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_HIDDEN` | `1 << 9` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE` | `1 << 10` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_BEAM` | `1 << 11` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_STATIC` | `1 << 12` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_DYNAMIC` | `1 << 13` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_SINGLE_OFFSET` | `1 << 14` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_NO_OFFSET` | `1 << 15` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_ALPHA_BLEND_TO_CUTOUT` | `1 << 16` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_TERRAIN` | `1 << 17` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_ANIMATED_WATER` | `1 << 18` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_MODEL` | `1 << 19` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY` | `1 << 20` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING` | `1 << 21` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_HIDDEN` | `1 << 8` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE` | `1 << 9` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_BEAM` | `1 << 10` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_STATIC` | `1 << 11` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_DYNAMIC` | `1 << 12` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_SINGLE_OFFSET` | `1 << 13` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_NO_OFFSET` | `1 << 14` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_ALPHA_BLEND_TO_CUTOUT` | `1 << 15` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_TERRAIN` | `1 << 16` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_ANIMATED_WATER` | `1 << 17` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_MODEL` | `1 << 18` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY` | `1 << 19` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_BAKED_LIGHTING` | `1 << 20` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_ALPHA_CHANNEL` | `1 << 21` |  |
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_TRANSPARENCY_LAYER` | `1 << 22` |  |
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE_EMITTER` | `1 << 23` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` | `1 << 24` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS` | `1 << 24` |  |
+| `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` | `1 << 24` | Deprecated fork alias for bit 24. The fork previously exposed this name (routing to InstanceCategories::SmoothNormals); kept as an alias so existing source keeps compiling. Prefer SMOOTH_NORMALS. |
 
 ### `remixapi_dxvk_CopyRenderingOutputType`
 
@@ -1113,6 +1120,9 @@ The function-pointer table that `remixapi_InitializeLibrary` fills out. Each fie
 
 ### `remixapi_Interface`
 
+NOTE: If adding a new function, append it at the END of the struct.
+Reordering or inserting in the middle breaks backwards compatibility.
+
 | Type | Field | Notes |
 | :-- | :-- | :-- |
 | `PFN_remixapi_Shutdown` | `Shutdown` |  |
@@ -1122,7 +1132,6 @@ The function-pointer table that `remixapi_InitializeLibrary` fills out. Each fie
 | `PFN_remixapi_CreateMeshBatched` | `CreateMeshBatched` |  |
 | `PFN_remixapi_DestroyMesh` | `DestroyMesh` |  |
 | `PFN_remixapi_SetupCamera` | `SetupCamera` |  |
-| `PFN_remixapi_SetCameraMediumMaterial` | `SetCameraMediumMaterial` |  |
 | `PFN_remixapi_DrawInstance` | `DrawInstance` |  |
 | `PFN_remixapi_CreateLight` | `CreateLight` |  |
 | `PFN_remixapi_CreateLightBatched` | `CreateLightBatched` |  |
@@ -1145,6 +1154,7 @@ The function-pointer table that `remixapi_InitializeLibrary` fills out. Each fie
 | `PFN_remixapi_pick_HighlightObjects` | `pick_HighlightObjects` |  |
 | `PFN_remixapi_Startup` | `Startup` |  |
 | `PFN_remixapi_Present` | `Present` |  |
+| `PFN_remixapi_SetCameraMediumMaterial` | `SetCameraMediumMaterial` | Camera-in-medium material. Kept adjacent to Present to mirror the canonical upstream layout (upstream commit 2bac8874 moved it here to fix backwards-compat); fork extension functions are appended below. |
 | `PFN_remixapi_RegisterCallbacks` | `RegisterCallbacks` | Optional extension functions (present starting in v0.5.1+) |
 | `PFN_remixapi_AutoInstancePersistentLights` | `AutoInstancePersistentLights` |  |
 | `PFN_remixapi_UpdateLightDefinition` | `UpdateLightDefinition` |  |
