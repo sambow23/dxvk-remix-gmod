@@ -355,7 +355,7 @@ if (actual > 0 && actual <= sizeof(buf)) {
 
 ### Surface 3 — Tune presets
 
-Each preset has 27 RTX_OPTIONs declared under
+Each preset has 42 RTX_OPTIONs declared under
 `rtx.weather.preset.<name>.<field>` — generated from a single X-macro
 at [`rtx_fork_weather.h`](../src/dxvk/rtx_render/rtx_fork_weather.h).
 
@@ -395,7 +395,7 @@ The 12 valid values for `__weather.target`:
 | `sandstorm` | Yellow-orange forward-scattering fog |
 | `smoggy` | Industrial dark grey-brown haze |
 
-### Per-preset field list (27 fields)
+### Per-preset field list (42 fields)
 
 Single source of truth: `WEATHER_PRESET_FIELD_LIST` in
 [`rtx_fork_weather.h`](../src/dxvk/rtx_render/rtx_fork_weather.h).

@@ -1,11 +1,17 @@
 # Weather Presets -- Parameter Reference
 
-Lookup table of every preset's shipped default for each of the 29 parameters.
+Lookup table of every preset's shipped default for each of the 42 parameters.
+
+> **Expanded 2026-06-28.** The volumetric-fog bucket grew from 4 to 23 fields
+> (heterogeneous-fog noise field, fog remap, sun/brightness gains, fog reach).
+> The authoritative per-preset defaults are the WEATHER_PRESET_FIELD_LIST /
+> WEATHER_PRESET_VALUES_* macros in `rtx_fork_weather.h` and the regenerated
+> `RtxOptions.md`. Tables below that predate the expansion cover the original set.
 Values are extracted from `WEATHER_PRESET_VALUES_<name>` in
 `src/dxvk/rtx_render/rtx_fork_weather.h`.
 
 Override any cell in `user.conf` using the key:
-`rtx.weather.preset.<presetName>.<fieldName> = <value>`
+`rtx.weather.preset.<presetName>.<presetName>_<fieldName> = <value>`
 
 Vector3 values are shown as `(r, g, b)`. Float values are shown without the
 trailing `f` suffix.

@@ -15,11 +15,11 @@ to push it toward the intended look.
 
 ### How customization works
 
-All 324 weather RTX_OPTIONs (12 presets x 27 fields) accept overrides via the
+All 504 weather RTX_OPTIONs (12 presets x 42 fields) accept overrides via the
 standard `user.conf` mechanism. The naming convention is:
 
 ```
-rtx.weather.preset.<presetName>.<fieldName> = <value>
+rtx.weather.preset.<presetName>.<presetName>_<fieldName> = <value>
 ```
 
 Overrides in `user.conf` take effect on the next application launch. They sit
@@ -69,16 +69,16 @@ in a follow-on spec.
 
 ```ini
 # Make the foggy preset significantly denser
-rtx.weather.preset.foggy.transmittanceMeasurementDistanceMeters = 30.0
-rtx.weather.preset.foggy.aerosolDensity = 3.5
+rtx.weather.preset.foggy.foggy_transmittanceMeasurementDistanceMeters = 30.0
+rtx.weather.preset.foggy.foggy_aerosolDensity = 3.5
 
 # Warm up the rainstorm preset for a desert game
-rtx.weather.preset.rainstorm.sunIlluminance = 6.0, 5.5, 4.0
-rtx.weather.preset.rainstorm.transmittanceColor = 0.80, 0.72, 0.60
+rtx.weather.preset.rainstorm.rainstorm_sunIlluminance = 6.0, 5.5, 4.0
+rtx.weather.preset.rainstorm.rainstorm_transmittanceColor = 0.80, 0.72, 0.60
 
 # Give the sandstorm a more extreme forward-scattering lobe
-rtx.weather.preset.sandstorm.volumetricAnisotropy = 0.80
-rtx.weather.preset.sandstorm.singleScatteringAlbedo = 0.88, 0.70, 0.45
+rtx.weather.preset.sandstorm.sandstorm_volumetricAnisotropy = 0.80
+rtx.weather.preset.sandstorm.sandstorm_singleScatteringAlbedo = 0.88, 0.70, 0.45
 ```
 
 ---
@@ -125,9 +125,9 @@ specific weather preset is active.
 
 ---
 
-## 4. The 29 Parameter Buckets and What They Control
+## 4. The 42 Parameters and What They Control
 
-Each preset defines 29 values organized into four buckets. For detailed
+Each preset defines 42 values organized into four buckets (the volumetric-fog bucket holds 23: transmittance/scattering, sun/brightness gains, the heterogeneous-fog noise field, fog reach, and fog remap). For detailed
 documentation of the underlying RTX_OPTIONs see:
 - `src/dxvk/rtx_render/rtx_options.h` -- `rtx.atmosphere.*` declarations
 - `src/dxvk/rtx_render/rtx_global_volumetrics.h` -- `rtx.volumetrics.*`
@@ -295,37 +295,37 @@ scattering albedo (0.85, 0.80, 0.70) for the absorptive, dirty-air look.
 The shipped `foggy` default (80 m transmittance) is medium fog. For pea-soup:
 
 ```ini
-rtx.weather.preset.foggy.transmittanceMeasurementDistanceMeters = 25.0
-rtx.weather.preset.foggy.aerosolDensity = 4.0
-rtx.weather.preset.foggy.sunIlluminance = 6.0, 6.0, 6.5
+rtx.weather.preset.foggy.foggy_transmittanceMeasurementDistanceMeters = 25.0
+rtx.weather.preset.foggy.foggy_aerosolDensity = 4.0
+rtx.weather.preset.foggy.foggy_sunIlluminance = 6.0, 6.0, 6.5
 ```
 
 ### Custom red-orange sandstorm for a Mars-like setting
 
 ```ini
-rtx.weather.preset.sandstorm.transmittanceColor = 0.80, 0.30, 0.15
-rtx.weather.preset.sandstorm.cloudColor = 0.70, 0.35, 0.20
-rtx.weather.preset.sandstorm.sunIlluminance = 4.0, 2.5, 1.5
-rtx.weather.preset.sandstorm.singleScatteringAlbedo = 0.75, 0.40, 0.25
-rtx.weather.preset.sandstorm.volumetricAnisotropy = 0.70
+rtx.weather.preset.sandstorm.sandstorm_transmittanceColor = 0.80, 0.30, 0.15
+rtx.weather.preset.sandstorm.sandstorm_cloudColor = 0.70, 0.35, 0.20
+rtx.weather.preset.sandstorm.sandstorm_sunIlluminance = 4.0, 2.5, 1.5
+rtx.weather.preset.sandstorm.sandstorm_singleScatteringAlbedo = 0.75, 0.40, 0.25
+rtx.weather.preset.sandstorm.sandstorm_volumetricAnisotropy = 0.70
 ```
 
 ### Make the thunderstorm preset even darker
 
 ```ini
-rtx.weather.preset.thunderstorm.sunIlluminance = 2.0, 2.0, 3.5
-rtx.weather.preset.thunderstorm.transmittanceMeasurementDistanceMeters = 40.0
-rtx.weather.preset.thunderstorm.cloudDensity = 4.5
-rtx.weather.preset.thunderstorm.cloudShadowStrength = 0.80
+rtx.weather.preset.thunderstorm.thunderstorm_sunIlluminance = 2.0, 2.0, 3.5
+rtx.weather.preset.thunderstorm.thunderstorm_transmittanceMeasurementDistanceMeters = 40.0
+rtx.weather.preset.thunderstorm.thunderstorm_cloudDensity = 4.5
+rtx.weather.preset.thunderstorm.thunderstorm_cloudShadowStrength = 0.80
 ```
 
 ### Snowy overcast with no fog (tundra-style flat light)
 
 ```ini
-rtx.weather.preset.overcast.transmittanceMeasurementDistanceMeters = 2000.0
-rtx.weather.preset.overcast.cloudColor = 0.97, 0.98, 1.00
-rtx.weather.preset.overcast.sunIlluminance = 14.0, 15.0, 17.0
-rtx.weather.preset.overcast.aerosolDensity = 0.8
+rtx.weather.preset.overcast.overcast_transmittanceMeasurementDistanceMeters = 2000.0
+rtx.weather.preset.overcast.overcast_cloudColor = 0.97, 0.98, 1.00
+rtx.weather.preset.overcast.overcast_sunIlluminance = 14.0, 15.0, 17.0
+rtx.weather.preset.overcast.overcast_aerosolDensity = 0.8
 ```
 
 ---
