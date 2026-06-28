@@ -1164,6 +1164,12 @@ namespace fork_hooks {
               ">1 amplifies the warm horizon hues the physical model renders accurately but undersaturated; 1.0 = no change. "
               "Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
 
+          RemixGui::DragFloat("Sky Indirect Scale", &RtxOptions::skyIndirectRadianceScaleObject(), 0.01f, 0.0f, 20.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Scales sky radiance for non-primary rays only: indirect bounces, reflections, and PSR sky misses. "
+              "1.0 preserves the physical sky-view result. Higher values brighten sky influence without changing "
+              "the visible primary sky or direct sun lighting.");
+
           // Sky perf workstream knobs (fork — 2026-06-11) are conf-only by
           // design: skyLutCacheKeySplitEnable, skyViewRebakeGranularityDeg and
           // the debug* bisect toggles all default to their validated production

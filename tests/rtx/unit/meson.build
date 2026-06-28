@@ -90,4 +90,13 @@ exe = executable('test_f16tof32',  files('test_f16tof32.cpp'),  include_director
 test('test_f16tof32', exe, env: test_env)
 tests += exe
 
+exe = executable('test_atmosphere_sky_indirect_scale',
+  files('test_atmosphere_sky_indirect_scale.cpp'),
+  include_directories : test_include_path,
+  dependencies : test_unit_deps,
+  win_subsystem : 'console',
+  override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_atmosphere_sky_indirect_scale', exe, env: test_env)
+tests += exe
+
 alias_target('unit_tests', tests)

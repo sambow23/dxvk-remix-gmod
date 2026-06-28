@@ -1260,6 +1260,13 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, multiScatterStrength, 1.0f, "Artistic global scale on the atmosphere's multiscattering 'fill' term. The physical two-term model adds a broadband (pale-blue) multiscatter term that desaturates warm sunset color. Lower this (e.g. 0.3-0.6) to let warm single-scatter dominate for a punchier sunset; 1.0 = physical. Feeds the sky-view LUT, so clouds inherit it.");
     RTX_OPTION("rtx.atmosphere", float, sunsetSaturation, 1.0f, "Artistic saturation adjustment applied to sky radiance, ramped in as the sun approaches the horizon (midday sky is untouched). 1.0 = no change (default — the physical multiscatter path now produces correct horizon color at the source, so the former 0.5 desaturation band-aid is retired); <1 desaturates the near-horizon sky toward neutral; >1 amplifies the warm horizon hues. Feeds the sky-view LUT, so clouds inherit it.");
 
+    RTX_OPTION_ARGS("rtx.atmosphere", float, skyIndirectRadianceScale, 8.0f,
+               "Artistic multiplier for sky radiance returned to non-primary rays only "
+               "(indirect bounces, reflections, and PSR sky misses). 1.0 preserves the "
+               "physical sky-view result; >1 brightens sky influence without changing the "
+               "visible primary sky or direct sun lighting.",
+      args.minValue = 0.0f);
+
     // ----- Night-sky shading (fork) -----
     // Stars, Milky Way, shooting stars, airglow. Active when skyMode == Numos.
     RTX_OPTION("rtx.atmosphere", float, starBrightness, 0.5f,

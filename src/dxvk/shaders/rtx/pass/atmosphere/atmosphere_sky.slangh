@@ -1068,5 +1068,10 @@ vec3 evalSkyRadiance(
     radiance += starLayer * starThroughMoons * starExt;
   }
 
-  return max(radiance, vec3(0.0f));
+  radiance = max(radiance, vec3(0.0f));
+  if (!isPrimaryRay) {
+    radiance *= max(args.skyIndirectRadianceScale, 0.0f);
+  }
+
+  return radiance;
 }

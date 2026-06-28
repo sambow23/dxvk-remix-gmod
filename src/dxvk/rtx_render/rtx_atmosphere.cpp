@@ -360,6 +360,7 @@ namespace {
     args.cloudRenderRightYUp         = vec3(0.0f, 0.0f, 0.0f);
     args.cloudRenderUpYUp            = vec3(0.0f, 0.0f, 0.0f);
     args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
+    args.skyIndirectRadianceScale    = 0.0f;
   }
 
   // Quantize one direction-vector component to the granularity step.
@@ -539,6 +540,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // sky reddens even when clouds are disabled.
   args.multiScatterStrength = RtxOptions::multiScatterStrength();
   args.sunsetSaturation     = RtxOptions::sunsetSaturation();
+  args.skyIndirectRadianceScale = std::max(RtxOptions::skyIndirectRadianceScale(), 0.0f);
 
   // View Altitude (converted m to km)
   args.viewAltitude = RtxOptions::altitude() * 0.001f;
