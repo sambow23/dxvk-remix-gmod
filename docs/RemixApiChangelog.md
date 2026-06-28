@@ -44,8 +44,8 @@ between them. Rebuild plugins/hosts against this header.
 
 ### Added
 - `REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS` (bit 24) — the upstream name
-  for the category previously exposed only as `LEGACY_EMISSIVE`. Both names now
-  resolve to bit 24; prefer `SMOOTH_NORMALS`.
+  for the category previously exposed (under the fork) only as `LEGACY_EMISSIVE`.
+  Use `SMOOTH_NORMALS`; the old alias has been removed (see below).
 
 ### Changed
 - `remixapi_InstanceCategoryBit` bit values now match upstream NVIDIA exactly.
@@ -72,6 +72,10 @@ between them. Rebuild plugins/hosts against this header.
   re-instancing path is preserved).
 
 ### Removed
-- `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` is **deprecated** (not
-  removed) — retained as an alias of `SMOOTH_NORMALS` (bit 24) so existing
-  source keeps compiling.
+- `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` is **removed**. Its name
+  implied emissive behavior, but it routed to bit 24 / `InstanceCategories::SmoothNormals`
+  — so any caller using it got a silent wrong-category result. Removing it turns
+  that into a compile error; use `REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS`.
+  Source-only break — the bit layout, enum size, and struct offsets are unchanged
+  (bit 24 still exists as `SMOOTH_NORMALS`), so no binary/ABI change and the
+  `0.1000.0` version line is unaffected.

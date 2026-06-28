@@ -170,7 +170,6 @@ toRtCategories(), so the bit values are free to match upstream and must.)
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_TRANSPARENCY_LAYER` | `1 << 22` |  |
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE_EMITTER` | `1 << 23` |  |
 | `REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS` | `1 << 24` |  |
-| `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` | `1 << 24` | Deprecated fork alias for bit 24. The fork previously exposed this name (routing to InstanceCategories::SmoothNormals); kept as an alias so existing source keeps compiling. Prefer SMOOTH_NORMALS. |
 
 ### `remixapi_dxvk_CopyRenderingOutputType`
 

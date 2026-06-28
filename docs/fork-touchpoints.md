@@ -91,7 +91,7 @@ check will enforce it if discipline slips.
   *Declares the opaque `remixapi_TextureHandle_T*` handle type for the texture upload API.*
 
 - **Block** at `REMIXAPI_INSTANCE_CATEGORY_BIT_*` enum (file scope) — ~16 LOC, planned target `N/A (public header)` in `N/A (public header)`.
-  *Bit values match upstream NVIDIA exactly (reverted 2026-06-27 from an earlier fork build that shifted `IGNORE_ALPHA_CHANNEL` to bit 8 to mirror the internal `InstanceCategories` order). The C↔internal mapping in `toRtCategories()` is by-name, so the public bit values are free to match upstream and now do. The only remaining fork delta is `LEGACY_EMISSIVE` retained as a deprecated alias of the upstream `SMOOTH_NORMALS` (both bit 24) for source back-compat.*
+  *Bit values match upstream NVIDIA exactly (reverted 2026-06-27 from an earlier fork build that shifted `IGNORE_ALPHA_CHANNEL` to bit 8 to mirror the internal `InstanceCategories` order). The C↔internal mapping in `toRtCategories()` is by-name, so the public bit values are free to match upstream and now do. No remaining fork delta — the enum now matches upstream exactly. (The misleadingly-named `LEGACY_EMISSIVE` alias of bit 24 / `SMOOTH_NORMALS` was removed 2026-06-28: its name implied emissive behavior but it routed to `SmoothNormals`, so callers got a silent wrong-category result; removing it converts that into a compile error.)*
 
 - **Block** at `IDirect3DTexture9` forward declaration (file scope) — ~1 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Forward-declares `IDirect3DTexture9` so the dxvk-extension function signatures compile without pulling in d3d9 headers.*
@@ -732,7 +732,7 @@ initializer list and can't be lifted into a separate TU.
   *2026-06-27: `remixapi_AutoInstancePersistentLights` now early-outs (skips the per-frame `LockDevice`+`EmitCs`) when no C-API scene work is queued and no external light has ever been registered, gated on the file-scope sticky `s_externalLightApiUsed` (set in `remixapi_CreateLight`, `remixapi_CreateLightBatched`, `remixapi_UpdateLightDefinition`). Fixes native-only consumers seeing all lights flicker from the empty per-frame dispatch on the native present path. The self-gating overlay flush still runs.*
 
 - **Inline tweak** at bit-24 category routing (in `toRtCategories`) — ~1 LOC. Not migrated.
-  *Routes `REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS` (bit 24, upstream name) to `InstanceCategories::SmoothNormals`. The deprecated `LEGACY_EMISSIVE` alias resolves to the same bit, so old callers still compile.*
+  *Routes `REMIXAPI_INSTANCE_CATEGORY_BIT_SMOOTH_NORMALS` (bit 24, upstream name) to `InstanceCategories::SmoothNormals`. (The misleadingly-named `LEGACY_EMISSIVE` alias of this bit was removed 2026-06-28 — it routed to `SmoothNormals` despite its name, a silent footgun.)*
 
 - **Inline tweak** at `(anonymous namespace)` `remixapi_SetGameValue` — ~15 LOC. Not migrated (fork-owned store + direct inline body fits the surrounding `remixapi_SetConfigVariable` pattern; no anonymous-namespace state to share with other TUs).
   *Implements the plugin-injected game-state write API introduced in workstream 10. Validates args, constructs `std::string` copies of the incoming C strings, and forwards to `dxvk::fork_game_state::GameStateStore::get().set(key, value)`. Does not take `s_mutex` — the store owns its own lock, and funnelling high-frequency plugin writes through the API-wide mutex has no benefit.*
