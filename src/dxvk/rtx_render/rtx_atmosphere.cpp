@@ -360,6 +360,8 @@ namespace {
     args.cloudRenderRightYUp         = vec3(0.0f, 0.0f, 0.0f);
     args.cloudRenderUpYUp            = vec3(0.0f, 0.0f, 0.0f);
     args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
+    // Applied post-LUT-sample per ray, never feeds a LUT bake — exclude from the key.
+    args.skyIndirectRadianceScale    = 0.0f;
   }
 
   // Quantize one direction-vector component to the granularity step.
@@ -539,6 +541,11 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // sky reddens even when clouds are disabled.
   args.multiScatterStrength = RtxOptions::multiScatterStrength();
   args.sunsetSaturation     = RtxOptions::sunsetSaturation();
+
+  // Diffuse-indirect sky radiance multiplier. Applied per-ray in evalSkyRadiance
+  // (post-LUT-sample), so it never feeds any LUT bake — see normalizeForSkyLutCache,
+  // which zeroes it in the cache key so dragging the slider doesn't trigger a rebake.
+  args.skyIndirectRadianceScale = std::max(RtxOptions::skyIndirectRadianceScale(), 0.0f);
 
   // View Altitude (converted m to km)
   args.viewAltitude = RtxOptions::altitude() * 0.001f;

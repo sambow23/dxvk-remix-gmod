@@ -2328,3 +2328,25 @@ Graduates the "sun/moon as real distant lights" work from an experiment-with-fal
 - **`RtxOptions.md`** — REGEN PENDING (drops `useDirectionalLights` + `debugEnableAtmosphereNee`).
 
 ---
+
+## Workstream — Diffuse-indirect sky radiance scale (fork — 2026-06-28)
+
+Adds the `rtx.atmosphere.skyIndirectRadianceScale` knob (default **1.0** = physical). Since the sun/moon graduated to real distant lights, the distant-light sun out-radiates the sky and indirect lighting reads dull; raising this multiplies sky radiance gathered by **diffuse indirect bounces only**. The scale is applied per-ray inside `evalSkyRadiance` *after* the sky-view LUT sample, so it never feeds any LUT bake. Eligibility is classified at the lobe-sample site (where the material type is known): only an opaque diffuse reflection/transmission gather opts in — sky seen via specular reflection, refraction, alpha-cutout (opacity transmission), translucent/glass lobes, PSR, or the primary view stays at physical brightness, so reflections keep matching the visible sky.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION_ARGS(rtx.atmosphere, float, skyIndirectRadianceScale, 1.0f, …, args.minValue = 0.0f)` after `sunsetSaturation`.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes the dead `pad_cloudAnisotropy` slot as `skyIndirectRadianceScale`; CB layout / `sizeof(AtmosphereArgs)` unchanged.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` populates the field (clamped >= 0). `normalizeForSkyLutCache` zeroes it in the sky-LUT memcmp key — it is applied post-LUT, so dragging the slider must not trigger a rebake.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *Adds the trailing `applySkyIndirectRadianceScale` parameter (default false) to `evalSkyRadiance` and multiplies the final radiance by `args.skyIndirectRadianceScale` only when it is set.*
+- **`src/dxvk/shaders/rtx/algorithm/path_state.slangh`** — fork-owned change.
+  *Adds `_skyGatherEligible` (uint8) + a `skyGatherEligible` bool property so the indirect integrator knows whether the in-flight ray came from a diffuse sky gather (`_flags` is bit-saturated, hence its own byte).*
+- **`src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh`** — fork-owned change.
+  *Initializes `skyGatherEligible` (false in `pathStateCreateEmpty`; `!firstSampledLobeIsSpecular` at first bounce); reclassifies it after each continuation sample using `materialType` + the opaque lobe enum; passes it as `applySkyIndirectRadianceScale` at the physical-atmosphere sky miss.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Adds the "Sky Indirect Scale" ImGui slider (0–20) + tooltip in the atmosphere UI.*
+- **`RtxOptions.md`** — REGEN PENDING (adds `rtx.atmosphere.skyIndirectRadianceScale`).
+
+---
