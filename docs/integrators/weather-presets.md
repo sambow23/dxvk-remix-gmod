@@ -10,8 +10,18 @@ that coordinates with the dxvk-remix weather preset system.
 The weather preset system is a renderer-side lerp pipeline that blends between
 12 named atmospheric archetypes (clear, partlyCloudy, overcast, hazy, foggy,
 drizzle, rainstorm, thunderstorm, snow, blizzard, sandstorm, smoggy). Each
-archetype defines 29 RTX_OPTION values covering clouds, atmosphere, sky/moon
-mood, and volumetric fog.
+archetype defines 42 RTX_OPTION values covering clouds (13), atmosphere (3),
+sky/moon mood (3), and volumetric fog (23 — transmittance/scattering, fog
+gains, the full heterogeneous-fog noise field, fog reach, and fog remap).
+
+The entire per-field set is generated from a single source of truth — the
+`WEATHER_PRESET_FIELD_LIST` X-macro in
+[`rtx_fork_weather.h`](../../src/dxvk/rtx_render/rtx_fork_weather.h) — which
+drives the per-preset `RTX_OPTION` declarations, the blend math, and the
+generated dev-menu panel together. Each field carries a *kind* (scalar, angle,
+extinction, color, vec3, or step/bool) that selects both its interpolation
+(e.g. fog distance lerps in extinction space; bools switch at the blend
+midpoint) and its widget.
 
 **Renderer's responsibility:**
 - Owns the blending math -- reads the trigger keys once per frame, lerps
@@ -252,20 +262,41 @@ to do with it.
 
 ## 6. ImGui-Driven Changes
 
-The renderer's dev menu (under **Atmosphere -> Weather Presets -> Tune Preset
-Defaults**) writes the same `__weather.target` and `__weather.blend_seconds`
-GameStateStore keys that a plugin writes. This means:
+The renderer's dev menu (under **Atmosphere -> Weather Presets**) writes the same
+`__weather.target` and `__weather.blend_seconds` GameStateStore keys that a
+plugin writes. This means:
 
 - A plugin watching `__weather.target` will see ImGui-driven weather changes
   exactly as it would see plugin-driven ones.
 - Particle coordination still applies -- if a designer triggers a preset change
   in the dev menu during a play session, the plugin's per-frame particle lerp
   will respond as though the plugin itself had issued the trigger.
-- The dev menu's "Blend Seconds" slider maps directly to `__weather.blend_seconds`.
+- The "Blend Duration" slider maps directly to `__weather.blend_seconds`.
 
 This design allows artists and level designers to test weather transitions live
 in the dev menu while the full plugin stack (particles, audio, gameplay
 reactions) responds naturally.
+
+### Self-contained preset editor
+
+The panel is a single self-contained editor (no separate "Tune Preset Defaults"
+sub-tree). It is generated from the field table, so every per-preset value --
+including the full volumetric-fog surface -- is editable in one place, grouped
+into collapsible sections (Clouds / Atmosphere / Sky & Moon / Volumetric Fog)
+with a name filter box. Editing writes the `rtx.weather.preset.<name>.<field>`
+options directly. Authoring aids:
+
+- **Editing Preset / Edit Active** -- choose which preset to edit, or jump to
+  whatever the blender is currently targeting.
+- **Pin Edited Preset** -- snaps the blender to the edited preset with a 0 s
+  blend and freezes variation, so edits show immediately on a held image.
+- **Copy Into Edited** -- copies every value from another preset into the one
+  being edited (fork a new archetype from an existing one).
+- **Snapshot Live -> Preset** -- captures the current live renderer values into
+  the edited preset. Tune the real atmosphere/volumetrics with the blender
+  dormant, then capture.
+- **Export to Clipboard** -- emits the preset as `rtx.weather.preset.*` lines
+  ready to paste into `user.conf` (the way to persist tuned values).
 
 **Caveat:** Until `remixapi_GetGameValue` ships, there is no C API for plugins
 to *read* the current `__weather.target` value written by the dev menu. Plugins
