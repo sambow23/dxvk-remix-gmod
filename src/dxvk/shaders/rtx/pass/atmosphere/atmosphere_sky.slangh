@@ -36,6 +36,84 @@
 
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
+static const uint CELESTIAL_TEXTURE_FLAG_SUN = 1u;
+static const uint CELESTIAL_TEXTURE_FLAG_MOON0 = 2u;
+
+bool celestialTextureFlagEnabled(uint flags, uint flag) {
+  return (flags & flag) != 0u;
+}
+
+void buildCelestialDiskFrame(vec3 bodyDir, out vec3 diskRight, out vec3 diskUp) {
+  vec3 upVec = abs(bodyDir.y) < 0.999f ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
+  diskRight = normalize(cross(upVec, bodyDir));
+  diskUp = cross(bodyDir, diskRight);
+}
+
+bool computeCelestialDiskUv(vec3 viewDir, vec3 bodyDir, float angularRadius, out vec2 uv, out float normalizedAngle) {
+  const float safeAngularRadius = max(angularRadius, 0.001f);
+  const float cosAngle = dot(viewDir, bodyDir);
+  const float cosRadius = cos(safeAngularRadius);
+  if (cosAngle < cosRadius) {
+    uv = vec2(0.0f, 0.0f);
+    normalizedAngle = 0.0f;
+    return false;
+  }
+
+  normalizedAngle = acos(clamp(cosAngle, -1.0f, 1.0f)) / safeAngularRadius;
+
+  vec3 diskRight;
+  vec3 diskUp;
+  buildCelestialDiskFrame(bodyDir, diskRight, diskUp);
+
+  vec3 toView = normalize(viewDir - bodyDir * cosAngle);
+  float diskX = dot(toView, diskRight) * normalizedAngle;
+  float diskY = dot(toView, diskUp) * normalizedAngle;
+  uv = vec2(diskX * 0.5f + 0.5f, 0.5f - diskY * 0.5f);
+  return true;
+}
+
+bool computeCelestialSpriteUv(
+  vec3 viewDir,
+  vec3 bodyDir,
+  float angularRadius,
+  out vec2 uv,
+  out vec2 spriteCoord,
+  out float edgeCoverage
+) {
+  uv = vec2(0.0f, 0.0f);
+  spriteCoord = vec2(0.0f, 0.0f);
+  edgeCoverage = 0.0f;
+
+  const float safeAngularRadius = max(angularRadius, 0.001f);
+  const float cosAngle = dot(viewDir, bodyDir);
+  if (cosAngle <= 0.0f) {
+    return false;
+  }
+
+  vec3 diskRight;
+  vec3 diskUp;
+  buildCelestialDiskFrame(bodyDir, diskRight, diskUp);
+
+  const float tanRadius = max(tan(safeAngularRadius), 1.0e-5f);
+  const float invForward = 1.0f / max(cosAngle, 1.0e-4f);
+  spriteCoord = vec2(dot(viewDir, diskRight), dot(viewDir, diskUp)) * invForward / tanRadius;
+
+  if (any(abs(spriteCoord) > vec2(1.0f, 1.0f))) {
+    return false;
+  }
+
+  uv = vec2(spriteCoord.x * 0.5f + 0.5f, 0.5f - spriteCoord.y * 0.5f);
+  const float edgeDistance = max(abs(spriteCoord.x), abs(spriteCoord.y));
+  edgeCoverage = 1.0f - smoothstep(0.985f, 1.0f, edgeDistance);
+  return true;
+}
+
+float celestialTextureCoverage(vec4 texel, float edgeCoverage) {
+  const float maxChannel = max(max(texel.r, texel.g), texel.b);
+  const float colorCoverage = smoothstep(0.001f, 0.03f, maxChannel);
+  return saturate(texel.a * colorCoverage * edgeCoverage);
+}
+
 // ============================================================================
 // Night sky — stars, galactic band, shooting stars, airglow
 // ============================================================================
@@ -578,12 +656,96 @@ void computeVolcanicSurfaceDetail(float diskX, float diskY, MoonParams m,
   );
 }
 
+vec3 evalSunTextureSprite(vec3 viewDir, AtmosphereArgs args, out float spriteCoverage) {
+  spriteCoverage = 0.0f;
+  if (!celestialTextureFlagEnabled(args.celestialTextureFlags, CELESTIAL_TEXTURE_FLAG_SUN)) {
+    return vec3(0.0f);
+  }
+
+  vec3 sunDir = normalize(args.sunDirection);
+  if (sunDir.y <= -0.02f) {
+    return vec3(0.0f);
+  }
+
+  vec2 uv;
+  vec2 spriteCoord;
+  float edgeCoverage;
+  if (!computeCelestialSpriteUv(viewDir, sunDir, args.celestialTextureAngularRadius, uv, spriteCoord, edgeCoverage)) {
+    return vec3(0.0f);
+  }
+
+  vec4 texel = AtmosphereSunTexture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
+  spriteCoverage = celestialTextureCoverage(texel, edgeCoverage);
+
+  vec3 spriteColor = max(texel.rgb, vec3(0.0f));
+  vec3 spriteRadiance = spriteColor * args.sunIlluminance * args.sunRayBrightness
+                      * args.celestialTextureBrightness * 0.025f;
+  return max(spriteRadiance, vec3(0.0f));
+}
+
+bool sampleMoon0TextureSurface(float diskX, float diskY, out float surfaceDetail, out vec3 surfaceColor) {
+  surfaceDetail = 1.0f;
+  surfaceColor = vec3(1.0f, 1.0f, 1.0f);
+
+  vec2 uv = vec2(0.5f - diskX * 0.5f, 0.5f - diskY * 0.5f);
+  if (any(uv < vec2(0.0f)) || any(uv > vec2(1.0f))) {
+    return false;
+  }
+
+  vec4 texel = AtmosphereMoon0Texture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
+  float coverage = celestialTextureCoverage(texel, 1.0f);
+  surfaceColor = max(texel.rgb, vec3(0.0f));
+  surfaceDetail = max(max(surfaceColor.r, surfaceColor.g), surfaceColor.b);
+  surfaceColor = surfaceDetail > 0.0001f ? surfaceColor / surfaceDetail : vec3(0.0f);
+  return coverage > 0.001f;
+}
+
+bool sampleMoon0TextureSprite(
+  vec3 viewDir,
+  vec3 moonDir,
+  AtmosphereArgs args,
+  out float diskX,
+  out float diskY,
+  out float normalizedAngle,
+  out float textureCoverage,
+  out float surfaceDetail,
+  out vec3 surfaceColor
+) {
+  diskX = 0.0f;
+  diskY = 0.0f;
+  normalizedAngle = 0.0f;
+  textureCoverage = 0.0f;
+  surfaceDetail = 1.0f;
+  surfaceColor = vec3(1.0f, 1.0f, 1.0f);
+
+  vec2 uv;
+  vec2 spriteCoord;
+  float edgeCoverage;
+  if (!computeCelestialSpriteUv(viewDir, moonDir, args.celestialTextureAngularRadius, uv, spriteCoord, edgeCoverage)) {
+    return false;
+  }
+
+  vec4 texel = AtmosphereMoon0Texture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
+  textureCoverage = celestialTextureCoverage(texel, edgeCoverage);
+  if (textureCoverage <= 0.001f) {
+    return false;
+  }
+
+  diskX = spriteCoord.x;
+  diskY = spriteCoord.y;
+  normalizedAngle = saturate(max(abs(diskX), abs(diskY)));
+  surfaceColor = max(texel.rgb, vec3(0.0f));
+  surfaceDetail = max(max(surfaceColor.r, surfaceColor.g), surfaceColor.b);
+  surfaceColor = surfaceDetail > 0.0001f ? surfaceColor / surfaceDetail : vec3(0.0f);
+  return true;
+}
+
 // Render moon disk for moonIdx in args.moons[]. Returns radiance contribution
 // for this pixel and writes diskCoverage in [0,1] indicating disk opacity at
 // this view direction. Caller composites moons over the night sky using
 // `radiance = mix(radiance, moonContrib, coverage)` so opaque parts of the
 // disk replace the background (atmosphere + stars) cleanly.
-vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float diskCoverage) {
+vec3 evalMoonDiskLegacy(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float diskCoverage) {
   diskCoverage = 0.0f;
   if (moonIdx >= MAX_MOONS) return vec3(0.0f);
 
@@ -626,20 +788,29 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
   float illumination = getPhaseIllumination(m.phase, diskX, diskY);
   float diffuse = 0.7f + 0.3f * (1.0f - normalizedAngle);
 
-  // Surface shading dispatched by style preset
   float surfaceDetail = 1.0f;
   vec3 surfaceColor = m.color;
-  switch (m.surfaceStyle) {
-  case 0u:
-    computeRockySurfaceDetail(diskX, diskY, m, surfaceDetail, surfaceColor);
-    break;
-  case 1u:
-    computeVolcanicSurfaceDetail(diskX, diskY, m, surfaceDetail, surfaceColor);
-    break;
-  default:
-    surfaceDetail = 1.0f;
-    surfaceColor = m.color;
-    break;
+  bool sampledVanillaMoon = false;
+  if (moonIdx == 0u && celestialTextureFlagEnabled(args.celestialTextureFlags, CELESTIAL_TEXTURE_FLAG_MOON0)) {
+    sampledVanillaMoon = sampleMoon0TextureSurface(diskX, diskY, surfaceDetail, surfaceColor);
+    if (sampledVanillaMoon) {
+      surfaceColor *= m.color;
+    }
+  }
+
+  if (!sampledVanillaMoon) {
+    switch (m.surfaceStyle) {
+    case 0u:
+      computeRockySurfaceDetail(diskX, diskY, m, surfaceDetail, surfaceColor);
+      break;
+    case 1u:
+      computeVolcanicSurfaceDetail(diskX, diskY, m, surfaceDetail, surfaceColor);
+      break;
+    default:
+      surfaceDetail = 1.0f;
+      surfaceColor = m.color;
+      break;
+    }
   }
 
   // Phase 2 (2026-05-08): unified physical irradiance scaffold.
@@ -671,6 +842,61 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
   vec3 darkRadiance = sharedFactor * m.darkSideBrightness * limbDarkening;
 
   // Blend lit and dark by phase illumination
+  vec3 moonRadiance = mix(darkRadiance, litRadiance, illumination);
+  return max(moonRadiance, vec3(0.0f));
+}
+
+vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float diskCoverage) {
+  diskCoverage = 0.0f;
+
+  const bool useMoon0TextureSprite =
+    moonIdx == 0u && celestialTextureFlagEnabled(args.celestialTextureFlags, CELESTIAL_TEXTURE_FLAG_MOON0);
+  if (!useMoon0TextureSprite) {
+    return evalMoonDiskLegacy(viewDir, moonIdx, args, diskCoverage);
+  }
+
+  MoonParams m = args.moons[moonIdx];
+  if (m.enabled < 0.5f) {
+    return vec3(0.0f);
+  }
+
+  vec3 moonDir = normalize(m.direction);
+  if (dot(moonDir, moonDir) < 0.5f) {
+    moonDir = normalize(vec3(0.5f, 0.7f, 0.5f));
+  }
+
+  float diskX = 0.0f;
+  float diskY = 0.0f;
+  float normalizedAngle = 0.0f;
+  float textureCoverage = 0.0f;
+  float surfaceDetail = 1.0f;
+  vec3 surfaceColor = m.color;
+  const bool sampledVanillaMoon = sampleMoon0TextureSprite(
+    viewDir,
+    moonDir,
+    args,
+    diskX,
+    diskY,
+    normalizedAngle,
+    textureCoverage,
+    surfaceDetail,
+    surfaceColor);
+  if (!sampledVanillaMoon) {
+    return vec3(0.0f);
+  }
+
+  diskCoverage = textureCoverage;
+  surfaceColor *= m.color;
+
+  float limbDarkening = 1.0f - 0.3f * normalizedAngle * normalizedAngle;
+  limbDarkening = max(limbDarkening, 0.0f);
+
+  float illumination = getPhaseIllumination(m.phase, diskX, diskY);
+  float diffuse = 0.7f + 0.3f * (1.0f - normalizedAngle);
+
+  vec3 sharedFactor = computeMoonSharedFactor(m, args, surfaceColor);
+  vec3 litRadiance = sharedFactor * surfaceDetail * diffuse * limbDarkening;
+  vec3 darkRadiance = sharedFactor * m.darkSideBrightness * limbDarkening;
   vec3 moonRadiance = mix(darkRadiance, litRadiance, illumination);
   return max(moonRadiance, vec3(0.0f));
 }
@@ -769,7 +995,11 @@ vec3 evalSkyRadiance(
   //   - stars are held aside and composited AFTER the cloud composite below
   //     using pow(cloud_T, starCloudExtinctionPower) so HDR point-stars die
   //     through cumulus cores instead of pinpointing through them.
-  // Note: Sun disk rendering removed - direct lighting handles sun contribution.
+  {
+    float sunCoverage = 0.0f;
+    vec3 sunSprite = evalSunTextureSprite(viewDirYUp, args, sunCoverage);
+    radiance = mix(radiance, sunSprite, sunCoverage);
+  }
   vec3 starLayer    = vec3(0.0f);
   vec3 airglowLayer = vec3(0.0f);
   evalNightSky(viewDirYUp, args, starLayer, airglowLayer);

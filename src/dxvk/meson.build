@@ -236,6 +236,8 @@ dxvk_src = files([
   'rtx_render/rtx_fork_capture.cpp',
   'rtx_render/rtx_fork_camera_origin.cpp',
   'rtx_render/rtx_fork_camera_origin.h',
+  'rtx_render/rtx_fork_celestial_textures.cpp',
+  'rtx_render/rtx_fork_celestial_textures.h',
   'rtx_render/rtx_fork_fsr.cpp',
   'rtx_render/rtx_fork_fsr.h',
   'rtx_render/rtx_fork_fsr_framegen.cpp',

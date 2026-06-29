@@ -200,3 +200,11 @@ SamplerState AtmosphereSkyViewSampler;
 // (REPEAT-U wraps the azimuth seam, CLAMP-V pins the horizon/zenith rows).
 layout(binding = BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
 Texture2D<float4> AtmosphereCloudSecondaryLut;
+layout(binding = BINDING_ATMOSPHERE_SUN_TEXTURE)
+Texture2D<float4> AtmosphereSunTexture;
+
+layout(binding = BINDING_ATMOSPHERE_MOON0_TEXTURE)
+Texture2D<float4> AtmosphereMoon0Texture;
+
+layout(binding = BINDING_ATMOSPHERE_CELESTIAL_TEXTURE_SAMPLER)
+SamplerState AtmosphereCelestialTextureSampler;

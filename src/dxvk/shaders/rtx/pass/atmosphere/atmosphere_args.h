@@ -642,4 +642,10 @@ struct AtmosphereArgs {
                                 // any further growth needs a new full
                                 // 16-byte row (see the CB-alignment
                                 // discipline note at the top).
+
+  // Celestial texture support (fork)
+  float celestialTextureAngularRadius;
+  uint celestialTextureFlags;
+  float celestialTextureBrightness;
+  uint padCelestialTexture0; // pad to 16 bytes
 };
