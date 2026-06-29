@@ -121,6 +121,16 @@ exe = executable('test_atmosphere_sky_indirect_scale',
 test('test_atmosphere_sky_indirect_scale', exe, env: test_env)
 tests += exe
 
+exe = executable('test_atmosphere_celestial_textures',
+  files('test_atmosphere_celestial_textures.cpp',
+        '../../../src/dxvk/rtx_render/rtx_fork_celestial_textures.cpp'),
+  include_directories : test_include_path,
+  dependencies : test_unit_deps,
+  win_subsystem : 'console',
+  override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_atmosphere_celestial_textures', exe, env: test_env)
+tests += exe
+
 exe = executable('test_external_camera_origin',  files('test_external_camera_origin.cpp'), include_directories : [test_include_path, remix_api_include_path], dependencies : test_unit_deps, link_with: [ dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_external_camera_origin', exe, env: test_env)
 tests += exe

@@ -750,4 +750,10 @@ struct AtmosphereArgs {
   // camera-fitted geometry haze volume.
   float aerialPerspectiveWorldUnitsPerKm;
   float padAerial8;
+
+  // Celestial texture support (fork)
+  float celestialTextureAngularRadius;
+  uint celestialTextureFlags;
+  float celestialTextureBrightness;
+  uint padCelestialTexture0; // pad to 16 bytes
 };

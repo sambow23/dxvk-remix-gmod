@@ -24,8 +24,10 @@
 #include "rtx_resources.h"
 #include "rtx_mipmap.h"
 #include "rtx_common_object.h"
+#include "rtx_texture.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
 #include "rtx_option.h"
+#include <string>
 
 #include <atomic>
 
@@ -95,6 +97,11 @@ public:
 
   // 256x128 RGBA16F dome LUT baked per frame; supplies clouds to secondary rays (indirect/PSR/reflection).
   const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
+
+  void setCelestialTexturePaths(const std::string& sunPath, const std::string& moon0Path);
+  DxvkImageView* getSunTextureView() const;
+  DxvkImageView* getMoon0TextureView() const;
+  uint32_t getCelestialTextureFlags() const;
 
   // Recreates the cloud render RT on resize; cheap when extent is unchanged.
   void ensureCloudRenderRT(Rc<DxvkContext> ctx, const VkExtent2D& downscaleExtent);
@@ -254,6 +261,19 @@ public:
                "0 = physical (use sunSize / 2, so shadow softness tracks the visible disc). When > 0 it "
                "overrides the sun light's half-angle WITHOUT changing the visible sun disc — larger = "
                "softer penumbra, for artistic soft shadows under a small sun.");
+    RTX_OPTION_ARGS("rtx.atmosphere", float, celestialTextureSizeDeg, 10.0f,
+               "Visual angular diameter, in degrees, for vanilla sun/moon texture sprites. "
+               "Only affects loaded celestial textures; physical sun size, distant lights, "
+               "and shadow softness are unchanged.",
+      args.minValue = 0.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, celestialTextureBrightness, 1.0f,
+               "Artistic brightness multiplier for vanilla sun/moon texture sprites. "
+               "Only affects visible texture sprites; sky scattering, clouds, NEE, and "
+               "distant lights are unchanged.",
+      args.minValue = 0.0f);
+    RTX_OPTION("rtx.atmosphere", bool, celestialTextureNearestFiltering, true,
+               "Uses nearest filtering for vanilla sun/moon texture sprites when true, preserving pixel-art edges. "
+               "Set to false to use linear filtering.");
     RTX_OPTION("rtx.atmosphere", float, sunIntensity, 1.0f, "Strength of Sun.");
     RTX_OPTION("rtx.atmosphere", float, sunElevation, 15.0f,
                "Sun elevation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
@@ -1181,6 +1201,13 @@ private:
   VkExtent2D          m_cloudRenderFullExtent = { 0u, 0u };
   RtxMipmap::Resource m_cloudSecondaryLut;
   Resources::Resource m_cloudPlacementMap;
+
+  std::string m_sunTexturePath;
+  std::string m_moon0TexturePath;
+  TextureRef m_sunTexture;
+  TextureRef m_moon0Texture;
+  std::string m_warnedSunTextureLoadFailurePath;
+  std::string m_warnedMoon0TextureLoadFailurePath;
 
   Vector3  m_cloudRenderForwardYUp { 0.0f, 0.0f, 1.0f };
   Vector3  m_cloudRenderRightYUp   { 1.0f, 0.0f, 0.0f };

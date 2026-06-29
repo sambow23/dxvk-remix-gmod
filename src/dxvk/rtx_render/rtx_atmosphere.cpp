@@ -25,12 +25,16 @@
 #include "dxvk_device.h"
 #include "dxvk_context.h"
 #include "rtx_options.h"
+#include "rtx_asset_data_manager.h"
 #include "rtx_context.h"
+#include "rtx_fork_celestial_textures.h"
+#include "rtx_fork_game_state.h"
 #include "rtx_lights.h"
 #include "rtx_light_manager.h"
 #include "rtx_camera.h"
 #include "rtx_global_volumetrics.h"
 #include "rtx_render/rtx_shader_manager.h"
+#include "rtx_texture_manager.h"
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/atmosphere/transmittance_lut_binding_indices.h"
 #include "rtx/pass/atmosphere/multiscattering_lut_binding_indices.h"
@@ -56,6 +60,8 @@
 #include <cstring>
 #include <fstream>
 #include <chrono>
+#include "../../util/log/log.h"
+#include "../../util/util_string.h"
 
 namespace dxvk {
   namespace {
@@ -274,6 +280,44 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
 }
 
 namespace {
+  TextureRef loadCelestialTexture(
+      DxvkDevice* device,
+      const std::string& path,
+      const char* label,
+      std::string& warnedFailurePath) {
+    if (path.empty()) {
+      return {};
+    }
+
+    Rc<AssetData> assetData = AssetDataManager::get().findAsset(path);
+    if (assetData == nullptr) {
+      if (warnedFailurePath != path) {
+        warnedFailurePath = path;
+        Logger::warn(str::format("Atmosphere ", label, " texture asset not found: ", path));
+      }
+      return {};
+    }
+
+    Rc<ManagedTexture> texture = device->getCommon()->getTextureManager().preloadTextureAsset(
+        assetData,
+        ColorSpace::AUTO,
+        true);
+    if (texture == nullptr) {
+      if (warnedFailurePath != path) {
+        warnedFailurePath = path;
+        Logger::warn(str::format("Atmosphere ", label, " texture failed to preload: ", path));
+      }
+      return {};
+    }
+
+    warnedFailurePath.clear();
+    return TextureRef(texture);
+  }
+
+  // Helper: populate one MoonParams from the indexed RTX_OPTIONs for moon `i`.
+  // RTX_OPTION accessors are static methods generated per-option, so we dispatch
+  // by index with an inline switch. MAX_MOONS is small (4); deliberate simple
+  // repetition is clearer than an indirection layer here.
   void populateMoonParams(MoonParams& m, uint32_t i) {
     bool     enabled         = false;
     float    elevationDeg    = 0.0f;
@@ -383,6 +427,9 @@ namespace {
     args.cameraRight                 = vec3(0.0f, 0.0f, 0.0f);
     args.cameraUp                    = vec3(0.0f, 0.0f, 0.0f);
     args.skyIndirectRadianceScale    = 0.0f;
+    // Lightning flash (fork — 2026-07-14): per-frame animated, feeds only the
+    // view-path cloud march + the scene light sync — never a LUT bake. Without
+    // this every flash frame would invalidate the sky-LUT cache key.
     args.lightningStrikePosKm        = vec3(0.0f, 0.0f, 0.0f);
     args.lightningFlashIntensity     = 0.0f;
     args.lightningEnvelope           = 0.0f;
@@ -406,6 +453,9 @@ namespace {
     args.milkyWayDustAmount          = 0.0f;
     args.milkyWayCoreColor           = vec3(0.0f, 0.0f, 0.0f);
     args.milkyWayDustColor           = vec3(0.0f, 0.0f, 0.0f);
+    args.celestialTextureFlags       = 0u;
+    args.celestialTextureAngularRadius = 0.0f;
+    args.celestialTextureBrightness  = 0.0f;
   }
 
   float quantizeDirComponent(float v, float stepRad) {
@@ -572,6 +622,37 @@ void RtxAtmosphere::computeTimeCycleSunAngles(float timeOfDayHours, float& outEl
   outAzimuthDeg = azimuthRad / dxvk::kDegreesToRadians + RtxAtmosphere::northOffsetDegrees();
 }
 
+void RtxAtmosphere::setCelestialTexturePaths(const std::string& sunPath, const std::string& moon0Path) {
+  if (sunPath != m_sunTexturePath) {
+    m_sunTexturePath = sunPath;
+    m_sunTexture = loadCelestialTexture(m_device, m_sunTexturePath, "sun", m_warnedSunTextureLoadFailurePath);
+  }
+
+  if (moon0Path != m_moon0TexturePath) {
+    m_moon0TexturePath = moon0Path;
+    m_moon0Texture = loadCelestialTexture(m_device, m_moon0TexturePath, "moon0", m_warnedMoon0TextureLoadFailurePath);
+  }
+}
+
+DxvkImageView* RtxAtmosphere::getSunTextureView() const {
+  return m_sunTexture.getImageView();
+}
+
+DxvkImageView* RtxAtmosphere::getMoon0TextureView() const {
+  return m_moon0Texture.getImageView();
+}
+
+uint32_t RtxAtmosphere::getCelestialTextureFlags() const {
+  uint32_t flags = 0u;
+  if (getSunTextureView() != nullptr) {
+    flags |= fork_celestial_textures::kCelestialTextureFlagSun;
+  }
+  if (getMoon0TextureView() != nullptr) {
+    flags |= fork_celestial_textures::kCelestialTextureFlagMoon0;
+  }
+  return flags;
+}
+
 AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   AtmosphereArgs args = {};
 
@@ -677,6 +758,11 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.starAxisRotation  = RtxAtmosphere::starAxisRotation();
   // (nubis3SharpenStrength — the former pad3 slot — is filled in the cloud
   // block below alongside the other Nubis3 fields.)
+  // Celestial texture appearance is composited after the LUT bake and must not
+  // invalidate the atmosphere cache.
+  args.celestialTextureFlags = 0u;
+  args.celestialTextureAngularRadius = 0.0f;
+  args.celestialTextureBrightness = 0.0f;
 
   args.starPsfSharpness            = RtxAtmosphere::starPsfSharpness();
   args.starCloudExtinctionPower    = RtxAtmosphere::starCloudExtinctionPower();
@@ -706,6 +792,10 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.surfaceMoonBrightness           = RtxAtmosphere::surfaceMoonBrightness();
   args.cloudMoonBrightness             = RtxAtmosphere::cloudMoonBrightness();
   args.haloMoonBrightness              = RtxAtmosphere::haloMoonBrightness();
+  args.celestialTextureFlags           = getCelestialTextureFlags();
+  args.celestialTextureAngularRadius   =
+    std::max(RtxOptions::celestialTextureSizeDeg(), 0.0f) * dxvk::kDegreesToRadians * 0.5f;
+  args.celestialTextureBrightness      = std::max(RtxOptions::celestialTextureBrightness(), 0.0f);
   // Perf-bisect shader gate (fork — 2026-06-11, diagnostic). Packed into the
   // former padMoonNee2 slot. Only bit 1 (= flat sky miss) remains; bit 0
   // (atmosphere NEE) and bit 2 (bespoke-NEE skip for directional lights) were
@@ -2583,6 +2673,12 @@ AtmosphereArgs RtxAtmosphere::updateFrame(RtxContext& ctx,
 
   initialize(&ctx);
 
+  const auto celestialTexturePaths = fork_celestial_textures::readCelestialTexturePaths(
+    [](std::string_view key, std::string& value) {
+      return fork_game_state::GameStateStore::get().tryGet(std::string(key), value);
+    });
+  setCelestialTexturePaths(celestialTexturePaths.sun, celestialTexturePaths.moon0);
+
   // Integrators are frame state, so advance them exactly once before any LUT
   // generation or AtmosphereArgs reads.
   advanceCloudMotion(deltaTimeSeconds);
@@ -2663,6 +2759,16 @@ void RtxAtmosphere::bindResources(RtxContext& ctx) {
     ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, m_cloudSecondaryLut.view, nullptr);
   }
 
+  Rc<DxvkImageView> fallbackTexture = ctx.getResourceManager().getWhiteTexture(&ctx);
+  ctx.bindResourceView(
+    BINDING_ATMOSPHERE_SUN_TEXTURE,
+    getSunTextureView() != nullptr ? getSunTextureView() : fallbackTexture.ptr(),
+    nullptr);
+  ctx.bindResourceView(
+    BINDING_ATMOSPHERE_MOON0_TEXTURE,
+    getMoon0TextureView() != nullptr ? getMoon0TextureView() : fallbackTexture.ptr(),
+    nullptr);
+
   onFrameAdvanceForCloudHistory(static_cast<uint32_t>(ctx.getDevice()->getCurrentFrameId()));
   const VkExtent3D downscaledExtent = ctx.getResourceManager().getDownscaleDimensions();
   ensureCloudHistoryResources(&ctx, downscaledExtent);
@@ -2711,6 +2817,21 @@ void RtxAtmosphere::bindResources(RtxContext& ctx) {
     samplerInfo.mipmapLodMax = VK_LOD_CLAMP_NONE;
     Rc<DxvkSampler> skyViewSampler = ctx.getDevice()->createSampler(samplerInfo);
     ctx.bindResourceSampler(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER, skyViewSampler);
+  }
+
+  {
+    DxvkSamplerCreateInfo samplerInfo = {};
+    const VkFilter filter = RtxAtmosphere::celestialTextureNearestFiltering()
+      ? VK_FILTER_NEAREST
+      : VK_FILTER_LINEAR;
+    samplerInfo.magFilter = filter;
+    samplerInfo.minFilter = filter;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    Rc<DxvkSampler> celestialSampler = ctx.getDevice()->createSampler(samplerInfo);
+    ctx.bindResourceSampler(BINDING_ATMOSPHERE_CELESTIAL_TEXTURE_SAMPLER, celestialSampler);
   }
 }
 
