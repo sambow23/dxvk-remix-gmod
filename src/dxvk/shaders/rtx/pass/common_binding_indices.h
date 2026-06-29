@@ -132,12 +132,15 @@
 // Drives the per-column cloud model in the density samplers (and their
 // shadow-march taps). Sampled with the linear/REPEAT cloud noise sampler.
 #define BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP 216
+#define BINDING_ATMOSPHERE_SUN_TEXTURE 217
+#define BINDING_ATMOSPHERE_MOON0_TEXTURE 218
+#define BINDING_ATMOSPHERE_CELESTIAL_TEXTURE_SAMPLER 219
 
 // Fork atmosphere/cloud bindings occupy a contiguous range ABOVE COMMON_MAX_BINDING
 // (which only covers the base common bindings). Expose the range so passes that
 // also bind their own resources (e.g. sparse rendering) can assert no overlap.
 #define BINDING_ATMOSPHERE_MIN                   BINDING_ATMOSPHERE_TRANSMITTANCE_LUT
-#define BINDING_ATMOSPHERE_MAX                   BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP
+#define BINDING_ATMOSPHERE_MAX                   BINDING_ATMOSPHERE_CELESTIAL_TEXTURE_SAMPLER
 
 #define COMMON_MAX_BINDING                       BINDING_SAMPLER_READBACK_BUFFER
 #define COMMON_NUM_BINDINGS                      (COMMON_MAX_BINDING + 1)
@@ -202,6 +205,9 @@
   TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)                     \
   SAMPLER(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)                      \
   TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)                 \
-  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
+  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)                 \
+  TEXTURE2D(BINDING_ATMOSPHERE_SUN_TEXTURE)                         \
+  TEXTURE2D(BINDING_ATMOSPHERE_MOON0_TEXTURE)                       \
+  SAMPLER(BINDING_ATMOSPHERE_CELESTIAL_TEXTURE_SAMPLER)
 
 #endif

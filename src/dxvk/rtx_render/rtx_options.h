@@ -1240,6 +1240,19 @@ namespace dxvk {
                "0 = physical (use sunSize / 2, so shadow softness tracks the visible disc). When > 0 it "
                "overrides the sun light's half-angle WITHOUT changing the visible sun disc — larger = "
                "softer penumbra, for artistic soft shadows under a small sun.");
+    RTX_OPTION_ARGS("rtx.atmosphere", float, celestialTextureSizeDeg, 10.0f,
+               "Visual angular diameter, in degrees, for vanilla sun/moon texture sprites. "
+               "Only affects loaded celestial textures; physical sun size, distant lights, "
+               "and shadow softness are unchanged.",
+      args.minValue = 0.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, celestialTextureBrightness, 1.0f,
+               "Artistic brightness multiplier for vanilla sun/moon texture sprites. "
+               "Only affects visible texture sprites; sky scattering, clouds, NEE, and "
+               "distant lights are unchanged.",
+      args.minValue = 0.0f);
+    RTX_OPTION("rtx.atmosphere", bool, celestialTextureNearestFiltering, true,
+               "Uses nearest filtering for vanilla sun/moon texture sprites when true, preserving pixel-art edges. "
+               "Set to false to use linear filtering.");
     RTX_OPTION("rtx.atmosphere", float, sunIntensity, 1.0f, "Strength of Sun.");
     RTX_OPTION("rtx.atmosphere", float, sunElevation, 15.0f,
                "Sun elevation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");

@@ -19,6 +19,7 @@
 #include "rtx_scene_manager.h"       // getLightManager (directional sun/moon injection)
 #include "rtx_light_manager.h"       // createExternallyTrackedLight / updateExternallyTrackedLight
 #include "rtx_lights.h"              // RtDistantLight, RtLight
+#include "rtx_fork_celestial_textures.h"
 #include "rtx_fork_game_state.h"
 #include "rtx_options.h"
 #include "rtx/pass/raytrace_args.h"
@@ -353,6 +354,14 @@ namespace fork_hooks {
       }
     }
 
+    void applyGameDrivenCelestialTexturePaths(RtxAtmosphere& atmosphere) {
+      const auto paths = fork_celestial_textures::readCelestialTexturePaths(
+          [](std::string_view key, std::string& value) {
+            return fork_game_state::GameStateStore::get().tryGet(std::string(key), value);
+          });
+      atmosphere.setCelestialTexturePaths(paths.sun, paths.moon0);
+    }
+
   }
 
   // ---------------------------------------------------------------------------
@@ -421,6 +430,7 @@ namespace fork_hooks {
       // Apply any plugin-pushed moon pose/phase overrides before the frame's
       // atmosphere constants are built from the option layer.
       applyGameDrivenMoonState();
+      applyGameDrivenCelestialTexturePaths(*ctx.m_atmosphere);
 
       // Unified cloud-motion integrator (fork — 2026-06-21). Advance the wind /
       // morph / boil accumulators exactly once per frame, before getAtmosphereArgs
@@ -540,6 +550,8 @@ namespace fork_hooks {
     auto cloudRenderRT            = ctx.m_atmosphere->getCloudRenderRT();  // Fork: Nubis Cubed screen-space cloud render (C4)
     auto cloudSecondaryLut        = ctx.m_atmosphere->getCloudSecondaryLut();  // Fork: secondary-ray cloud dome LUT (perf, 2026-06-10)
     auto cloudPlacementMap        = ctx.m_atmosphere->getCloudPlacementMap();  // Fork: per-column cloud placement map (2026-06-11)
+    DxvkImageView* sunTextureView = ctx.m_atmosphere->getSunTextureView();
+    DxvkImageView* moon0TextureView = ctx.m_atmosphere->getMoon0TextureView();
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -574,6 +586,17 @@ namespace fork_hooks {
     }
     if (cloudPlacementMap.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP, cloudPlacementMap.view, nullptr);
+    }
+    {
+      Rc<DxvkImageView> fallbackTexture = ctx.getResourceManager().getWhiteTexture(&ctx);
+      ctx.bindResourceView(
+          BINDING_ATMOSPHERE_SUN_TEXTURE,
+          sunTextureView != nullptr ? sunTextureView : fallbackTexture.ptr(),
+          nullptr);
+      ctx.bindResourceView(
+          BINDING_ATMOSPHERE_MOON0_TEXTURE,
+          moon0TextureView != nullptr ? moon0TextureView : fallbackTexture.ptr(),
+          nullptr);
     }
 
     // Cloud history (fork). Allocate at the current downscaled render extent
@@ -647,6 +670,19 @@ namespace fork_hooks {
       samplerInfo.mipmapLodMax = VK_LOD_CLAMP_NONE;
       Rc<DxvkSampler> skyViewSampler = ctx.m_device->createSampler(samplerInfo);
       ctx.bindResourceSampler(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER, skyViewSampler);
+    }
+
+    {
+      DxvkSamplerCreateInfo samplerInfo = {};
+      const VkFilter celestialTextureFilter = RtxOptions::celestialTextureNearestFiltering() ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+      samplerInfo.magFilter    = celestialTextureFilter;
+      samplerInfo.minFilter    = celestialTextureFilter;
+      samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+      samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      Rc<DxvkSampler> celestialSampler = ctx.m_device->createSampler(samplerInfo);
+      ctx.bindResourceSampler(BINDING_ATMOSPHERE_CELESTIAL_TEXTURE_SAMPLER, celestialSampler);
     }
   }
 
@@ -856,6 +892,21 @@ namespace fork_hooks {
             "degrees). 0 = physical: track Sun Size / 2. When > 0 it overrides the "
             "half-angle WITHOUT changing the visible sun disc \xe2\x80\x94 larger = softer "
             "penumbra, for soft shadows under a small, crisp sun.");
+
+        RemixGui::DragFloat("Texture Size", &RtxOptions::celestialTextureSizeDegObject(), 0.01f, 0.0f, 30.0f, "%.2f\xc2\xb0", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Visual angular diameter for loaded vanilla sun/moon texture sprites. "
+            "Does not change physical Sun Size, lighting, or shadow softness.");
+
+        RemixGui::DragFloat("Texture Brightness", &RtxOptions::celestialTextureBrightnessObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Visible brightness multiplier for loaded vanilla sun/moon texture sprites. "
+            "Does not change sky scattering, clouds, NEE, or distant lights.");
+
+        RemixGui::Checkbox("Texture Nearest Filtering", &RtxOptions::celestialTextureNearestFilteringObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Use nearest filtering for loaded vanilla sun/moon texture sprites. "
+            "Keeps Minecraft pixel art crisp; disable for bilinear smoothing.");
 
         RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");

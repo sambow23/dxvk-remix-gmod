@@ -99,7 +99,7 @@ struct AtmosphereArgs {
   float starRotation;       // Sidereal angle, degrees [0, 360]
   float starAxisElevation;  // Celestial pole elevation from horizon, degrees
   float starAxisRotation;   // Celestial pole azimuth, degrees
-  float pad3;               // 16-byte alignment
+  float celestialTextureAngularRadius; // Visual half-size of square texture sprites, radians
 
   // ----- Star anti-aliasing + cloud interaction (fork) -----
   //
@@ -181,9 +181,11 @@ struct AtmosphereArgs {
   float haloMoonBrightness;               // Per-path stylistic multiplier on disk halo Gaussian glow (Phase 3)
   // Reclaimable pads — were sunShadowMaxSamples / moonShadowMaxSamples (the
   // bespoke sun/moon NEE soft-shadow ray caps), removed 2026-06-21 with that NEE
-  // path. Kept in the former padMoonNee0/1 slots so the CB layout is unchanged.
-  uint  pad_sunShadowMaxSamples;
-  uint  pad_moonShadowMaxSamples;
+  // path. celestialTextureFlags reuses the former sunShadowMaxSamples slot and
+  // celestialTextureBrightness reuses the former moonShadowMaxSamples slot so
+  // the CB layout is unchanged.
+  uint  celestialTextureFlags;         // bit 0 = sun texture valid, bit 1 = moon0 texture valid
+  float celestialTextureBrightness;    // Visible texture sprite brightness multiplier
   // Perf-bisect shader toggle (fork — 2026-06-11, diagnostic). Rides the former
   // padMoonNee2 slot; only bit 1 remains in use:
   //   bit 1: flat sky miss — evalSkyRadiance returns a constant grey immediately,

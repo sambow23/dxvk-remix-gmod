@@ -23,8 +23,11 @@
 #include "dxvk_device.h"
 #include "dxvk_context.h"
 #include "rtx_options.h"
+#include "rtx_asset_data_manager.h"
 #include "rtx_context.h"
+#include "rtx_fork_celestial_textures.h"
 #include "rtx_render/rtx_shader_manager.h"
+#include "rtx_texture_manager.h"
 #include "rtx/pass/common_binding_indices.h"
 #include <rtx_shaders/transmittance_lut.h>
 #include <rtx_shaders/multiscattering_lut.h>
@@ -41,6 +44,8 @@
 #include <cstring>
 #include <fstream>
 #include <chrono>
+#include "../../util/log/log.h"
+#include "../../util/util_string.h"
 
 namespace dxvk {
   // Shader definitions for atmosphere LUT generation
@@ -256,6 +261,40 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
 }
 
 namespace {
+  TextureRef loadCelestialTexture(
+      DxvkDevice* device,
+      const std::string& path,
+      const char* label,
+      std::string& warnedFailurePath) {
+    if (path.empty()) {
+      return {};
+    }
+
+    Rc<AssetData> assetData = AssetDataManager::get().findAsset(path);
+    if (assetData == nullptr) {
+      if (warnedFailurePath != path) {
+        warnedFailurePath = path;
+        Logger::warn(str::format("Atmosphere ", label, " texture asset not found: ", path));
+      }
+      return {};
+    }
+
+    Rc<ManagedTexture> texture = device->getCommon()->getTextureManager().preloadTextureAsset(
+        assetData,
+        ColorSpace::AUTO,
+        true);
+    if (texture == nullptr) {
+      if (warnedFailurePath != path) {
+        warnedFailurePath = path;
+        Logger::warn(str::format("Atmosphere ", label, " texture failed to preload: ", path));
+      }
+      return {};
+    }
+
+    warnedFailurePath.clear();
+    return TextureRef(texture);
+  }
+
   // Helper: populate one MoonParams from the indexed RTX_OPTIONs for moon `i`.
   // RTX_OPTION accessors are static methods generated per-option, so we dispatch
   // by index with an inline switch. MAX_MOONS is small (4); deliberate simple
@@ -361,6 +400,9 @@ namespace {
     args.cloudRenderUpYUp            = vec3(0.0f, 0.0f, 0.0f);
     args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
     args.skyIndirectRadianceScale    = 0.0f;
+    args.celestialTextureFlags       = 0u;
+    args.celestialTextureAngularRadius = 0.0f;
+    args.celestialTextureBrightness  = 0.0f;
   }
 
   // Quantize one direction-vector component to the granularity step.
@@ -483,6 +525,37 @@ namespace {
   }
 } // anonymous namespace
 
+void RtxAtmosphere::setCelestialTexturePaths(const std::string& sunPath, const std::string& moon0Path) {
+  if (sunPath != m_sunTexturePath) {
+    m_sunTexturePath = sunPath;
+    m_sunTexture = loadCelestialTexture(m_device, m_sunTexturePath, "sun", m_warnedSunTextureLoadFailurePath);
+  }
+
+  if (moon0Path != m_moon0TexturePath) {
+    m_moon0TexturePath = moon0Path;
+    m_moon0Texture = loadCelestialTexture(m_device, m_moon0TexturePath, "moon0", m_warnedMoon0TextureLoadFailurePath);
+  }
+}
+
+DxvkImageView* RtxAtmosphere::getSunTextureView() const {
+  return m_sunTexture.getImageView();
+}
+
+DxvkImageView* RtxAtmosphere::getMoon0TextureView() const {
+  return m_moon0Texture.getImageView();
+}
+
+uint32_t RtxAtmosphere::getCelestialTextureFlags() const {
+  uint32_t flags = 0u;
+  if (getSunTextureView() != nullptr) {
+    flags |= fork_celestial_textures::kCelestialTextureFlagSun;
+  }
+  if (getMoon0TextureView() != nullptr) {
+    flags |= fork_celestial_textures::kCelestialTextureFlagMoon0;
+  }
+  return flags;
+}
+
 AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   AtmosphereArgs args = {};
 
@@ -577,7 +650,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.starRotation      = RtxOptions::starRotation();
   args.starAxisElevation = RtxOptions::starAxisElevation();
   args.starAxisRotation  = RtxOptions::starAxisRotation();
-  args.pad3              = 0.0f;
+  args.celestialTextureAngularRadius = 0.0f;
 
   args.starPsfSharpness            = RtxOptions::starPsfSharpness();
   args.starCloudExtinctionPower    = RtxOptions::starCloudExtinctionPower();
@@ -608,6 +681,10 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.surfaceMoonBrightness           = RtxOptions::surfaceMoonBrightness();
   args.cloudMoonBrightness             = RtxOptions::cloudMoonBrightness();
   args.haloMoonBrightness              = RtxOptions::haloMoonBrightness();
+  args.celestialTextureFlags           = getCelestialTextureFlags();
+  args.celestialTextureAngularRadius   =
+    std::max(RtxOptions::celestialTextureSizeDeg(), 0.0f) * kDegToRad * 0.5f;
+  args.celestialTextureBrightness      = std::max(RtxOptions::celestialTextureBrightness(), 0.0f);
   // Perf-bisect shader gate (fork — 2026-06-11, diagnostic). Packed into the
   // former padMoonNee2 slot. Only bit 1 (= flat sky miss) remains; bit 0
   // (atmosphere NEE) and bit 2 (bespoke-NEE skip for directional lights) were

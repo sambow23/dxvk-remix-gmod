@@ -25,7 +25,9 @@
 #include "rtx_mipmap.h"
 #include "rtx_common_object.h"
 #include "rtx_fast_noise.h"
+#include "rtx_texture.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
+#include <string>
 
 namespace dxvk {
 
@@ -163,6 +165,11 @@ public:
    * lighting).
    */
   const Resources::Resource& getCloudPlacementMap() const { return m_cloudPlacementMap; }
+
+  void setCelestialTexturePaths(const std::string& sunPath, const std::string& moon0Path);
+  DxvkImageView* getSunTextureView() const;
+  DxvkImageView* getMoon0TextureView() const;
+  uint32_t getCelestialTextureFlags() const;
 
   /**
    * \brief Ensure the cloud render RT exists at the requested downscale extent.
@@ -387,6 +394,13 @@ private:
   // Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
   // RGBA8, baked at init + on input change by dispatchCloudPlacementMapBake.
   Resources::Resource m_cloudPlacementMap;
+
+  std::string m_sunTexturePath;
+  std::string m_moon0TexturePath;
+  TextureRef m_sunTexture;
+  TextureRef m_moon0Texture;
+  std::string m_warnedSunTextureLoadFailurePath;
+  std::string m_warnedMoon0TextureLoadFailurePath;
 
   // Per-frame camera basis for cloud_render.comp.slang. Pushed via
   // setCloudRenderCameraBasis() from updateAtmosphereConstants before

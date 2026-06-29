@@ -213,3 +213,12 @@ Texture2D<float4> AtmosphereCloudSecondaryLut;
 // linear/REPEAT cloud noise sampler (BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER).
 layout(binding = BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
 Texture2D<float4> AtmosphereCloudPlacementMap;
+
+layout(binding = BINDING_ATMOSPHERE_SUN_TEXTURE)
+Texture2D<float4> AtmosphereSunTexture;
+
+layout(binding = BINDING_ATMOSPHERE_MOON0_TEXTURE)
+Texture2D<float4> AtmosphereMoon0Texture;
+
+layout(binding = BINDING_ATMOSPHERE_CELESTIAL_TEXTURE_SAMPLER)
+SamplerState AtmosphereCelestialTextureSampler;
