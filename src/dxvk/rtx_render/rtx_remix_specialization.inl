@@ -85,6 +85,7 @@ namespace pnext::detail {
     remixapi_LightInfoDistantEXT,
     remixapi_LightInfoDomeEXT,
     remixapi_LightInfoUSDEXT,
+    remixapi_LightInfoLocalOriginEXT,
     remixapi_LightInfo,
     remixapi_MeshInfo,
     remixapi_InstanceInfo,
@@ -113,6 +114,7 @@ namespace pnext::detail {
   template<> constexpr auto ToEnum< remixapi_LightInfoDistantEXT            > = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT;
   template<> constexpr auto ToEnum< remixapi_LightInfoDomeEXT               > = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DOME_EXT;
   template<> constexpr auto ToEnum< remixapi_LightInfoUSDEXT                > = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_USD_EXT;
+  template<> constexpr auto ToEnum< remixapi_LightInfoLocalOriginEXT        > = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_LOCAL_ORIGIN_EXT;
   template<> constexpr auto ToEnum< remixapi_LightInfo                      > = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
   template<> constexpr auto ToEnum< remixapi_MeshInfo                       > = REMIXAPI_STRUCT_TYPE_MESH_INFO;
   template<> constexpr auto ToEnum< remixapi_InstanceInfo                   > = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
@@ -139,6 +141,7 @@ namespace pnext::detail {
   template<>           struct Root< remixapi_LightInfoDistantEXT            >{ using Type = remixapi_LightInfo;                 };
   template<>           struct Root< remixapi_LightInfoDomeEXT               >{ using Type = remixapi_LightInfo;                 };
   template<>           struct Root< remixapi_LightInfoUSDEXT                >{ using Type = remixapi_LightInfo;                 };
+  template<>           struct Root< remixapi_LightInfoLocalOriginEXT        >{ using Type = remixapi_LightInfo;                 };
   template<>           struct Root< remixapi_InstanceInfoBoneTransformsEXT  >{ using Type = remixapi_InstanceInfo;              };
   template<>           struct Root< remixapi_InstanceInfoBlendEXT           >{ using Type = remixapi_InstanceInfo;              };
   template<>           struct Root< remixapi_InstanceInfoObjectPickingEXT   >{ using Type = remixapi_InstanceInfo;              };

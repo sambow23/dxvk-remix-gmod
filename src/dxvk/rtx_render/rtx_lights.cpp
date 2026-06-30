@@ -1012,6 +1012,10 @@ void RtLight::copyFrom(const RtLight& light) {
   }
   
   m_cachedInitialHash = light.m_cachedInitialHash;
+  m_externalStableHash = light.m_externalStableHash;
+  m_localWorldOrigin = light.m_localWorldOrigin;
+  m_hasExternalStableHash = light.m_hasExternalStableHash;
+  m_hasLocalWorldOrigin = light.m_hasLocalWorldOrigin;
   m_frameLastTouched = light.m_frameLastTouched;
   m_isInsideFrustum = light.m_isInsideFrustum;
   m_bufferIdx = light.m_bufferIdx;
@@ -1044,7 +1048,7 @@ void RtLight::copyFrom(const RtLight& light) {
 namespace {
   template<int RtLightSize> struct CheckRtLightSize {
     // The second line of the build error should contain the new size of RtLight in the template argument, i.e. `dxvk::CheckRtLightSize<newSize>`
-    static_assert(RtLightSize == 264, "RtLight size has changed.  Fix the copyFrom function above this message, then update the expected size.");
+    static_assert(RtLightSize == 288, "RtLight size has changed.  Fix the copyFrom function above this message, then update the expected size.");
   };
   CheckRtLightSize<sizeof(RtLight)> _rtLightSizeTest;
 }
@@ -1190,7 +1194,34 @@ Vector3 RtLight::getDirection() const {
   }
 }
 
+void RtLight::setExternalStableHash(XXH64_hash_t hash) {
+  if (hash == kEmptyHash) {
+    m_hasExternalStableHash = false;
+    m_externalStableHash = kEmptyHash;
+    return;
+  }
+
+  m_hasExternalStableHash = true;
+  m_externalStableHash = hash;
+  m_cachedInitialHash = hash;
+}
+
+void RtLight::setLocalWorldOrigin(const Vector3& origin) {
+  m_hasLocalWorldOrigin = true;
+  m_localWorldOrigin = origin;
+}
+
+bool RtLight::isLocalWorldOriginChanged(const RtLight& other) const {
+  return m_hasLocalWorldOrigin
+      && other.m_hasLocalWorldOrigin
+      && !(m_localWorldOrigin == other.m_localWorldOrigin);
+}
+
 XXH64_hash_t RtLight::getTransformedHash() const {
+  if (m_hasExternalStableHash) {
+    return m_externalStableHash;
+  }
+
   switch (m_type) {
   default:
     assert(false);

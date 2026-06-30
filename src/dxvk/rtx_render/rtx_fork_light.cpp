@@ -120,6 +120,10 @@ namespace fork_hooks {
   //   externalId — pass kInvalidExternallyTrackedLightId to skip id restore
   //               (hash-map / addExternalLight path).
   // ---------------------------------------------------------------------------
+  bool shouldCopyStaticLightForOriginHop(const RtLight& light, const RtLight& newLight) {
+    return light.isLocalWorldOriginChanged(newLight);
+  }
+
   void updateLightStaticSleep(
       RtLight* light,
       const RtLight& newLight,
@@ -127,13 +131,16 @@ namespace fork_hooks {
       uint64_t externalId) {
 
     const uint16_t bufferIdx = light->getBufferIdx();
+    const bool forceCopyForOriginHop = shouldCopyStaticLightForOriginHop(*light, newLight);
 
     if (!newLight.isDynamic && !LightManager::suppressLightKeeping()) {
       const uint32_t isStaticCount = light->isStaticCount;
 
       // If this light hasn't moved for N frames, put it to sleep to preserve
-      // temporal data
-      if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
+      // temporal data. Origin hops are a coordinate-system change rather than
+      // a logical light move, so keep the static counter but copy the new local
+      // position.
+      if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep() || forceCopyForOriginHop) {
         *light = newLight;
         light->setBufferIdx(bufferIdx);
         if (externalId != kInvalidExternallyTrackedLightId) {
