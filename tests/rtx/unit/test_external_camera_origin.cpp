@@ -26,6 +26,8 @@
 
 #include "../../../src/dxvk/rtx_render/rtx_fork_camera_origin.h"
 #include "../../../src/dxvk/rtx_render/rtx_fork_game_state.h"
+#include "../../../src/dxvk/rtx_render/rtx_fork_hooks.h"
+#include "../../../src/dxvk/rtx_render/rtx_lights.h"
 
 namespace dxvk {
   Logger Logger::s_instance("test_external_camera_origin.log");
@@ -89,6 +91,55 @@ void missingPreviousOriginDoesNotOffsetHistory() {
   require(offset == dxvk::Vector3(0.0f), "missing previous origin leaves history unshifted");
 }
 
+dxvk::RtLight makeSphereLight(const dxvk::Vector3& position) {
+  dxvk::RtLight light(dxvk::RtSphereLight(
+    position,
+    dxvk::Vector3(1.0f, 0.75f, 0.5f),
+    0.25f,
+    dxvk::RtLightShaping {}));
+  light.isDynamic = false;
+  return light;
+}
+
+void stableExternalHashSurvivesLocalPositionJump() {
+  constexpr XXH64_hash_t stableHash = 0x123456789abcdef0ull;
+
+  dxvk::RtLight before = makeSphereLight(dxvk::Vector3(5.0f, 2.0f, 9.0f));
+  before.setExternalStableHash(stableHash);
+  before.setLocalWorldOrigin(dxvk::Vector3(45056.0f, 0.0f, 49152.0f));
+
+  dxvk::RtLight after = makeSphereLight(dxvk::Vector3(-1019.0f, 2.0f, 9.0f));
+  after.setExternalStableHash(stableHash);
+  after.setLocalWorldOrigin(dxvk::Vector3(46080.0f, 0.0f, 49152.0f));
+
+  require(before.hasExternalStableHash(), "before light has stable external hash");
+  require(after.hasExternalStableHash(), "after light has stable external hash");
+  require(before.hasLocalWorldOrigin(), "before light has local world origin");
+  require(after.hasLocalWorldOrigin(), "after light has local world origin");
+  require(before.getInitialHash() == stableHash, "initial hash uses stable external hash");
+  require(before.getTransformedHash() == stableHash, "before transformed hash uses stable external hash");
+  require(after.getTransformedHash() == stableHash, "after transformed hash uses stable external hash");
+  require(before.getSphereLight().getHash() != after.getSphereLight().getHash(), "local shape hash changes across origin hop");
+  require(dxvk::fork_hooks::shouldCopyStaticLightForOriginHop(before, after), "origin hop forces static light copy");
+}
+
+void unchangedOriginDoesNotForceStaticCopy() {
+  dxvk::RtLight before = makeSphereLight(dxvk::Vector3(5.0f, 2.0f, 9.0f));
+  before.setLocalWorldOrigin(dxvk::Vector3(45056.0f, 0.0f, 49152.0f));
+
+  dxvk::RtLight after = makeSphereLight(dxvk::Vector3(5.0f, 2.0f, 9.0f));
+  after.setLocalWorldOrigin(dxvk::Vector3(45056.0f, 0.0f, 49152.0f));
+
+  require(!dxvk::fork_hooks::shouldCopyStaticLightForOriginHop(before, after), "unchanged origin does not force copy");
+}
+
+void missingOriginDoesNotForceStaticCopy() {
+  dxvk::RtLight before = makeSphereLight(dxvk::Vector3(5.0f, 2.0f, 9.0f));
+  dxvk::RtLight after = makeSphereLight(dxvk::Vector3(-1019.0f, 2.0f, 9.0f));
+
+  require(!dxvk::fork_hooks::shouldCopyStaticLightForOriginHop(before, after), "missing origin does not force copy");
+}
+
 } // anonymous namespace
 
 int main() {
@@ -98,6 +149,9 @@ int main() {
     invalidPublishedWorldOriginFallsBackToZero();
     calculatesPreviousHistoryOffsetAcrossOriginHops();
     missingPreviousOriginDoesNotOffsetHistory();
+    stableExternalHashSurvivesLocalPositionJump();
+    unchangedOriginDoesNotForceStaticCopy();
+    missingOriginDoesNotForceStaticCopy();
     std::cout << "All external camera origin tests passed" << std::endl;
   } catch (const std::exception& e) {
     std::cerr << e.what() << std::endl;

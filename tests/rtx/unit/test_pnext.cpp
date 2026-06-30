@@ -148,6 +148,34 @@ namespace pnext_test_app {
     }
   }
 
+  void test_lightLocalOriginExtension() {
+    auto sphere = remixapi_LightInfoSphereEXT {};
+    {
+      sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+      sphere.pNext = nullptr;
+    }
+    auto origin = remixapi_LightInfoLocalOriginEXT {};
+    {
+      origin.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_LOCAL_ORIGIN_EXT;
+      origin.pNext = &sphere;
+      origin.origin = remixapi_Float3D { 45056.0f, 0.0f, 49152.0f };
+    }
+    auto info = remixapi_LightInfo {};
+    {
+      info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+      info.pNext = &origin;
+    }
+
+    if (pnext::find< remixapi_LightInfoLocalOriginEXT >(&info) != &origin) {
+      throw dxvk::DxvkError { ERROR_INTRO
+        "pnext::find< remixapi_LightInfoLocalOriginEXT >( remixapi_LightInfo{..} ) failed" };
+    }
+    if (pnext::find< remixapi_LightInfoSphereEXT >(&info) != &sphere) {
+      throw dxvk::DxvkError { ERROR_INTRO
+        "pnext::find< remixapi_LightInfoSphereEXT >( remixapi_LightInfo{..} ) failed after origin extension" };
+    }
+  }
+
   void test_memberDetection() {
     struct BadType_0 {
       int   sType_none;
@@ -230,6 +258,7 @@ int main() {
     pnext_test_app::test_find();
     pnext_test_app::test_const();
     pnext_test_app::test_getPNext();
+    pnext_test_app::test_lightLocalOriginExtension();
     pnext_test_app::test_memberDetection();
     pnext_test_app::test_wrapper();
   }

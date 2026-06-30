@@ -757,6 +757,25 @@ namespace {
       return {};
     }
 
+    void applyRtLightInfoProperties(RtLight& rtLight, const remixapi_LightInfo& info) {
+      rtLight.setExternalStableHash(info.hash);
+      rtLight.isDynamic = tobool(info.isDynamic);
+      rtLight.ignoreViewModel = tobool(info.ignoreViewModel);
+      rtLight.ignoreFirstPersonPlayerShadow = tobool(info.ignoreFirstPersonPlayerShadow);
+
+      if (auto src = pnext::find<remixapi_LightInfoLocalOriginEXT>(&info)) {
+        rtLight.setLocalWorldOrigin(tovec3(src->origin));
+      }
+    }
+
+    std::optional<RtLight> toRtLightWithProperties(const remixapi_LightInfo& info) {
+      auto rtLight = toRtLight(info);
+      if (rtLight.has_value()) {
+        applyRtLightInfoProperties(*rtLight, info);
+      }
+      return rtLight;
+    }
+
     // --
 
     CameraType::Enum categoryToCameraType(remixapi_InstanceCategoryFlags flags) {
@@ -1494,22 +1513,13 @@ namespace {
       });
     } else {
       // Regular analytical light handling
-      auto rtLight = convert::toRtLight(*info);
+      auto rtLight = convert::toRtLightWithProperties(*info);
 
       // Note: If the toRtLight conversion process returns an empty optional, the specified LightInfo did
       // not contain the proper arguments to create a light with.
       if (!rtLight.has_value()) {
         return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
       }
-
-      // Set the isDynamic flag from the LightInfo
-      rtLight->isDynamic = info->isDynamic;
-
-      // Set the ignoreViewModel flag from the LightInfo
-      rtLight->ignoreViewModel = info->ignoreViewModel;
-
-      // Set the first-person player shadow ignore flag from the LightInfo
-      rtLight->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
 
       auto devLock = remixDevice->LockDevice();
       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
@@ -1559,17 +1569,11 @@ namespace {
     } else {
       // Analytical light
       pending.isDome = false;
-      auto rtLight = convert::toRtLight(*info);
+      auto rtLight = convert::toRtLightWithProperties(*info);
 
       if (!rtLight.has_value()) {
         return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
       }
-
-      // Set the isDynamic flag from the LightInfo
-      rtLight->isDynamic = info->isDynamic;
-
-      // Set the ignoreViewModel flag from the LightInfo
-      rtLight->ignoreViewModel = info->ignoreViewModel;
 
       pending.rtLight = std::move(rtLight);
     }
@@ -2638,19 +2642,10 @@ extern "C"
     if (info->sType != REMIXAPI_STRUCT_TYPE_LIGHT_INFO) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
-    auto rt = convert::toRtLight(*info);
+    auto rt = convert::toRtLightWithProperties(*info);
     if (!rt.has_value()) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
-
-    // Set the isDynamic flag from the LightInfo
-    rt->isDynamic = info->isDynamic;
-
-    // Set the ignoreViewModel flag from the LightInfo
-    rt->ignoreViewModel = info->ignoreViewModel;
-
-    // Set the first-person player shadow ignore flag from the LightInfo
-    rt->ignoreFirstPersonPlayerShadow = info->ignoreFirstPersonPlayerShadow;
 
     {
       std::lock_guard lock { s_mutex };

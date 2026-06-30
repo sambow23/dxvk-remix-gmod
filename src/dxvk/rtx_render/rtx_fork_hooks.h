@@ -199,6 +199,8 @@ namespace dxvk {
     // Implementation in rtx_fork_light.cpp.
     void flushPendingLightMutations(LightManager& mgr);
 
+    bool shouldCopyStaticLightForOriginHop(const RtLight& light, const RtLight& newLight);
+
     // Shared static-sleep update logic for both the indexed (externally-tracked)
     // and hash-map (external API) light paths. Preserves temporal denoiser data
     // by skipping the copy once isStaticCount >= numFramesToPutLightsToSleep.
