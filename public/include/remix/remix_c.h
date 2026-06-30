@@ -134,6 +134,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT      = 27,
     REMIXAPI_STRUCT_TYPE_FOG_INFO                              = 29,
     REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST                         = 30,
+    REMIXAPI_STRUCT_TYPE_LIGHT_INFO_LOCAL_ORIGIN_EXT           = 31,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -681,6 +682,15 @@ extern "C" {
     const float*                    pFocus;                   // "shaping:focus"
     const float*                    pVolumetricRadianceScale; // "volumetric_radiance_scale"
   } remixapi_LightInfoUSDEXT;
+
+  // Attachable to remixapi_LightInfo.
+  // Indicates that positional LightInfo extensions in the same pNext chain use
+  // render-local coordinates relative to this world-space origin.
+  typedef struct remixapi_LightInfoLocalOriginEXT {
+    remixapi_StructType             sType;
+    void*                           pNext;
+    remixapi_Float3D                origin;
+  } remixapi_LightInfoLocalOriginEXT;
 
   typedef struct remixapi_LightInfo {
     remixapi_StructType             sType;

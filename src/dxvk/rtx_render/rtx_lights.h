@@ -504,6 +504,24 @@ struct RtLight {
 
   Vector3 getRadiance() const;
 
+  void setExternalStableHash(XXH64_hash_t hash);
+
+  bool hasExternalStableHash() const {
+    return m_hasExternalStableHash;
+  }
+
+  void setLocalWorldOrigin(const Vector3& origin);
+
+  bool hasLocalWorldOrigin() const {
+    return m_hasLocalWorldOrigin;
+  }
+
+  const Vector3& getLocalWorldOrigin() const {
+    return m_localWorldOrigin;
+  }
+
+  bool isLocalWorldOriginChanged(const RtLight& other) const;
+
   RtLightType getType() const {
     return m_type;
   }
@@ -664,6 +682,10 @@ private:
   };
 
   XXH64_hash_t m_cachedInitialHash = 0;
+  XXH64_hash_t m_externalStableHash = kEmptyHash;
+  Vector3 m_localWorldOrigin = Vector3(0.0f);
+  bool m_hasExternalStableHash = false;
+  bool m_hasLocalWorldOrigin = false;
 
   // Used to associate parts of a replacement heirarchy.
   PrimInstanceOwner m_primInstanceOwner;
