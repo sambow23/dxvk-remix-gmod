@@ -29,6 +29,7 @@
 #include "rtx_context.h"
 #include "rtx_fork_celestial_textures.h"
 #include "rtx_fork_game_state.h"
+#include "rtx_fork_camera_origin.h"
 #include "rtx_lights.h"
 #include "rtx_light_manager.h"
 #include "rtx_camera.h"
@@ -2711,7 +2712,12 @@ AtmosphereArgs RtxAtmosphere::updateFrame(RtxContext& ctx,
     upYUp * tanHalfFovY,
     static_cast<uint32_t>(ctx.getDevice()->getCurrentFrameId()));
 
-  const Vector3 cameraPosWorldUnitsYUp = toYUp(camera.getPosition(/*freecam=*/false));
+  // Cloud noise is anchored at the camera's world-absolute position. Games
+  // using a floating render origin submit rebased camera positions, so add the
+  // published origin offset back before converting to atmosphere coordinates.
+  const Vector3 worldOriginOffset = fork_camera_origin::readWorldOriginOffsetFromGameState();
+  const Vector3 cameraPosWorldUnitsYUp = toYUp(
+    camera.getPosition(/*freecam=*/false) + worldOriginOffset);
   const float sceneScaleSafe = std::max(RtxOptions::sceneScale(), 1e-5f);
   const float kmPerWorldUnit = 1.0f / (100000.0f * sceneScaleSafe);
   setCloudShadowCameraPosition(cameraPosWorldUnitsYUp * kmPerWorldUnit);
