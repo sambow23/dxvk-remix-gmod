@@ -319,6 +319,18 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/rtx_render/rtx_composite.cpp
+
+**Category:** fork feature (external fog)
+
+- **Inline tweak** at `CompositePass::dispatch` (external linear fog branch) — ~14 LOC (2026-07-09).
+  *Extends the fork-owned `useExternalFogColor && D3DFOG_LINEAR` branch to honor the external fog scale sentinel contract: a negative `fog.scale` requests the `externalFogLinearStartFactor`/`externalFogLinearEndFactor` remap (previous unconditional behavior); a non-negative scale carries an explicit D3D9 start/end range that is preserved (start = end − 1/scale), still subject to `fogStrength` scaling. Needed for games that pin fog to the camera (e.g. Minecraft Nether / skyless dimensions), where the factor remap pushed fog beyond enclosed sightlines and made it invisible.*
+
+- **Inline tweak** at `CompositePass::dispatch` (skyFogOpacity populate) — 1 LOC (2026-07-09).
+  *`compositeArgs.skyFogOpacity` is forced to 1.0 when `fork_hooks::isSkylessDimension()` reports a game-declared skyless dimension (`__atmosphere.skyless` GameStateStore key), so miss pixels resolve to pure fog color; otherwise the `rtx.skyFogOpacity` option value is used unchanged. Companion to the skyless gate in fork-owned `rtx_fork_atmosphere.cpp` (`updateAtmosphereConstants` forces the shader-visible sky mode to SkyboxRasterization). See `docs/RemixAtmosphereAPI.md`, Surface 3.*
+
+---
+
 ## src/dxvk/rtx_render/rtx_context.cpp
 
 **Pre-refactor fork footprint:** +211 / -26 LOC (audit 2026-04-18)
