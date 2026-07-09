@@ -21,6 +21,7 @@
 #include "rtx_lights.h"              // RtDistantLight, RtLight
 #include "rtx_fork_celestial_textures.h"
 #include "rtx_fork_game_state.h"
+#include "rtx_fork_camera_origin.h"
 #include "rtx_options.h"
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/common_binding_indices.h"
@@ -496,7 +497,13 @@ namespace fork_hooks {
         // mirrors the basis-vector swap above so the helper's camera-relative
         // subtraction lands in the right frame.
         {
-          const Vector3 cameraPosWorldUnits = camera.getPosition(/*freecam=*/false);
+          // Cloud noise is anchored at the camera's world-absolute position
+          // (atmosphere_args.h documents cameraWorldPosYUpKm as world-absolute).
+          // Games using a floating render origin submit rebased camera
+          // positions, so add the published origin offset back — otherwise the
+          // cloud field visibly teleports at every origin-grid rebase.
+          const Vector3 worldOriginOffset = fork_camera_origin::readWorldOriginOffsetFromGameState();
+          const Vector3 cameraPosWorldUnits = camera.getPosition(/*freecam=*/false) + worldOriginOffset;
           const Vector3 cameraPosWorldUnitsYUp = toYUp(cameraPosWorldUnits);
           const float sceneScaleSafe = std::max(RtxOptions::sceneScale(), 1e-5f);
           const float worldUnitsPerKm = 100000.0f * sceneScaleSafe;
