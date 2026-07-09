@@ -71,6 +71,16 @@ namespace dxvk {
   namespace fork_hooks {
 
 
+    // Returns true when the game has declared the current dimension skyless via
+    // the `__atmosphere.skyless` GameStateStore key (e.g. Minecraft's Nether).
+    // Skyless dimensions suppress physical sky/star sampling (constants.skyMode
+    // is forced to SkyboxRasterization) and force full fog opacity on sky/miss
+    // pixels in the composite pass. Game-state driven, so no RTX_OPTION values
+    // are modified and nothing needs restoring on dimension change.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    bool isSkylessDimension();
+
     // Checks for a USD mesh/light replacement keyed on the API mesh handle hash.
     // Returns the replacement vector if one exists, null otherwise.
     // Call site is responsible for calling determineMaterialData + drawReplacements

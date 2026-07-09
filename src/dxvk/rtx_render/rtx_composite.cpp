@@ -436,10 +436,24 @@ namespace dxvk {
       // will be in render units (scaled by the scene scale), not the original game's units it was targetted for.
       // compositeArgs.fogDensity = fabsf(fog.density) / RtxOptions::sceneScale();
       if (settings.useExternalFogColor && fog.mode == D3DFOG_LINEAR) {
-        const float sourceFogEnd = fog.end;
-        const float fogStart = sourceFogEnd * externalFogLinearStartFactor();
-        const float fogEnd = std::max(sourceFogEnd * externalFogLinearEndFactor(), fogStart + 1.0e-4f);
+        // NV-DXVK start: honor explicit external linear fog ranges
+        // A negative scale is the sentinel requesting the factor-based remap;
+        // a non-negative scale carries an explicit D3D9 start/end range that
+        // must be preserved (e.g. fog pinned to the camera in skyless
+        // dimensions).
+        float fogStart;
+        float fogEnd;
+        if (fog.scale < 0.0f) {
+          const float sourceFogEnd = fog.end;
+          fogStart = sourceFogEnd * externalFogLinearStartFactor();
+          fogEnd = std::max(sourceFogEnd * externalFogLinearEndFactor(), fogStart + 1.0e-4f);
+        } else {
+          const float fogRange = fog.scale > 1.0e-6f ? 1.0f / fog.scale : 0.0f;
+          fogStart = fog.end - fogRange;
+          fogEnd = fog.end;
+        }
         const float fogRange = fogEnd - fogStart;
+        // NV-DXVK end
 
         const float adjustedFogRange = fogStrengthScale > 1.0e-4f ? fogRange / fogStrengthScale : 0.0f;
         compositeArgs.fogEnd = fogStrengthScale > 1.0e-4f ? fogStart + adjustedFogRange : fogStart;
@@ -461,7 +475,11 @@ namespace dxvk {
         }
       }
       compositeArgs.maxFogDistance = maxFogDistance();
-      compositeArgs.skyFogOpacity = skyFogOpacity();
+      // NV-DXVK start: skyless dimension fog opacity
+      // Skyless dimensions have no sky to preserve behind fog; force full fog
+      // opacity on miss pixels so the horizon resolves to pure fog color.
+      compositeArgs.skyFogOpacity = fork_hooks::isSkylessDimension() ? 1.0f : skyFogOpacity();
+      // NV-DXVK end
     }
 
     // Combine the direct and indirect channels if the seperated denoiser is enabled, otherwise the channels will be combined

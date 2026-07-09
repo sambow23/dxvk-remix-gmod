@@ -1468,7 +1468,9 @@ namespace dxvk {
 
     constants.skyBrightness = RtxOptions::skyBrightness();
 
-    constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
+    constants.skyMode = fork_hooks::isSkylessDimension()
+      ? static_cast<uint32_t>(SkyMode::SkyboxRasterization)
+      : static_cast<uint32_t>(RtxOptions::skyMode());
     constants.particleSkyAmbientScale = std::max(
       weatherSnapshot ? weatherSnapshot->precipitationSkyLight : PrecipitationSystem::skyLight(),
       0.0f);

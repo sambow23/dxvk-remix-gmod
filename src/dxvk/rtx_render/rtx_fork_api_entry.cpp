@@ -35,6 +35,7 @@
 // of this struct and optional was removed in migration #7b.
 
 #include "rtx_fork_hooks.h"
+#include "rtx_fork_game_state.h"
 #include "rtx_fork_ui.h"                  // fork_ui::UiDrawList, UiTextureUpload, render-thread mutators
 
 #include "rtx_context.h"                  // DxvkContext::getCommonObjects(), RtxContext
@@ -59,6 +60,8 @@
 #include "../../util/xxHash/xxhash.h"     // XXH64_hash_t
 
 #include <remix/remix_c.h>                // remixapi_ErrorCode, REMIXAPI_ERROR_CODE_*
+
+#include <cctype>
 
 // Forward declarations for the three extern-"C" fork-exported functions that
 // remixApiVtableInit registers into the vtable. These have external linkage
@@ -150,6 +153,27 @@ namespace {
 } // anonymous namespace
 
 namespace fork_hooks {
+
+  // ---------------------------------------------------------------------------
+  // isSkylessDimension
+  //
+  // Reads the game-driven `__atmosphere.skyless` GameStateStore key. Keep this
+  // hook in the API-entry implementation so the old fork-only atmosphere
+  // translation unit can remain removed after the target's native atmosphere
+  // migration.
+  // ---------------------------------------------------------------------------
+  bool isSkylessDimension() {
+    std::string value;
+    if (!fork_game_state::GameStateStore::get().tryGet("__atmosphere.skyless", value)) {
+      return false;
+    }
+
+    for (char& character : value) {
+      character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+  }
 
   // ---------------------------------------------------------------------------
   // textureHashPathLookup

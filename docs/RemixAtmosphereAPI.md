@@ -64,6 +64,25 @@ Per-moon appearance stays on the existing RTX option surface:
 These are intentionally not mirrored into `__atmosphere.*` in this
 first slice.
 
+## Surface 3 — Skyless dimensions
+
+Games with interior or underground dimensions (e.g. Minecraft's Nether)
+can declare the current dimension skyless:
+
+```c
+iface.SetGameValue("__atmosphere.skyless", "1");  // entering a skyless dimension
+iface.SetGameValue("__atmosphere.skyless", "0");  // back under open sky
+```
+
+| Key | Type | Default when absent | Meaning |
+| :-- | :-: | :-- | :-- |
+| `__atmosphere.skyless` | bool-as-string | `0` (dimension has a sky) | While set, physical sky/star sampling is suppressed for primary-miss pixels (the shader-visible sky mode is forced to skybox rasterization; the skybox buffers stay cleared while the Numos option is active) and the composite pass forces full fog opacity on sky/miss pixels, ignoring `rtx.skyFogOpacity`. Accepted values match `__atmosphere.moonN.enabled`. |
+
+No RTX option values are modified while the flag is set — user tuning
+such as `rtx.skyFogOpacity` and `rtx.atmosphere.starBrightness` is
+untouched and takes effect again as soon as the flag clears. Push the
+key on dimension change (or every frame; writes are cheap).
+
 ## Notes for integrators
 
 - Write all four keys for a moon from the same simulation tick so disk
