@@ -444,7 +444,14 @@ namespace fork_hooks {
   // in RtxContext.
   // ---------------------------------------------------------------------------
   void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants) {
-    constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
+    // Skyless dimensions keep the Numos option (and LUT upkeep) intact but
+    // force the shader-visible sky mode to SkyboxRasterization so primary-miss
+    // sky sampling (atmosphere gradient, stars, celestial bodies) goes dark.
+    // The rasterized skybox buffers stay cleared while the Numos option is
+    // active, so miss pixels resolve to black under the composite fog.
+    constants.skyMode = isSkylessDimension()
+      ? static_cast<uint32_t>(SkyMode::SkyboxRasterization)
+      : static_cast<uint32_t>(RtxOptions::skyMode());
 
     // Fork (2026-07-26): sky-ambient scale for sky-lit particle materials
     // (weather precipitation) - consumed by the resolver's opacity lighting
@@ -836,6 +843,20 @@ namespace fork_hooks {
   // ---------------------------------------------------------------------------
   bool injectRtxAtmosphereSkySkip() {
     return RtxOptions::skyMode() == SkyMode::Numos;
+  }
+
+  // ---------------------------------------------------------------------------
+  // isSkylessDimension
+  //
+  // Reads the game-driven `__atmosphere.skyless` GameStateStore key. See the
+  // declaration in rtx_fork_hooks.h for semantics.
+  // ---------------------------------------------------------------------------
+  bool isSkylessDimension() {
+    bool skyless = false;
+    if (!tryReadMoonGameStateBool("__atmosphere.skyless", skyless)) {
+      return false;
+    }
+    return skyless;
   }
 
   // ---------------------------------------------------------------------------
