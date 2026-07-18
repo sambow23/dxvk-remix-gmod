@@ -602,6 +602,14 @@ namespace dxvk {
       || frameBeginCtx.downscaledExtent.height != m_nrcCtxSettings->frameDimensions.y;
 
     if (reinitializeNrcContext) {
+      // NV-DXVK start: NRC reinit trigger diagnostics
+      Logger::info(str::format(
+        "[RTX Neural Radiance Cache] Context reinit triggered:",
+        " debugBuffer=", m_nrcCtx->isDebugBufferRequired(), "->", NrcOptions::s_nrcDebugBufferIsRequired,
+        " customNetCfg=", m_delayedEnableCustomNetworkConfig, "->", NrcCtxOptions::enableCustomNetworkConfig(),
+        " extent=", m_nrcCtxSettings->frameDimensions.x, "x", m_nrcCtxSettings->frameDimensions.y,
+        "->", frameBeginCtx.downscaledExtent.width, "x", frameBeginCtx.downscaledExtent.height));
+      // NV-DXVK end
 
       NrcCtxOptions::enableCustomNetworkConfig.setDeferred(m_delayedEnableCustomNetworkConfig);
 
@@ -789,6 +797,9 @@ namespace dxvk {
   }
 
   bool NeuralRadianceCache::onActivation(Rc<DxvkContext>& ctx) {
+    // NV-DXVK start: NRC reinit trigger diagnostics
+    Logger::info("[RTX Neural Radiance Cache] Pass activation (integrateIndirectMode enabled NRC this frame)");
+    // NV-DXVK end
 
     // Fallback to Importance Sampled mode if NRC setup failed.
     // Note: it would be preferable to fallback to ReSTIRGI, but that would require delaying that change to the beginning of the next frame
