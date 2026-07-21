@@ -215,7 +215,11 @@ namespace dxvk {
     nrcContextCfg.debugBufferIsRequired = NrcOptions::s_nrcDebugBufferIsRequired;
     m_nrcCtx = new NrcContext(device, nrcContextCfg);
 
-    if (m_nrcCtx->initialize() != nrc::Status::OK) {
+    const nrc::Status initializationStatus = m_nrcCtx->initialize();
+    if (initializationStatus != nrc::Status::OK) {
+      Logger::err(str::format(
+        "[RTX Neural Radiance Cache] Pass initialization aborted after NRC context initialization failed with status code ",
+        static_cast<uint32_t>(initializationStatus), ". See preceding NRC diagnostics."));
       return false;
     }
 
@@ -617,8 +621,11 @@ namespace dxvk {
       nrcContextCfg.debugBufferIsRequired = NrcOptions::s_nrcDebugBufferIsRequired;
       m_nrcCtx = new NrcContext(*ctx->getDevice(), nrcContextCfg);
 
-      if (m_nrcCtx->initialize() != nrc::Status::OK) {
-        Logger::err(str::format("[RTX Neural Radiance Cache] Failed to initialize NRC context"));
+      const nrc::Status initializationStatus = m_nrcCtx->initialize();
+      if (initializationStatus != nrc::Status::OK) {
+        Logger::err(str::format(
+          "[RTX Neural Radiance Cache] Context reinitialization failed with status code ",
+          static_cast<uint32_t>(initializationStatus), ". See preceding NRC diagnostics."));
         return;
       }
     }
