@@ -26,34 +26,108 @@
 #include <string>
 #include <mutex>
 #include <array>
+#include <filesystem>
 
 namespace dxvk {
   static const bool g_useCustomCPUMemoryAllocator = false;
 
   // Utility
+  static std::filesystem::path getLoadedModulePath(const wchar_t* moduleName) {
+    const HMODULE module = ::GetModuleHandleW(moduleName);
+    if (module == nullptr) {
+      return {};
+    }
+
+    std::array<wchar_t, 32768> modulePath = {};
+    const DWORD pathLength = ::GetModuleFileNameW(
+      module, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (pathLength == 0 || pathLength >= modulePath.size()) {
+      return {};
+    }
+
+    return std::filesystem::path(modulePath.data());
+  }
+
+  static void logNrcDependencyFiles(const std::filesystem::path& directory) {
+    static constexpr std::array<const wchar_t*, 3> dependencyNames = {
+      L"cudart64_12.dll",
+      L"nvrtc64_120_0.dll",
+      L"nvrtc-builtins64_125.dll",
+    };
+
+    for (const wchar_t* dependencyName : dependencyNames) {
+      const std::filesystem::path dependencyPath = directory / dependencyName;
+      std::error_code error;
+      const bool exists = std::filesystem::is_regular_file(dependencyPath, error);
+      const std::string message = str::format(
+        "[RTX Neural Radiance Cache] CUDA dependency file ",
+        exists ? "found" : "not found", ": ", dependencyPath.string(),
+        error ? str::format(" (filesystem error ", error.value(), ": ", error.message(), ")") : std::string());
+
+      if (exists) {
+        Logger::info(message);
+      } else {
+        Logger::err(message);
+      }
+    }
+  }
+
+  static void logLoadedNrcModules() {
+    struct ModuleInfo {
+      const wchar_t* name;
+      const char* displayName;
+    };
+
+    static constexpr std::array modules = {
+      ModuleInfo{ L"NRC_Vulkan.dll", "NRC_Vulkan.dll" },
+      ModuleInfo{ L"cudart64_12.dll", "cudart64_12.dll" },
+      ModuleInfo{ L"nvrtc64_120_0.dll", "nvrtc64_120_0.dll" },
+      ModuleInfo{ L"nvrtc-builtins64_125.dll", "nvrtc-builtins64_125.dll" },
+      ModuleInfo{ L"nvcuda.dll", "nvcuda.dll" },
+    };
+
+    for (const ModuleInfo& module : modules) {
+      const std::filesystem::path modulePath = getLoadedModulePath(module.name);
+      if (!modulePath.empty()) {
+        Logger::info(str::format(
+          "[RTX Neural Radiance Cache] Loaded module: ", module.displayName,
+          " -> ", modulePath.string()));
+      } else {
+        Logger::warn(str::format(
+          "[RTX Neural Radiance Cache] Module is not loaded after NRC initialization attempt: ",
+          module.displayName));
+      }
+    }
+  }
+
   static void NRCLoggerCallback(const char* message, nrc::LogLevel logLevel) {
     static std::mutex loggerMutex;
 
-    // Make the logging thread-safe
-    loggerMutex.lock();
-    {
-      std::string rtxMessage = std::string("[RTX Neural Radiance Cache] ") + std::string(message);
-      switch (logLevel) {
-      case nrc::LogLevel::Debug:
-        Logger::debug(rtxMessage);
-        break;
-      case nrc::LogLevel::Info:
-        Logger::info(rtxMessage);
-        break;
-      case nrc::LogLevel::Warning:
-        Logger::warn(rtxMessage);
-        break;
-      case nrc::LogLevel::Error:
-        Logger::err(rtxMessage);
-        break;
-      }
+    std::lock_guard lock(loggerMutex);
+    const char* sdkMessage = message != nullptr ? message : "<null NRC SDK log message>";
+    const std::string rtxMessage = str::format(
+      "[RTX Neural Radiance Cache] ",
+      sdkMessage);
+
+    switch (logLevel) {
+    case nrc::LogLevel::Debug:
+      Logger::debug(rtxMessage);
+      break;
+    case nrc::LogLevel::Info:
+      Logger::info(rtxMessage);
+      break;
+    case nrc::LogLevel::Warning:
+      Logger::warn(rtxMessage);
+      break;
+    case nrc::LogLevel::Error:
+      Logger::err(rtxMessage);
+      break;
+    default:
+      Logger::warn(str::format(
+        "[RTX Neural Radiance Cache] NRC SDK emitted a message with unknown log level ",
+        static_cast<uint32_t>(logLevel), ": ", sdkMessage));
+      break;
     }
-    loggerMutex.unlock();
   }
 
   static void NRCMemoryEventsCallback(
@@ -96,11 +170,26 @@ namespace dxvk {
     delete[] pointer;
   }
 
-  const char* getNrcStatusErrorMessage(nrc::Status status) {
+  static const char* getNrcStatusName(nrc::Status status) {
     switch (status) {
-    default:
-      assert(0 && "Unexpected value");
-      return "unknown status code.";
+    case nrc::Status::OK: return "OK";
+    case nrc::Status::SDKVersionMismatch: return "SDKVersionMismatch";
+    case nrc::Status::AlreadyInitialized: return "AlreadyInitialized";
+    case nrc::Status::SDKNotInitialized: return "SDKNotInitialized";
+    case nrc::Status::InternalError: return "InternalError";
+    case nrc::Status::MemoryNotProvided: return "MemoryNotProvided";
+    case nrc::Status::OutOfMemory: return "OutOfMemory";
+    case nrc::Status::AllocationFailed: return "AllocationFailed";
+    case nrc::Status::ErrorParsingJSON: return "ErrorParsingJSON";
+    case nrc::Status::WrongParameter: return "WrongParameter";
+    case nrc::Status::UnsupportedDriver: return "UnsupportedDriver";
+    case nrc::Status::UnsupportedHardware: return "UnsupportedHardware";
+    default: return "Unknown";
+    }
+  }
+
+  static const char* getNrcStatusErrorMessage(nrc::Status status) {
+    switch (status) {
     case nrc::Status::OK: return "OK.";
     case nrc::Status::SDKVersionMismatch: return "SDK version in the header file doesn't match library version - need to update header file?";
     case nrc::Status::AlreadyInitialized: return "You're trying to initialize NRC SDK multiple times, please deinitialize old instance first.";
@@ -113,7 +202,14 @@ namespace dxvk {
     case nrc::Status::WrongParameter: return "Parameter provided to the SDK API call was invalid.";
     case nrc::Status::UnsupportedDriver: return "Installed driver version is not supported.";
     case nrc::Status::UnsupportedHardware: return "GPU Device is not supported.";
+    default: return "Unknown status code returned by the NRC SDK.";
     }
+  }
+
+  static std::string formatNrcStatus(nrc::Status status) {
+    return str::format(
+      getNrcStatusName(status), " (", static_cast<uint32_t>(status), "): ",
+      getNrcStatusErrorMessage(status));
   }
 
   NrcContext::NrcContext(DxvkDevice& device, const Configuration& config)
@@ -128,7 +224,7 @@ namespace dxvk {
       nrc::Status status = nrc::vulkan::Context::Destroy(*m_nrcContext);
       m_nrcContext = nullptr;
       if (status != nrc::Status::OK) {
-        ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] Failed to destroy NRC context. Reason: ", getNrcStatusErrorMessage(status))));
+        ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] Failed to destroy NRC context. Status: ", formatNrcStatus(status))));
         return;
       }
     }
@@ -150,28 +246,38 @@ namespace dxvk {
       const bool isSupported;
     };
 
-    // Checks if all required extensions are supported in the capabilities vector
-    auto checkSupport = [&](const uint32_t numRequiredExtensions, const char* const*& requiredExtensions, const auto& caps) {
-      // Check all required extensions
-      for (uint32_t i = 0; i < numRequiredExtensions; i++) {
-        const char* extension = requiredExtensions[i];
-        // Check if an extension is active in the capabilities vector
+    const VkPhysicalDeviceProperties& deviceProperties = device->adapter()->deviceProperties();
+    const std::string driverVersion = getDriverVersionString(deviceProperties.driverVersion);
+
+    Logger::info(str::format(
+      "[RTX Neural Radiance Cache] Support check started:",
+      " SDK=", NRC_VERSION_MAJOR, ".", NRC_VERSION_MINOR, " (", NRC_VERSION_DATE, ")",
+      " GPU=\"", deviceProperties.deviceName, "\"",
+      " vendorId=0x", std::hex, deviceProperties.vendorID,
+      " deviceId=0x", deviceProperties.deviceID, std::dec,
+      " driver=", driverVersion));
+
+    // Checks if all SDK requirements are supported in the capabilities vector.
+    auto checkSupport = [&](const char* requirementType, const uint32_t numRequirements, const char* const*& requirements, const auto& caps) {
+      for (uint32_t i = 0; i < numRequirements; i++) {
+        const char* requirement = requirements[i];
         uint32_t iCap = 0;
         for (; iCap < caps.size(); iCap++) {
           const ExtensionSupportCapability& cap = caps[iCap];
-          if (strcmp(extension, cap.name) == 0) {
+          if (strcmp(requirement, cap.name) == 0) {
             if (!cap.isSupported) {
-              Logger::err(str::format("[RTX Neural Radiance Cache] Required extension not supported: ", cap.name));
+              Logger::err(str::format(
+                "[RTX Neural Radiance Cache] Support check failed: required ",
+                requirementType, " is unavailable: ", cap.name));
               s_isNrcSupported = false;
             }
             break;
           }
         }
-
-        // Unhandled extension
-        if (iCap > caps.size()) {
-          assert(0 && "Uknown extension requested");
-          Logger::err(str::format("[RTX Neural Radiance Cache] Unknown extension requested: ", extension));
+        if (iCap == caps.size()) {
+          Logger::err(str::format(
+            "[RTX Neural Radiance Cache] Support check failed: NRC SDK requested an unrecognized ",
+            requirementType, ": ", requirement));
           s_isNrcSupported = false;
         }
       }
@@ -189,44 +295,52 @@ namespace dxvk {
       ExtensionSupportCapability{ "VK_KHR_uniform_buffer_standard_layout", static_cast<bool>(device->features().vulkan12Features.uniformBufferStandardLayout) },
     };
 
+    // GetVulkanDeviceFeatures returns VkStructureType names rather than the
+    // extension names used by the corresponding Vulkan feature structures.
+    const std::array featureCaps{
+      ExtensionSupportCapability{ "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES", static_cast<bool>(device->features().vulkan12Features.scalarBlockLayout) },
+      ExtensionSupportCapability{ "VK_EXT_scalar_block_layout", static_cast<bool>(device->features().vulkan12Features.scalarBlockLayout) },
+      ExtensionSupportCapability{ "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES", static_cast<bool>(device->features().vulkan12Features.uniformBufferStandardLayout) },
+      ExtensionSupportCapability{ "VK_KHR_uniform_buffer_standard_layout", static_cast<bool>(device->features().vulkan12Features.uniformBufferStandardLayout) },
+    };
+
     const char* const* requiredExtensions;
-    checkSupport(nrc::vulkan::GetVulkanDeviceExtensions(requiredExtensions), requiredExtensions, extensionCaps);
-    checkSupport(nrc::vulkan::GetVulkanInstanceExtensions(requiredExtensions), requiredExtensions, extensionCaps);
-    checkSupport(nrc::vulkan::GetVulkanDeviceFeatures(requiredExtensions), requiredExtensions, extensionCaps);
+    checkSupport("Vulkan device extension", nrc::vulkan::GetVulkanDeviceExtensions(requiredExtensions), requiredExtensions, extensionCaps);
+    checkSupport("Vulkan instance extension", nrc::vulkan::GetVulkanInstanceExtensions(requiredExtensions), requiredExtensions, extensionCaps);
+    checkSupport("Vulkan device feature", nrc::vulkan::GetVulkanDeviceFeatures(requiredExtensions), requiredExtensions, featureCaps);
 
     // Check against driver version requirements
-    if (s_isNrcSupported) {
-      const VkPhysicalDeviceProperties& deviceProperties = device->adapter()->deviceProperties();
+    if (deviceProperties.vendorID != static_cast<uint32_t>(DxvkGpuVendor::Nvidia)) {
+      Logger::err(str::format(
+        "[RTX Neural Radiance Cache] Support check failed: NRC requires an NVIDIA GPU, but selected device \"",
+        deviceProperties.deviceName, "\" has vendorId=0x", std::hex, deviceProperties.vendorID, std::dec, "."));
+      s_isNrcSupported = false;
+    } else {
+      // Need 565.90+ driver to support CUDA runtime in NRC SDK
+      const uint32_t nrcMinSupportedMajor = 565;
+      const uint32_t nrcMinSupportedMinor = 90;
 
-      if (deviceProperties.vendorID != static_cast<uint32_t>(DxvkGpuVendor::Nvidia)) {
+      const uint32_t nrcMinSupportedDriver = VK_MAKE_API_VERSION(0, nrcMinSupportedMajor, nrcMinSupportedMinor, 0);
+      const uint32_t currentDriverVersion = deviceProperties.driverVersion;
+
+      if (currentDriverVersion < nrcMinSupportedDriver) {
+        Logger::err(str::format(
+          "[RTX Neural Radiance Cache] Support check failed: incompatible NVIDIA driver:",
+          " installed=", driverVersion,
+          " required=", nrcMinSupportedMajor, ".", nrcMinSupportedMinor, "+"));
         s_isNrcSupported = false;
-      } else {
-        // Need 565.90+ driver to support CUDA runtime in NRC SDK
-        const uint32_t nrcMinSupportedMajor = 565;
-        const uint32_t nrcMinSupportedMinor = 90;
-
-        const uint32_t nrcMinSupportedDriver = VK_MAKE_API_VERSION(0, nrcMinSupportedMajor, nrcMinSupportedMinor, 0);
-        const uint32_t currentDriverVersion = deviceProperties.driverVersion;
-
-        if (currentDriverVersion < nrcMinSupportedDriver) {
-
-          const std::string currentDriverVersionString = getDriverVersionString(currentDriverVersion);
-          Logger::info(str::format("[RTX Neural Radiance Cache] Incompatible driver installed:\n"
-                                  "\tInstalled: ", currentDriverVersionString.c_str(), "\n",
-                                  "\tRequired: ", nrcMinSupportedMajor, ".", nrcMinSupportedMinor, "+"));
-          s_isNrcSupported = false;
-        }
       }
     }
 
-    Logger::info(str::format("[RTX info] Neural Radiance Cache: ", s_isNrcSupported ? "supported" : "not supported"));
+    Logger::info(str::format(
+      "[RTX Neural Radiance Cache] Support check result: ",
+      s_isNrcSupported ? "supported" : "not supported"));
     s_hasCheckedNrcSupport = true;
 
     return s_isNrcSupported;
   }
 
   nrc::Status NrcContext::initialize() {
-    
     m_nrcContextSettings = nrc::ContextSettings {};
 
     nrc::GlobalSettings globalSettings;
@@ -248,29 +362,78 @@ namespace dxvk {
     globalSettings.enableDebugBuffers = m_isDebugBufferRequired;
     globalSettings.maxNumFramesInFlight = kMaxFramesInFlight;
 
-    globalSettings.depsDirectoryPath = !NrcCtxOptions::cudaDllDepsDirectoryPath().empty() ? NrcCtxOptions::cudaDllDepsDirectoryPath().c_str() : nullptr;
+    const std::filesystem::path nrcModulePath = getLoadedModulePath(L"NRC_Vulkan.dll");
+    const std::string& configuredCudaDepsDirectory = NrcCtxOptions::cudaDllDepsDirectoryPath();
+    std::string cudaDepsDirectory = configuredCudaDepsDirectory;
+    const char* cudaDepsDirectorySource = "RTX_NRC_CUDA_DEPS_DIR/RTX option";
+    if (cudaDepsDirectory.empty() && !nrcModulePath.empty()) {
+      cudaDepsDirectory = nrcModulePath.parent_path().string();
+      cudaDepsDirectorySource = "loaded NRC_Vulkan.dll directory";
+    } else if (cudaDepsDirectory.empty()) {
+      cudaDepsDirectorySource = "default DLL search path (NRC_Vulkan.dll path unavailable)";
+    }
+
+    globalSettings.depsDirectoryPath = !cudaDepsDirectory.empty() ? cudaDepsDirectory.c_str() : nullptr;
+
+    const VkPhysicalDeviceProperties& deviceProperties = m_device->adapter()->deviceProperties();
+    Logger::info(str::format(
+      "[RTX Neural Radiance Cache] SDK initialization started:",
+      " SDK=", NRC_VERSION_MAJOR, ".", NRC_VERSION_MINOR, " (", NRC_VERSION_DATE, ")",
+      " GPU=\"", deviceProperties.deviceName, "\"",
+      " driver=", getDriverVersionString(deviceProperties.driverVersion),
+      " nrcModule=\"", nrcModulePath.empty() ? "<unavailable>" : nrcModulePath.string(), "\"",
+      " cudaDepsDirectory=\"", cudaDepsDirectory.empty() ? "<default DLL search path>" : cudaDepsDirectory, "\"",
+      " cudaDepsDirectorySource=\"", cudaDepsDirectorySource, "\"",
+      " debugBuffers=", globalSettings.enableDebugBuffers,
+      " maxFramesInFlight=", globalSettings.maxNumFramesInFlight,
+      " sdkGpuMemoryAllocation=", globalSettings.enableGPUMemoryAllocation));
+
+    if (!cudaDepsDirectory.empty()) {
+      logNrcDependencyFiles(cudaDepsDirectory);
+    }
 
     // Initialize the NRC Library
     nrc::Status status = nrc::vulkan::Initialize(globalSettings);
+    logLoadedNrcModules();
     if (status != nrc::Status::OK) {
-      ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] Failed to initialize NRC. Reason: ", getNrcStatusErrorMessage(status))));
+      Logger::err(str::format(
+        "[RTX Neural Radiance Cache] NRC SDK initialization failed. Status: ",
+        formatNrcStatus(status)));
       return status;
     }
+
+    Logger::info("[RTX Neural Radiance Cache] NRC SDK initialization succeeded; creating Vulkan context.");
 
     // Create an NRC Context
     VkDevice nativeDevice = m_device->handle();
     VkPhysicalDevice nativeGPU = m_device->adapter()->handle();
     VkInstance apiInstance = m_device->instance()->handle();
 
-    if (nativeDevice != nullptr && nativeGPU != nullptr) {
-      assert(m_nrcContext == nullptr);
-      status = nrc::vulkan::Context::Create(nativeDevice, nativeGPU, apiInstance, m_nrcContext);
-      if (status != nrc::Status::OK) {
-        ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] Failed to create NRC context. Reason: ", getNrcStatusErrorMessage(status))));
-        return status;
-      }
+    if (nativeDevice == VK_NULL_HANDLE || nativeGPU == VK_NULL_HANDLE || apiInstance == VK_NULL_HANDLE) {
+      Logger::err(str::format(
+        "[RTX Neural Radiance Cache] NRC Vulkan context creation aborted because a required handle is null:",
+        " device=", nativeDevice != VK_NULL_HANDLE,
+        " physicalDevice=", nativeGPU != VK_NULL_HANDLE,
+        " instance=", apiInstance != VK_NULL_HANDLE));
+      return nrc::Status::WrongParameter;
     }
 
+    assert(m_nrcContext == nullptr);
+    status = nrc::vulkan::Context::Create(nativeDevice, nativeGPU, apiInstance, m_nrcContext);
+    if (status != nrc::Status::OK) {
+      Logger::err(str::format(
+        "[RTX Neural Radiance Cache] NRC Vulkan context creation failed. Status: ",
+        formatNrcStatus(status),
+        " Context pointer returned: ", m_nrcContext != nullptr));
+      return status;
+    }
+
+    if (m_nrcContext == nullptr) {
+      Logger::err("[RTX Neural Radiance Cache] NRC Vulkan context creation returned OK but produced a null context pointer.");
+      return nrc::Status::InternalError;
+    }
+
+    Logger::info("[RTX Neural Radiance Cache] NRC Vulkan context creation succeeded.");
     return nrc::Status::OK;
   }
 
@@ -351,7 +514,7 @@ namespace dxvk {
         : nullptr);
 
       if (status != nrc::Status::OK) {
-        Logger::err(str::format("[RTX Neural Radiance Cache] Configure call failed. Reason: ", getNrcStatusErrorMessage(status)));
+        Logger::err(str::format("[RTX Neural Radiance Cache] Configure call failed. Status: ", formatNrcStatus(status)));
         return false;
       } else {
         Logger::debug(str::format("[RTX Neural Radiance Cache] Configure call succeeded."));
@@ -369,7 +532,7 @@ namespace dxvk {
     if (cmdBuffer) {
       nrc::Status status = m_nrcContext->BeginFrame(cmdBuffer, frameSettings);
       if (status != nrc::Status::OK) {
-        ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] BeginFrame call failed. Reason: ", getNrcStatusErrorMessage(status))));
+        ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] BeginFrame call failed. Status: ", formatNrcStatus(status))));
         return false;
       }
     }
@@ -411,7 +574,7 @@ namespace dxvk {
     m_device->unlockSubmission();
 
     if (status != nrc::Status::OK) {
-      ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] EndFrame call failed. Reason: ", getNrcStatusErrorMessage(status))));
+      ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] EndFrame call failed. Status: ", formatNrcStatus(status))));
     }
   }
 
@@ -423,7 +586,7 @@ namespace dxvk {
     float trainingLoss = 0.0f;
     nrc::Status status = m_nrcContext->QueryAndTrain(cmdBuffer, (calculateTrainingLoss ? &trainingLoss : nullptr));
     if (status != nrc::Status::OK) {
-      ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] QueryAndTrain call failed. Reason: ", getNrcStatusErrorMessage(status))));
+      ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] QueryAndTrain call failed. Status: ", formatNrcStatus(status))));
     }
 
     return trainingLoss;
@@ -435,7 +598,7 @@ namespace dxvk {
     VkCommandBuffer cmdBuffer = ctx.getCommandList()->getCmdBuffer(dxvk::DxvkCmdBuffer::ExecBuffer);
     nrc::Status status = m_nrcContext->Resolve(cmdBuffer, outputImage->handle());
     if (status != nrc::Status::OK) {
-      ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] BeginFrame call failed. Reason: ", getNrcStatusErrorMessage(status))));
+      ONCE(Logger::err(str::format("[RTX Neural Radiance Cache] Resolve call failed. Status: ", formatNrcStatus(status))));
     }
   }
 
