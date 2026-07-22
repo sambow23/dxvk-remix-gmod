@@ -3481,7 +3481,12 @@ void geometryPSRPreparePass(ivec2 pixelCoordinate) {
   PolymorphicSurfaceMaterialInteraction polymorphicSurfaceMaterialInteraction =
     polymorphicSurfaceMaterialInteractionCreate(surfaceMaterialInteractionMemory);
 
-  if (cb.sssArgs.enableThinOpaque || cb.sssArgs.enableDiffusionProfile)
+  const uint8_t materialType =
+    polymorphicSurfaceMaterialInteractionGetTypeHelper(polymorphicSurfaceMaterialInteraction);
+  const bool hasSubsurfaceData =
+    materialType == surfaceMaterialTypeOpaque &&
+    (cb.sssArgs.enableThinOpaque || cb.sssArgs.enableDiffusionProfile);
+  if (hasSubsurfaceData)
   {
     const SubsurfaceMaterialInteraction subsurfaceMaterialInteraction =
       subSurfaceMaterialReadHelper(
@@ -3497,7 +3502,6 @@ void geometryPSRPreparePass(ivec2 pixelCoordinate) {
   else
   {
     polymorphicSurfaceMaterialInteraction.fdata5 = 0.0f;
-    polymorphicSurfaceMaterialInteraction.idata0 = 0;
     polymorphicSurfaceMaterialInteraction.i32data0 = 0;
     polymorphicSurfaceMaterialInteraction.i32data1 = 0;
     polymorphicSurfaceMaterialInteraction.bdata1 = 0;
