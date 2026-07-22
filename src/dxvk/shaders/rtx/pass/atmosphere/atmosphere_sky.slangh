@@ -38,6 +38,8 @@
 
 static const uint CELESTIAL_TEXTURE_FLAG_SUN = 1u;
 static const uint CELESTIAL_TEXTURE_FLAG_MOON0 = 2u;
+static const float CELESTIAL_SUN_HALO_COVERAGE_SCALE = 3.0f;
+static const float CELESTIAL_MOON_HALO_COVERAGE_SCALE = 2.0f;
 
 bool celestialTextureFlagEnabled(uint flags, uint flag) {
   return (flags & flag) != 0u;
@@ -108,10 +110,35 @@ bool computeCelestialSpriteUv(
   return true;
 }
 
-float celestialTextureCoverage(vec4 texel, float edgeCoverage) {
-  const float maxChannel = max(max(texel.r, texel.g), texel.b);
-  const float colorCoverage = smoothstep(0.001f, 0.03f, maxChannel);
-  return saturate(texel.a * colorCoverage * edgeCoverage);
+float celestialTextureMaxChannel(vec3 color) {
+  return max(max(color.r, color.g), color.b);
+}
+
+vec3 celestialTextureStraightColor(vec3 color) {
+  const float maxChannel = celestialTextureMaxChannel(color);
+  return maxChannel > 1.0e-5f ? color / maxChannel : vec3(0.0f);
+}
+
+float celestialTextureDiskCoverage(float maxChannel) {
+  // The bundled atlases have a deliberate gap between the glow (<= 40/255)
+  // and the body (>= 80/255). Keep the body opaque while smoothly covering
+  // interpolated samples at its edge.
+  return smoothstep(0.16f, 0.30f, maxChannel);
+}
+
+float celestialTextureSurfaceDetail(vec3 color) {
+  const float maxChannel = celestialTextureMaxChannel(color);
+  return mix(1.0f, maxChannel, celestialTextureDiskCoverage(maxChannel));
+}
+
+float celestialTextureCoverage(vec4 texel, float edgeCoverage, float haloCoverageScale) {
+  // BetaRT's celestial assets store a premultiplied glow over black while
+  // keeping alpha opaque. Gamma-decode the glow intensity into a low opacity,
+  // but promote the separate sun/moon body range to full coverage.
+  const float maxChannel = celestialTextureMaxChannel(texel.rgb);
+  const float haloCoverage = haloCoverageScale * maxChannel * maxChannel;
+  const float diskCoverage = celestialTextureDiskCoverage(maxChannel);
+  return saturate(texel.a * max(haloCoverage, diskCoverage) * edgeCoverage);
 }
 
 // ============================================================================
@@ -675,9 +702,9 @@ vec3 evalSunTextureSprite(vec3 viewDir, AtmosphereArgs args, out float spriteCov
   }
 
   vec4 texel = AtmosphereSunTexture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
-  spriteCoverage = celestialTextureCoverage(texel, edgeCoverage);
+  spriteCoverage = celestialTextureCoverage(texel, edgeCoverage, CELESTIAL_SUN_HALO_COVERAGE_SCALE);
 
-  vec3 spriteColor = max(texel.rgb, vec3(0.0f));
+  vec3 spriteColor = celestialTextureStraightColor(max(texel.rgb, vec3(0.0f)));
   vec3 spriteRadiance = spriteColor * args.sunIlluminance * args.sunRayBrightness
                       * args.celestialTextureBrightness * 0.025f;
   return max(spriteRadiance, vec3(0.0f));
@@ -693,10 +720,10 @@ bool sampleMoon0TextureSurface(float diskX, float diskY, out float surfaceDetail
   }
 
   vec4 texel = AtmosphereMoon0Texture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
-  float coverage = celestialTextureCoverage(texel, 1.0f);
-  surfaceColor = max(texel.rgb, vec3(0.0f));
-  surfaceDetail = max(max(surfaceColor.r, surfaceColor.g), surfaceColor.b);
-  surfaceColor = surfaceDetail > 0.0001f ? surfaceColor / surfaceDetail : vec3(0.0f);
+  float coverage = celestialTextureCoverage(texel, 1.0f, CELESTIAL_MOON_HALO_COVERAGE_SCALE);
+  const vec3 atlasColor = max(texel.rgb, vec3(0.0f));
+  surfaceColor = celestialTextureStraightColor(atlasColor);
+  surfaceDetail = celestialTextureSurfaceDetail(atlasColor);
   return coverage > 0.001f;
 }
 
@@ -726,7 +753,7 @@ bool sampleMoon0TextureSprite(
   }
 
   vec4 texel = AtmosphereMoon0Texture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
-  textureCoverage = celestialTextureCoverage(texel, edgeCoverage);
+  textureCoverage = celestialTextureCoverage(texel, edgeCoverage, CELESTIAL_MOON_HALO_COVERAGE_SCALE);
   if (textureCoverage <= 0.001f) {
     return false;
   }
@@ -734,9 +761,9 @@ bool sampleMoon0TextureSprite(
   diskX = spriteCoord.x;
   diskY = spriteCoord.y;
   normalizedAngle = saturate(max(abs(diskX), abs(diskY)));
-  surfaceColor = max(texel.rgb, vec3(0.0f));
-  surfaceDetail = max(max(surfaceColor.r, surfaceColor.g), surfaceColor.b);
-  surfaceColor = surfaceDetail > 0.0001f ? surfaceColor / surfaceDetail : vec3(0.0f);
+  const vec3 atlasColor = max(texel.rgb, vec3(0.0f));
+  surfaceColor = celestialTextureStraightColor(atlasColor);
+  surfaceDetail = celestialTextureSurfaceDetail(atlasColor);
   return true;
 }
 
