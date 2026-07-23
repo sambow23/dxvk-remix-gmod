@@ -134,7 +134,7 @@ TranslucentSurfaceMaterialInteraction translucentSurfaceMaterialInteractionCreat
     if (transmittanceOrDiffuseLoaded)
     {
       diffuseColor = transmittanceOrDiffuseSample.rgb;
-      diffuseOpacity = transmittanceOrDiffuseSample.a;
+      diffuseOpacity = transmittanceOrDiffuseSample.a * translucentSurfaceMaterial.diffuseLayerOpacity;
     }
   }
 

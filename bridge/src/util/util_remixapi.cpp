@@ -374,7 +374,8 @@ void MaterialInfoOpaqueSubsurface::_dtor() {
                                     transmittanceMeasurementDistance, \
                                     thinWallThickness_hasvalue, \
                                     thinWallThickness_value, \
-                                    useDiffuseLayer
+                                    useDiffuseLayer, \
+                                    diffuseLayerOpacity
 uint32_t MaterialInfoTranslucent::_calcSize() const {
   return fold_helper::calcSize(MaterialInfoTranslucentVars);
 }

@@ -1774,6 +1774,7 @@ namespace dxvk {
       translucentMaterialData.getEnableThinWalled(),
       translucentMaterialData.getThinWallThickness(),
       translucentMaterialData.getEnableDiffuseLayer(),
+      translucentMaterialData.getDiffuseLayerOpacity(),
       samplerIndex
     };
   }

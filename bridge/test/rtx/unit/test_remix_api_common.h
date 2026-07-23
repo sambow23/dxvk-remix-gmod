@@ -345,7 +345,8 @@ using MaterialInfoTranslucent = Expected<remixapi_MaterialInfoTranslucentEXT>;
                                     transmittanceMeasurementDistance, \
                                     thinWallThickness_hasvalue, \
                                     thinWallThickness_value, \
-                                    useDiffuseLayer
+                                    useDiffuseLayer, \
+                                    diffuseLayerOpacity
 void MaterialInfoTranslucent::init() {
   sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT;
   pNext = nullptr;

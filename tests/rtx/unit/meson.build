@@ -109,6 +109,15 @@ exe = executable('test_atmosphere_celestial_textures',
 test('test_atmosphere_celestial_textures', exe, env: test_env)
 tests += exe
 
+exe = executable('test_translucent_diffuse_layer_opacity',
+  files('test_translucent_diffuse_layer_opacity.cpp'),
+  include_directories : test_include_path,
+  dependencies : test_unit_deps,
+  win_subsystem : 'console',
+  override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_translucent_diffuse_layer_opacity', exe, env: test_env)
+tests += exe
+
 exe = executable('test_external_camera_origin',  files('test_external_camera_origin.cpp'), include_directories : [test_include_path, remix_api_include_path], dependencies : test_unit_deps, link_with: [ dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_external_camera_origin', exe, env: test_env)
 tests += exe

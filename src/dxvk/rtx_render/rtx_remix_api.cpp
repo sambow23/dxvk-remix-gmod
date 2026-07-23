@@ -446,6 +446,7 @@ namespace {
           src.getEnableThinWalled(),
           src.getThinWallThickness(),
           src.getEnableDiffuseLayer(),
+          src.getDiffuseLayerOpacity(),
           src.getFilterMode(),
           src.getWrapModeU(),
           src.getWrapModeV()
@@ -541,6 +542,7 @@ namespace {
           tobool(extTranslucent->thinWallThickness_hasvalue),
           extTranslucent->thinWallThickness_hasvalue ? extTranslucent->thinWallThickness_value : 0.001f, // default TranslucentMaterial::ThinWallThickness
           tobool(extTranslucent->useDiffuseLayer),
+          (s_apiVersion >= REMIXAPI_VERSION_MAKE(0, 6, 5)) ? extTranslucent->diffuseLayerOpacity : 1.0f,
           info.filterMode,
           info.wrapModeU,
           info.wrapModeV,

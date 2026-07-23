@@ -123,6 +123,42 @@ int main() {
   requireContains(skyShader, "CELESTIAL_TEXTURE_FLAG_MOON0", "sky shader moon flag");
   requireContains(skyShader, "computeCelestialSpriteUv", "sky shader sprite UV helper");
   requireContains(skyShader, "celestialTextureCoverage", "sky shader luminance-aware coverage");
+  requireContains(skyShader,
+                  "celestialTextureStraightColor",
+                  "black-backed celestial texture straight-color reconstruction");
+  requireContains(skyShader,
+                  "CELESTIAL_SUN_HALO_COVERAGE_SCALE = 3.0f",
+                  "sun-specific halo coverage scale");
+  requireContains(skyShader,
+                  "CELESTIAL_MOON_HALO_COVERAGE_SCALE = 2.0f",
+                  "moon-specific halo coverage scale");
+  requireContains(skyShader,
+                  "const float haloCoverage = haloCoverageScale * maxChannel * maxChannel;",
+                  "celestial halo gamma-decoded tuned coverage");
+  requireContains(skyShader,
+                  "edgeCoverage, CELESTIAL_SUN_HALO_COVERAGE_SCALE",
+                  "sun sprite uses sun halo coverage scale");
+  requireContains(skyShader,
+                  "edgeCoverage, CELESTIAL_MOON_HALO_COVERAGE_SCALE",
+                  "moon sprite uses moon halo coverage scale");
+  requireContains(skyShader,
+                  "smoothstep(0.16f, 0.30f, maxChannel)",
+                  "celestial opaque-disk coverage threshold");
+  requireContains(skyShader,
+                  "max(haloCoverage, diskCoverage)",
+                  "celestial halo and opaque-disk coverage composition");
+  requireContains(skyShader,
+                  "celestialTextureSurfaceDetail",
+                  "moon disk detail isolation from halo opacity");
+  requireContains(skyShader,
+                  "surfaceDetail = celestialTextureSurfaceDetail(atlasColor);",
+                  "moon disk detail uses atlas body intensity");
+  requireNotContains(skyShader,
+                     "smoothstep(0.001f, 0.03f, maxChannel)",
+                     "celestial halo intensity must not saturate into opacity");
+  requireNotContains(skyShader,
+                     "return saturate(texel.a * maxChannel * edgeCoverage);",
+                     "gamma-encoded celestial intensity must not be used directly as opacity");
   requireContains(skyShader, "evalSunTextureSprite", "sky shader sun texture sprite");
   requireContains(skyShader, "sampleMoon0TextureSprite", "sky shader moon texture sprite");
   requireContains(skyShader, "args.celestialTextureAngularRadius", "sky shader visual sprite radius");

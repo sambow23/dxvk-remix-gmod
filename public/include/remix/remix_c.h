@@ -58,7 +58,7 @@
 
 #define REMIXAPI_VERSION_MAJOR 0
 #define REMIXAPI_VERSION_MINOR 6
-#define REMIXAPI_VERSION_PATCH 4
+#define REMIXAPI_VERSION_PATCH 5
 
 
 // External
@@ -281,6 +281,7 @@ extern "C" {
     remixapi_Bool       thinWallThickness_hasvalue;
     float               thinWallThickness_value;
     remixapi_Bool       useDiffuseLayer;
+    float               diffuseLayerOpacity;
   } remixapi_MaterialInfoTranslucentEXT;
 
   typedef struct remixapi_MaterialInfoPortalEXT {

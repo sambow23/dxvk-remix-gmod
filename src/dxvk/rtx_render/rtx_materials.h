@@ -899,14 +899,15 @@ struct RtTranslucentSurfaceMaterial {
     float refractiveIndex,
     float transmittanceMeasurementDistance, const Vector3& transmittanceColor,
     bool enableEmission, float emissiveIntensity, const Vector3& emissiveColorConstant,
-    bool isThinWalled, float thinWallThickness, bool useDiffuseLayer, uint32_t samplerIndex) :
+    bool isThinWalled, float thinWallThickness, bool useDiffuseLayer, float diffuseLayerOpacity, uint32_t samplerIndex) :
     m_normalTextureIndex(normalTextureIndex),
     m_transmittanceTextureIndex(transmittanceTextureIndex),
     m_emissiveColorTextureIndex(emissiveColorTextureIndex),
     m_refractiveIndex(refractiveIndex),
     m_transmittanceMeasurementDistance(transmittanceMeasurementDistance), m_transmittanceColor(transmittanceColor),
     m_enableEmission(enableEmission), m_emissiveIntensity(emissiveIntensity), m_emissiveColorConstant(emissiveColorConstant),
-    m_isThinWalled(isThinWalled), m_thinWallThickness(thinWallThickness), m_useDiffuseLayer(useDiffuseLayer), m_samplerIndex(samplerIndex)
+    m_isThinWalled(isThinWalled), m_thinWallThickness(thinWallThickness), m_useDiffuseLayer(useDiffuseLayer),
+    m_diffuseLayerOpacity(diffuseLayerOpacity), m_samplerIndex(samplerIndex)
   {
     updateCachedData();
     updateCachedHash();
@@ -958,8 +959,11 @@ struct RtTranslucentSurfaceMaterial {
     writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorConstant.y));
     writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorConstant.z));
     
-    // data[17 - 31]
-    writeGPUPadding<30>(data, offset);
+    // data[17]
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_diffuseLayerOpacity));
+
+    // data[18 - 31]
+    writeGPUPadding<28>(data, offset);
 
     assert(offset - oldOffset == kSurfaceMaterialGPUSize);
   }
@@ -1006,6 +1010,7 @@ private:
       uint32_t isThinWalled;    // NOTE: uint32_t to avoid padding
       float thinWallThickness;
       uint32_t useDiffuseLayer; // NOTE: uint32_t to avoid padding
+      float diffuseLayerOpacity;
       uint32_t samplerIndex;
       // NOTE: There must be NO padding between members, as the struct is used for hashing
     };
@@ -1023,6 +1028,7 @@ private:
       m_isThinWalled,
       m_thinWallThickness,
       m_useDiffuseLayer,
+      m_diffuseLayerOpacity,
       m_samplerIndex,
     };
     m_cachedHash = XXH3_64bits(&hashData, sizeof(hashData));
@@ -1063,6 +1069,7 @@ private:
   bool m_isThinWalled;
   float m_thinWallThickness;
   bool m_useDiffuseLayer;
+  float m_diffuseLayerOpacity;
 
   XXH64_hash_t m_cachedHash;
 

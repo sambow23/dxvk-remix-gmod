@@ -122,6 +122,7 @@
   /* Note: Maximum clamped to float 16 max due to GPU encoding requirements. */ \
   X(ThinWallThickness,                thin_wall_thickness,                float,    .001f,                      65504.0f,                  .001f) \
   X(EnableDiffuseLayer,               use_diffuse_layer,                  bool,     false,                      true,                      false) \
+  X(DiffuseLayerOpacity,              diffuse_layer_opacity,              float,    0.f,                        1.f,                       1.f) \
   /* Sampler State */ \
   X(FilterMode,                       filter_mode,                        uint8_t,  lss::Mdl::Filter::Nearest,  lss::Mdl::Filter::Linear,  lss::Mdl::Filter::Linear)  \
   X(WrapModeU,                        wrap_mode_u,                        uint8_t,  lss::Mdl::WrapMode::Clamp,  lss::Mdl::WrapMode::Clip,  lss::Mdl::WrapMode::Repeat) \

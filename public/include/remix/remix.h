@@ -564,7 +564,8 @@ namespace remix {
       thinWallThickness_hasvalue = false;
       thinWallThickness_value = 0.001f;
       useDiffuseLayer = false;
-      STATIC_ASSERT_SIZEOF(remixapi_MaterialInfoTranslucentEXT, 56);
+      diffuseLayerOpacity = 1.0f;
+      STATIC_ASSERT_SIZEOF(remixapi_MaterialInfoTranslucentEXT, 64);
     }
 
     MaterialInfoTranslucentEXT(const MaterialInfoTranslucentEXT& other)
@@ -607,7 +608,7 @@ namespace remix {
   private:
     void cpp_fixPointers() {
       transmittanceTexture = cpp_transmittanceTexture.c_str();
-      STATIC_ASSERT_SIZEOF(remixapi_MaterialInfoTranslucentEXT, 56);
+      STATIC_ASSERT_SIZEOF(remixapi_MaterialInfoTranslucentEXT, 64);
     }
 
     std::filesystem::path cpp_transmittanceTexture {};
