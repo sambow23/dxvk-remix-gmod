@@ -181,7 +181,6 @@ namespace dxvk {
     float                 m_largeUserWindowWidgeWidth = 252.f;
 
     bool                  m_windowOnRight = true;
-    bool                  m_userGraphicsSettingChanged = false;
     bool                  m_pendingUIOptionsScroll = false;
 
 
@@ -236,7 +235,7 @@ namespace dxvk {
 
     void showRenderingSettings(const Rc<DxvkContext>& ctx);
 
-    void showDLFGOptions(const Rc<DxvkContext>& ctx, bool isDLSSFGSupported);
+    void showDLFGOptions(const Rc<DxvkContext>& ctx);
     void showReflexOptions(const Rc<DxvkContext>& ctx, bool displayStatsWindowToggle);
     void showReflexLatencyStats();
 
