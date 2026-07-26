@@ -111,6 +111,7 @@ template<> constexpr auto ToRemixApiStructEnum< remixapi_MaterialInfo           
 template<> constexpr auto ToRemixApiStructEnum< remixapi_MaterialInfoPortalEXT          > = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_PORTAL_EXT;
 template<> constexpr auto ToRemixApiStructEnum< remixapi_MaterialInfoTranslucentEXT     > = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT;
 template<> constexpr auto ToRemixApiStructEnum< remixapi_MaterialInfoOpaqueEXT          > = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+template<> constexpr auto ToRemixApiStructEnum< remixapi_MaterialInfoOpaqueSpecularEXT  > = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT;
 template<> constexpr auto ToRemixApiStructEnum< remixapi_MaterialInfoOpaqueSubsurfaceEXT> = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SUBSURFACE_EXT;
 template<> constexpr auto ToRemixApiStructEnum< remixapi_LightInfoSphereEXT             > = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
 template<> constexpr auto ToRemixApiStructEnum< remixapi_LightInfoRectEXT               > = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_RECT_EXT;
@@ -137,6 +138,7 @@ namespace serialize {
 // MaterialInfo
 using MaterialInfo = bridge_util::Serializable<remixapi_MaterialInfo,false>;
 using MaterialInfoOpaque = bridge_util::Serializable<remixapi_MaterialInfoOpaqueEXT,false>;
+using MaterialInfoOpaqueSpecular = bridge_util::Serializable<remixapi_MaterialInfoOpaqueSpecularEXT,false>;
 using MaterialInfoOpaqueSubsurface = bridge_util::Serializable<remixapi_MaterialInfoOpaqueSubsurfaceEXT,false>;
 using MaterialInfoTranslucent = bridge_util::Serializable<remixapi_MaterialInfoTranslucentEXT,false>;
 using MaterialInfoPortal = bridge_util::Serializable<remixapi_MaterialInfoPortalEXT,true>;

@@ -10,10 +10,11 @@ namespace dxvk {
           D3D9DeviceEx*             pDevice,
     const D3D9_COMMON_TEXTURE_DESC* pDesc,
           IUnknown*                 pContainer,
-          HANDLE*                   pSharedHandle)
+          HANDLE*                   pSharedHandle,
+          VkExternalMemoryHandleTypeFlagBits sharedHandleType)
     : D3D9SurfaceBase(
-        pDevice,
-        new D3D9CommonTexture( pDevice, pDesc, D3DRTYPE_SURFACE, pSharedHandle),
+        pDevice, new D3D9CommonTexture(pDevice, pDesc, D3DRTYPE_SURFACE,
+                                      pSharedHandle, sharedHandleType),
         0, 0,
         nullptr,
         pContainer) { }

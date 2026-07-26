@@ -1520,6 +1520,7 @@ namespace dxvk {
       texturePresenceMask |= opaqueMaterialData.getSubsurfaceThicknessTexture().isImageEmpty()       ? 0u : (1u << 9);
       texturePresenceMask |= opaqueMaterialData.getSubsurfaceSingleScatteringAlbedoTexture().isImageEmpty() ? 0u : (1u << 10);
       texturePresenceMask |= opaqueMaterialData.getSubsurfaceRadiusTexture().isImageEmpty()          ? 0u : (1u << 11);
+      texturePresenceMask |= opaqueMaterialData.getSpecularF0Texture().isImageEmpty()                ? 0u : (1u << 12);
       preCreationHash = XXH64(&texturePresenceMask, sizeof(texturePresenceMask), preCreationHash);
     }
 
@@ -1552,6 +1553,8 @@ namespace dxvk {
       Vector4 albedoOpacityConstant;
       float roughnessConstant;
       float metallicConstant;
+      Vector3 specularF0Constant(0.04f);
+      bool useSpecularF0Workflow = false;
       Vector3 emissiveColorConstant;
       bool enableEmissive;
       bool thinFilmEnable = false;
@@ -1587,13 +1590,18 @@ namespace dxvk {
 
         trackTexture(opaqueMaterialData.getAlbedoOpacityTexture(), albedoOpacityTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
         trackTexture(opaqueMaterialData.getRoughnessTexture(), roughnessTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
-        trackTexture(opaqueMaterialData.getMetallicTexture(), metallicTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
         trackTexture(opaqueMaterialData.getSecondaryTexture(), secondaryTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
 
         albedoOpacityConstant.xyz() = opaqueMaterialData.getAlbedoConstant();
         albedoOpacityConstant.w = opaqueMaterialData.getOpacityConstant();
         metallicConstant = opaqueMaterialData.getMetallicConstant();
         roughnessConstant = opaqueMaterialData.getRoughnessConstant();
+        specularF0Constant = opaqueMaterialData.getSpecularF0Constant();
+        useSpecularF0Workflow = opaqueMaterialData.getUseSpecularF0Workflow();
+        const TextureRef& reflectivityTexture = useSpecularF0Workflow
+          ? opaqueMaterialData.getSpecularF0Texture()
+          : opaqueMaterialData.getMetallicTexture();
+        trackTexture(reflectivityTexture, metallicTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
       }
 
       trackTexture(opaqueMaterialData.getNormalTexture(), normalTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
@@ -1674,6 +1682,7 @@ namespace dxvk {
         anisotropy, emissiveIntensity,
         albedoOpacityConstant,
         roughnessConstant, metallicConstant,
+        specularF0Constant, useSpecularF0Workflow,
         emissiveColorConstant, enableEmissive,
         ignoreAlphaChannel, thinFilmEnable, alphaIsThinFilmThickness,
         thinFilmThicknessConstant, samplerIndex, displaceIn, displaceOut, 

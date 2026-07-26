@@ -35,7 +35,13 @@ namespace dxvk {
     void labelSemaphore(const char* name);
 
   public:
-    static RtxSemaphore* createTimeline(DxvkDevice* device, const char* name, uint64_t initialValue = 0, bool win32Shared = false);
+    static RtxSemaphore* createTimeline(
+      DxvkDevice* device,
+      const char* name,
+      uint64_t initialValue = 0,
+      bool win32Shared = false,
+      VkExternalSemaphoreHandleTypeFlagBits sharedHandleType =
+        VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT);
     static RtxSemaphore* createBinary(DxvkDevice* device, const char* name, const bool shared = false);
     
     ~RtxSemaphore() override;

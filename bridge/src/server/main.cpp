@@ -2807,6 +2807,7 @@ void ProcessDeviceCommandQueue() {
         // supported at a time
         struct MaterialExtensions {
           serialize::MaterialInfoOpaque opaque;
+          serialize::MaterialInfoOpaqueSpecular opaqueSpecular;
           serialize::MaterialInfoOpaqueSubsurface opaqueSubsurface;
           serialize::MaterialInfoTranslucent translucent;
           serialize::MaterialInfoPortal portal;
@@ -2831,6 +2832,14 @@ void ProcessDeviceCommandQueue() {
               deserializeFromQueue(exts.opaque);
               pInfoProto->pNext = &(exts.opaque);
               pInfoProto = &getInfoProto(exts.opaque);
+              break;
+            }
+            case REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT:
+            {
+              assert(!exts.opaqueSpecular.pNext);
+              deserializeFromQueue(exts.opaqueSpecular);
+              pInfoProto->pNext = &(exts.opaqueSpecular);
+              pInfoProto = &getInfoProto(exts.opaqueSpecular);
               break;
             }
             case REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SUBSURFACE_EXT:

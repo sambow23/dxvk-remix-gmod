@@ -196,11 +196,13 @@ remixapi_ErrorCode DestroyMaterial(remixapi_MaterialHandle handle);
 ```
 
 Materials use a Vulkan-style `pNext` extension chain. `remixapi_MaterialInfo`
-is the base; attach exactly one of the type-specific extensions:
+is the base; attach exactly one root type extension. Optional opaque extensions
+may then chain after `remixapi_MaterialInfoOpaqueEXT`:
 
 | Extension | When to use |
 | :-- | :-- |
 | `remixapi_MaterialInfoOpaqueEXT` | Standard PBR opaque (albedo / roughness / metallic / normal / height / emissive). |
+| `remixapi_MaterialInfoOpaqueSpecularEXT` | Optional dielectric specular-F0 workflow — chains *after* `OpaqueEXT`. |
 | `remixapi_MaterialInfoOpaqueSubsurfaceEXT` | Foliage / skin — chains *after* `OpaqueEXT`. See [`FoliageSystem.md`](FoliageSystem.md). |
 | `remixapi_MaterialInfoTranslucentEXT` | Glass, water, refractive media. |
 | `remixapi_MaterialInfoPortalEXT` | Ray portals. |
@@ -208,6 +210,15 @@ is the base; attach exactly one of the type-specific extensions:
 The runtime uses `info->hash` to dedupe and to bind replacement assets
 from your USD captures; pick a stable hash that survives content
 reloads.
+
+Attach `remixapi_MaterialInfoOpaqueSpecularEXT` after
+`remixapi_MaterialInfoOpaqueEXT` when the source material supplies dielectric
+specular reflectance instead of metalness. Its presence selects the workflow:
+`specularF0Texture` supplies RGB normal-incidence reflectance, or
+`specularF0Constant` is used when the path is null. Diffuse albedo remains
+independent instead of being removed as metalness rises. When this extension is
+absent, the existing `metallicTexture` and `metallicConstant` behavior is
+unchanged.
 
 ---
 

@@ -292,6 +292,7 @@ namespace {
       std::filesystem::path transmittanceTexture;
       std::filesystem::path roughnessTexture;
       std::filesystem::path metallicTexture;
+      std::filesystem::path specularF0Texture;
       std::filesystem::path heightTexture;
       std::filesystem::path subsurfaceTransmittanceTexture;
       std::filesystem::path subsurfaceThicknessTexture;
@@ -302,6 +303,7 @@ namespace {
     PreloadSource makePreloadSource(const remixapi_MaterialInfo& info) {
       // TODO: C++20 designated initializers
       if (auto extOpaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
+        auto extSpecular = pnext::find<remixapi_MaterialInfoOpaqueSpecularEXT>(&info);
         auto extSubsurface = pnext::find<remixapi_MaterialInfoOpaqueSubsurfaceEXT>(&info);
         return PreloadSource {
           topath(info.albedoTexture),   // albedoTexture;
@@ -311,6 +313,7 @@ namespace {
           {},                           // transmittanceTexture;
           topath(extOpaque->roughnessTexture),  // roughnessTexture;
           topath(extOpaque->metallicTexture),   // metallicTexture;
+          topath(extSpecular ? extSpecular->specularF0Texture : nullptr), // specularF0Texture;
           topath(extOpaque->heightTexture),     // heightTexture;
           topath(extSubsurface ? extSubsurface->subsurfaceTransmittanceTexture          : nullptr), // subsurfaceTransmittanceTexture;
           topath(extSubsurface ? extSubsurface->subsurfaceThicknessTexture              : nullptr), // subsurfaceThicknessTexture;
@@ -327,6 +330,7 @@ namespace {
           topath(extTranslucent->transmittanceTexture), // transmittanceTexture;
           {}, // roughnessTexture;
           {}, // metallicTexture;
+          {}, // specularF0Texture;
           {}, // heightTexture;
           {}, // subsurfaceTransmittanceTexture;
           {}, // subsurfaceThicknessTexture;
@@ -343,6 +347,7 @@ namespace {
           {}, // transmittanceTexture;
           {}, // roughnessTexture;
           {}, // metallicTexture;
+          {}, // specularF0Texture;
           {}, // heightTexture;
           {}, // subsurfaceTransmittanceTexture;
           {}, // subsurfaceThicknessTexture;
@@ -386,6 +391,7 @@ namespace {
           preloadTexture(preload.heightTexture),
           preloadTexture(preload.roughnessTexture),
           preloadTexture(preload.metallicTexture),
+          preloadTexture(preload.specularF0Texture),
           preloadTexture(preload.emissiveTexture),
           preloadTexture(preload.subsurfaceTransmittanceTexture),
           preloadTexture(preload.subsurfaceThicknessTexture),
@@ -398,6 +404,8 @@ namespace {
           src.getOpacityConstant(),
           src.getRoughnessConstant(),
           src.getMetallicConstant(),
+          src.getSpecularF0Constant(),
+          src.getUseSpecularF0Workflow(),
           src.getEmissiveColorConstant(),
           src.getEnableEmission(),
           src.getSpriteSheetRows(),
@@ -476,8 +484,10 @@ namespace {
 
     MaterialData toRtMaterialWithoutTexturePreload(const remixapi_MaterialInfo& info) {
       if (auto extOpaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
+        auto extSpecular = pnext::find<remixapi_MaterialInfoOpaqueSpecularEXT>(&info);
         auto extSubsurface = pnext::find<remixapi_MaterialInfoOpaqueSubsurfaceEXT>(&info);
         return MaterialData { OpaqueMaterialData {
+          {},
           {},
           {},
           {},
@@ -496,6 +506,8 @@ namespace {
           extOpaque->opacityConstant,
           extOpaque->roughnessConstant,
           extOpaque->metallicConstant,
+          extSpecular ? tovec3(extSpecular->specularF0Constant) : Vector3{ 0.04f, 0.04f, 0.04f },
+          extSpecular != nullptr,
           tovec3(info.emissiveColorConstant),
           info.emissiveIntensity > 0.f,
           info.spriteSheetRow,
@@ -1871,6 +1883,77 @@ namespace {
     return dxvk::fork_hooks::getSharedD3D11TextureHandle(remixDevice, out_sharedHandle, out_width, out_height);
   }
 
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_dxvk_GetExternalD3D12Frame(
+      remixapi_ExternalD3D12FrameInfo* out_info) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!out_info) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    auto* presenter = remixDevice->GetExternalPresenter();
+    if (!presenter) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    HANDLE images[2] = {};
+    HANDLE readyFence = nullptr;
+    HANDLE releaseFence = nullptr;
+    uint64_t generation = 0;
+    uint64_t frameValue = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    if (!presenter->GetExternalD3D12FrameInfo(
+          images, readyFence, releaseFence, generation, frameValue,
+          width, height, format)) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    *out_info = {};
+    out_info->colorResourceHandles[0] = images[0];
+    out_info->colorResourceHandles[1] = images[1];
+    out_info->readyFenceHandle = readyFence;
+    out_info->releaseFenceHandle = releaseFence;
+    out_info->generation = generation;
+    out_info->frameValue = frameValue;
+    out_info->width = width;
+    out_info->height = height;
+    out_info->format = uint32_t(format);
+    out_info->bufferCount = 2;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_dxvk_SetExternalD3D12Resources(
+      void* colorResourceHandles[2],
+      uint32_t width,
+      uint32_t height,
+      uint32_t format) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    auto* presenter = remixDevice->GetExternalPresenter();
+    if (!presenter) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+    if (!colorResourceHandles ||
+        !colorResourceHandles[0] ||
+        !colorResourceHandles[1] ||
+        width == 0 || height == 0) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    HANDLE imageHandles[2] = {
+      static_cast<HANDLE>(colorResourceHandles[0]),
+      static_cast<HANDLE>(colorResourceHandles[1]) };
+    return presenter->SetExternalD3D12Resources(
+        imageHandles, width, height, VkFormat(format))
+      ? REMIXAPI_ERROR_CODE_SUCCESS
+      : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_dxvk_GetVkImage(
     IDirect3DSurface9* source,
     uint64_t* out_vkImage) {
@@ -2081,6 +2164,9 @@ namespace {
     // Clear fork-owned callback state (lives in rtx_fork_api_entry.cpp)
     dxvk::fork_hooks::shutdownCallbacks();
     if (s_dxvkDevice) {
+      if (auto* presenter = s_dxvkDevice->GetExternalPresenter()) {
+        presenter->ReleaseAllExternalFrames();
+      }
       while (true) {
         ULONG left = s_dxvkDevice->Release();
         if (left == 0) {
@@ -2245,7 +2331,8 @@ namespace {
       }
     }
 
-    if (windowWidth > 0 && windowHeight > 0) {
+    if (!remixDevice->GetExternalPresenter() &&
+        windowWidth > 0 && windowHeight > 0) {
       IDirect3DSwapChain9* swapchain = nullptr;
       hr = remixDevice->GetSwapChain(0, &swapchain);
       if (FAILED(hr) || !swapchain) {
@@ -2253,6 +2340,7 @@ namespace {
       }
       D3DPRESENT_PARAMETERS presentParams{};
       hr = swapchain->GetPresentParameters(&presentParams);
+      swapchain->Release();
       if (FAILED(hr)) {
         return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
       }
@@ -2642,10 +2730,14 @@ extern "C"
       interf.FreeUITexture = remixapi_FreeUITexture;
       interf.SubmitUIDrawList = remixapi_SubmitUIDrawList;
       interf.RequestPresentedScreenshot = remixapi_RequestPresentedScreenshot;
+      interf.dxvk_GetExternalD3D12Frame =
+        remixapi_dxvk_GetExternalD3D12Frame;
+      interf.dxvk_SetExternalD3D12Resources =
+        remixapi_dxvk_SetExternalD3D12Resources;
       // Fork-added vtable slots (extern-C exported; delegated to fork hook)
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 368, "Add/remove function registration");
+    static_assert(sizeof(interf) == 384, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

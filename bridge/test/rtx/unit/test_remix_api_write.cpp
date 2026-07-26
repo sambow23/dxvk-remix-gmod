@@ -67,6 +67,7 @@ int main(int argc, char * argv[]) {
 
   INIT_SERIALIZE_WRITE(MaterialInfo, mat, file);
   INIT_SERIALIZE_WRITE(MaterialInfoOpaque, matOpaque, file);
+  INIT_SERIALIZE_WRITE(MaterialInfoOpaqueSpecular, matOpaqueSpecular, file);
   INIT_SERIALIZE_WRITE(MaterialInfoOpaqueSubsurface, matOpaqueSubSurf, file);
   INIT_SERIALIZE_WRITE(MaterialInfoTranslucent, matTrans, file);
   INIT_SERIALIZE_WRITE(MaterialInfoPortal, matPortal, file);

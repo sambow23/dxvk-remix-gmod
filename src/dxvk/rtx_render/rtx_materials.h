@@ -550,6 +550,7 @@ struct RtOpaqueSurfaceMaterial {
     float anisotropy, float emissiveIntensity,
     const Vector4& albedoOpacityConstant,
     float roughnessConstant, float metallicConstant,
+    const Vector3& specularF0Constant, bool useSpecularF0Workflow,
     const Vector3& emissiveColorConstant, bool enableEmission,
     bool ignoreAlphaChannel, bool enableThinFilm, bool alphaIsThinFilmThickness, float thinFilmThicknessConstant,
     uint32_t samplerIndex, float displaceIn, float displaceOut,
@@ -563,6 +564,7 @@ struct RtOpaqueSurfaceMaterial {
     m_anisotropy{ anisotropy }, m_emissiveIntensity{ emissiveIntensity },
     m_albedoOpacityConstant{ albedoOpacityConstant },
     m_roughnessConstant{ roughnessConstant }, m_metallicConstant{ metallicConstant },
+    m_specularF0Constant{ specularF0Constant }, m_useSpecularF0Workflow{ useSpecularF0Workflow },
     m_emissiveColorConstant{ emissiveColorConstant }, m_enableEmission{ enableEmission },
     m_ignoreAlphaChannel { ignoreAlphaChannel }, m_enableThinFilm { enableThinFilm }, m_alphaIsThinFilmThickness { alphaIsThinFilmThickness },
     m_thinFilmThicknessConstant { thinFilmThicknessConstant }, m_samplerIndex{ samplerIndex }, m_displaceIn{ displaceIn },
@@ -598,6 +600,10 @@ struct RtOpaqueSurfaceMaterial {
 
     if (m_isRaytracedRenderTarget) {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_IS_RAYTRACED_RENDER_TARGET;
+    }
+
+    if (m_useSpecularF0Workflow) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_USE_SPECULAR_F0;
     }
 
     float displaceIn = m_displaceIn * getDisplacementInFactor();
@@ -659,7 +665,12 @@ struct RtOpaqueSurfaceMaterial {
     // data[26]
     writeGPUHelperExplicit<2>(data, offset, m_samplerFeedbackStamp);
 
-    writeGPUPadding<10>(data, offset);
+    // data[27-29]
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_specularF0Constant.x));
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_specularF0Constant.y));
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_specularF0Constant.z));
+
+    writeGPUPadding<4>(data, offset);
     assert(offset - oldOffset == kSurfaceMaterialGPUSize);
   }
 
@@ -744,6 +755,14 @@ struct RtOpaqueSurfaceMaterial {
     return m_metallicConstant;
   }
 
+  Vector3 getSpecularF0Constant() const {
+    return m_specularF0Constant;
+  }
+
+  bool getUseSpecularF0Workflow() const {
+    return m_useSpecularF0Workflow;
+  }
+
   Vector3 getEmissiveColorConstant() const {
     return m_emissiveColorConstant;
   }
@@ -775,7 +794,7 @@ struct RtOpaqueSurfaceMaterial {
 private:
   void updateCachedHash() {
     static_assert(
-      sizeof(*this) == 120,
+      sizeof(*this) == 136,
       "add new member for hashing if needed: add a MEMBER into the struct + add a VALUE into the list-init"
     );
     struct HashStruct {
@@ -791,6 +810,8 @@ private:
       Vector4 albedoOpacityConstant;
       float roughnessConstant;
       float metallicConstant;
+      Vector3 specularF0Constant;
+      uint32_t useSpecularF0Workflow;
       Vector3 emissiveColorConstant;
       uint32_t enableEmission;            // NOTE: uint32_t to avoid padding
       uint32_t ignoreAlphaChannel;        // NOTE: uint32_t to avoid padding
@@ -820,6 +841,8 @@ private:
       m_albedoOpacityConstant,
       m_roughnessConstant,
       m_metallicConstant,
+      m_specularF0Constant,
+      m_useSpecularF0Workflow,
       m_emissiveColorConstant,
       m_enableEmission,
       m_ignoreAlphaChannel,
@@ -864,6 +887,8 @@ private:
   Vector4 m_albedoOpacityConstant;
   float m_roughnessConstant;
   float m_metallicConstant;
+  Vector3 m_specularF0Constant;
+  bool m_useSpecularF0Workflow;
   Vector3 m_emissiveColorConstant;
 
   bool m_enableEmission;

@@ -21,7 +21,9 @@ namespace dxvk {
             D3D9DeviceEx*             pDevice,
       const D3D9_COMMON_TEXTURE_DESC* pDesc,
             IUnknown*                 pContainer,
-            HANDLE*                   pSharedHandle);
+            HANDLE*                   pSharedHandle,
+            VkExternalMemoryHandleTypeFlagBits sharedHandleType =
+              VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT);
 
     D3D9Surface(
             D3D9DeviceEx*             pDevice,

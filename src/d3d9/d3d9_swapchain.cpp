@@ -322,7 +322,8 @@ namespace dxvk {
   D3D9SwapChainEx::D3D9SwapChainEx(
           D3D9DeviceEx*          pDevice,
           D3DPRESENT_PARAMETERS* pPresentParams,
-    const D3DDISPLAYMODEEX*      pFullscreenDisplayMode)
+    const D3DDISPLAYMODEEX*      pFullscreenDisplayMode,
+          bool                   initializeWindowPresentation)
     : D3D9SwapChainExBase(pDevice)
     , m_device           (pDevice->GetDXVKDevice())
     , m_context          (m_device->createContext())
@@ -335,6 +336,12 @@ namespace dxvk {
     m_presentParams = *pPresentParams;
     m_window = m_presentParams.hDeviceWindow;
 
+    UpdatePresentRegion(nullptr, nullptr);
+    InitRamp();
+
+    if (!initializeWindowPresentation)
+      return;
+
     // NV-DXVK start: DLFG integration
     if (RtxOptions::enableVsync() == EnableVsync::WaitingForImplicitSwapchain) {
       // save the vsync state when the first swapchain is created, to act as the default
@@ -342,8 +349,6 @@ namespace dxvk {
     }
     // NV-DXVK end
 
-    UpdatePresentRegion(nullptr, nullptr);
-    
     if (m_window) {
       CreatePresenter();
 
@@ -354,8 +359,6 @@ namespace dxvk {
     CreateBackBuffers(m_presentParams.BackBufferCount);
     CreateBlitter();
     CreateHud();
-
-    InitRamp();
 
     // Apply initial window mode and fullscreen state
     const bool modifyWindow = !(m_parent->m_behaviorFlags & D3DCREATE_NOWINDOWCHANGES);
@@ -849,20 +852,20 @@ namespace dxvk {
   }
 
   HRESULT D3D9SwapchainExternal::Reset(D3DPRESENT_PARAMETERS* pPresentParams, D3DDISPLAYMODEEX* pFullscreenDisplayMode, bool forceWindowReset) {
+    WaitForAllExternalFrames();
     D3D9DeviceLock lock = m_parent->LockDevice();
-
-    this->SynchronizePresent();
+    m_parent->Flush();
+    m_parent->SynchronizeCsThread();
+    m_device->waitForIdle();
     this->NormalizePresentParameters(pPresentParams);
 
     if (pPresentParams->hDeviceWindow != nullptr && m_window != pPresentParams->hDeviceWindow) {
-      ResetWindowProc(m_window);
       m_window = m_parent->m_window = pPresentParams->hDeviceWindow;
-      HookWindowProc(m_window);
     }
 
     m_presentParams = *pPresentParams;
 
-    CreateBackBuffers(m_presentParams.BackBufferCount);
+    CreateBackBuffers(2);
 
     return S_OK;
   }

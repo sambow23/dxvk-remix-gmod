@@ -320,6 +320,19 @@ bool MaterialInfoOpaque::compare(const RemixApiT& me, const RemixApiT& other) co
 }
 
 
+using MaterialInfoOpaqueSpecular = Expected<remixapi_MaterialInfoOpaqueSpecularEXT>;
+#define MaterialInfoOpaqueSpecularVars specularF0Texture, \
+                                       specularF0Constant
+void MaterialInfoOpaqueSpecular::init() {
+  sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT;
+  pNext = nullptr;
+  populateVals(MaterialInfoOpaqueSpecularVars);
+}
+bool MaterialInfoOpaqueSpecular::compare(const RemixApiT& me, const RemixApiT& other) const {
+  return compareVals(me, other, MaterialInfoOpaqueSpecularVars);
+}
+
+
 using MaterialInfoOpaqueSubsurface = Expected<remixapi_MaterialInfoOpaqueSubsurfaceEXT>;
 #define MaterialInfoOpaqueSubsurfaceVars subsurfaceTransmittanceTexture, \
                                          subsurfaceThicknessTexture, \
@@ -837,6 +850,7 @@ bool InstanceInfoParticleSystem::compare(const RemixApiT& me, const RemixApiT& o
 
 MaterialInfo mat;
 MaterialInfoOpaque matOpaque;
+MaterialInfoOpaqueSpecular matOpaqueSpecular;
 MaterialInfoOpaqueSubsurface matOpaqueSubSurf;
 MaterialInfoTranslucent matTrans;
 MaterialInfoPortal matPortal;

@@ -34,6 +34,7 @@
 
 #include "../util/sync/sync_signal.h"
 
+#include <array>
 #include <vector>
 
 namespace dxvk {
@@ -48,7 +49,8 @@ namespace dxvk {
     D3D9SwapChainEx(
             D3D9DeviceEx*          pDevice,
             D3DPRESENT_PARAMETERS* pPresentParams,
-      const D3DDISPLAYMODEEX*      pFullscreenDisplayMode);
+      const D3DDISPLAYMODEEX*      pFullscreenDisplayMode,
+            bool                   initializeWindowPresentation = true);
 
     ~D3D9SwapChainEx();
 
@@ -205,7 +207,7 @@ namespace dxvk {
 
     void DestroyBackBuffers();
 
-    void CreateBackBuffers(
+    virtual void CreateBackBuffers(
             uint32_t            NumBackBuffers);
 
     virtual int NumFrontBuffers();
@@ -272,9 +274,16 @@ namespace dxvk {
   class D3D9SwapchainExternal final : public D3D9SwapChainEx {
     Rc<RtxSemaphore> m_frameEndSemaphore;
     Rc<RtxSemaphore> m_frameResumeSemaphore;
+    std::array<Rc<DxvkImage>, 2> m_externalImages;
+    std::array<HANDLE, 2> m_externalImageHandles = {
+      INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE };
+    uint64_t m_externalGeneration = 0;
+    uint64_t m_externalGenerationSerial = 0;
+    uint64_t m_externalFrameValue = 0;
 
   protected:
     int NumFrontBuffers() override { return 0; };
+    void CreateBackBuffers(uint32_t NumBackBuffers) override;
 
   public:
 
@@ -282,6 +291,8 @@ namespace dxvk {
             D3D9DeviceEx* pDevice,
             D3DPRESENT_PARAMETERS* pPresentParams,
       const D3DDISPLAYMODEEX* pFullscreenDisplayMode);
+
+    ~D3D9SwapchainExternal();
 
     HRESULT Reset(
             D3DPRESENT_PARAMETERS* pPresentParams,
@@ -311,6 +322,25 @@ namespace dxvk {
     VkSemaphore GetFrameCompleteVkSemaphore() const {
       return m_frameResumeSemaphore->handle();
     }
+
+    bool GetExternalD3D12FrameInfo(
+      HANDLE (&imageHandles)[2],
+      HANDLE& readyFenceHandle,
+      HANDLE& releaseFenceHandle,
+      uint64_t& generation,
+      uint64_t& frameValue,
+      uint32_t& width,
+      uint32_t& height,
+      VkFormat& format) const;
+
+    bool SetExternalD3D12Resources(
+      const HANDLE (&imageHandles)[2],
+      uint32_t width,
+      uint32_t height,
+      VkFormat format);
+
+    void ReleaseAllExternalFrames();
+    void WaitForAllExternalFrames();
 // NV-DXVK end
   };
 

@@ -58,7 +58,7 @@
 
 #define REMIXAPI_VERSION_MAJOR 0
 #define REMIXAPI_VERSION_MINOR 6
-#define REMIXAPI_VERSION_PATCH 5
+#define REMIXAPI_VERSION_PATCH 6
 
 
 // External
@@ -135,6 +135,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_FOG_INFO                              = 29,
     REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST                         = 30,
     REMIXAPI_STRUCT_TYPE_LIGHT_INFO_LOCAL_ORIGIN_EXT           = 31,
+    REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT     = 32,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -252,6 +253,16 @@ extern "C" {
     uint8_t             alphaReferenceValue;
     float               displaceOut;
   } remixapi_MaterialInfoOpaqueEXT;
+
+  // Valid only if remixapi_MaterialInfo contains remixapi_MaterialInfoOpaqueEXT
+  // in its pNext chain. Presence opts the opaque material into a dielectric
+  // specular-F0 workflow instead of the metallic workflow.
+  typedef struct remixapi_MaterialInfoOpaqueSpecularEXT {
+    remixapi_StructType sType;
+    void*               pNext;
+    remixapi_Path       specularF0Texture;
+    remixapi_Float3D    specularF0Constant;
+  } remixapi_MaterialInfoOpaqueSpecularEXT;
 
   // Valid only if remixapi_MaterialInfo contains remixapi_MaterialInfoOpaqueEXT in pNext chain
   typedef struct remixapi_MaterialInfoOpaqueSubsurfaceEXT {
@@ -866,6 +877,34 @@ extern "C" {
     uint32_t* out_width,
     uint32_t* out_height);
 
+  // D3D12-compatible, headless final-color output. Color resource handles are
+  // supplied and owned by the application; Remix imports them into Vulkan.
+  // Fence handles are owned by Remix and remain valid until Shutdown.
+  // frameValue starts at 1; slot (frameValue - 1) % bufferCount identifies the
+  // resource containing that frame. The consumer waits readyFence to
+  // frameValue before sampling, then signals releaseFence to frameValue after
+  // the last sample has completed.
+  typedef struct remixapi_ExternalD3D12FrameInfo {
+    void*    colorResourceHandles[2];
+    void*    readyFenceHandle;
+    void*    releaseFenceHandle;
+    uint64_t generation;
+    uint64_t frameValue;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;       // VkFormat numeric value.
+    uint32_t bufferCount;  // Currently always 2.
+  } remixapi_ExternalD3D12FrameInfo;
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_dxvk_GetExternalD3D12Frame)(
+    remixapi_ExternalD3D12FrameInfo* out_info);
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_dxvk_SetExternalD3D12Resources)(
+    void*    color_resource_handles[2],
+    uint32_t width,
+    uint32_t height,
+    uint32_t format);
+
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_dxvk_GetVkImage)(
     IDirect3DSurface9*  source,
     uint64_t*           out_vkImage);
@@ -1164,6 +1203,8 @@ extern "C" {
     PFN_remixapi_FreeUITexture              FreeUITexture;
     PFN_remixapi_SubmitUIDrawList           SubmitUIDrawList;
     PFN_remixapi_RequestPresentedScreenshot RequestPresentedScreenshot;
+    PFN_remixapi_dxvk_GetExternalD3D12Frame dxvk_GetExternalD3D12Frame;
+    PFN_remixapi_dxvk_SetExternalD3D12Resources dxvk_SetExternalD3D12Resources;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

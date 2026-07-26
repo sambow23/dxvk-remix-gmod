@@ -110,6 +110,13 @@ remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateMaterial(
           serializeAndSend<serialize::MaterialInfoOpaque>(c, *pOpaqueMat);
           break;
         }
+        case REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT:
+        {
+          auto* pOpaqueSpecularMat = static_cast<const remixapi_MaterialInfoOpaqueSpecularEXT* const>(infoItr);
+          send(c, Bool::True);
+          serializeAndSend<serialize::MaterialInfoOpaqueSpecular>(c, *pOpaqueSpecularMat);
+          break;
+        }
         case REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SUBSURFACE_EXT:
         {
           auto* pOpaqueSubsurfaceMat = static_cast<const remixapi_MaterialInfoOpaqueSubsurfaceEXT* const>(infoItr);

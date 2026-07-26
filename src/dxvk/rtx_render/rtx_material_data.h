@@ -40,6 +40,7 @@
   X(HeightTexture,                           height_texture,                       TextureRef, void, void, {}) \
   X(RoughnessTexture,                        reflectionroughness_texture,          TextureRef, void, void, {}) \
   X(MetallicTexture,                         metallic_texture,                     TextureRef, void, void, {}) \
+  X(SpecularF0Texture,                       specular_f0_texture,                  TextureRef, void, void, {}) \
   X(EmissiveColorTexture,                    emissive_mask_texture,                TextureRef, void, void, {}) \
   X(SubsurfaceTransmittanceTexture,          subsurface_transmittance_texture,     TextureRef, void, void, {}) \
   X(SubsurfaceThicknessTexture,              subsurface_thickness_texture,         TextureRef, void, void, {}) \
@@ -57,6 +58,8 @@
   X(OpacityConstant,                  opacity_constant,                       float,          0.f,                        1.f,                       1.f) \
   X(RoughnessConstant,                reflection_roughness_constant,          float,          0.f,                        1.f,                       .5f) \
   X(MetallicConstant,                 metallic_constant,                      float,          0.f,                        1.f,                       0.f) \
+  X(SpecularF0Constant,               specular_f0_constant,                   Vector3,        Vector3(0.f),               Vector3(1.f),              Vector3(0.04f)) \
+  X(UseSpecularF0Workflow,            use_specular_f0_workflow,               bool,           false,                      true,                      false) \
   X(EmissiveColorConstant,            emissive_color_constant,                Vector3,        Vector3(0.f),               Vector3(1.f),              Vector3(1.0f, 0.1f, 0.1f)) \
   X(EnableEmission,                   enable_emission,                        bool,           false,                      true,                      false) \
   X(SpriteSheetRows,                  sprite_sheet_rows,                      uint8_t,        0,                          255,                       0) \

@@ -342,6 +342,24 @@ void MaterialInfoOpaque::_dtor() {
 }
 
 
+#define MaterialInfoOpaqueSpecularVars sType, \
+                                       specularF0Texture, \
+                                       specularF0Constant
+uint32_t MaterialInfoOpaqueSpecular::_calcSize() const {
+  return fold_helper::calcSize(MaterialInfoOpaqueSpecularVars);
+}
+void MaterialInfoOpaqueSpecular::_serialize(void*& pSerialize) const {
+  fold_helper::serialize(pSerialize, MaterialInfoOpaqueSpecularVars);
+}
+void MaterialInfoOpaqueSpecular::_deserialize(void*& pDeserialize) {
+  pNext = nullptr;
+  fold_helper::deserialize(pDeserialize, MaterialInfoOpaqueSpecularVars);
+}
+void MaterialInfoOpaqueSpecular::_dtor() {
+  delete specularF0Texture;
+}
+
+
 #define MaterialInfoOpaqueSubsurfaceVars sType, \
                                          subsurfaceTransmittanceTexture, \
                                          subsurfaceThicknessTexture, \

@@ -644,6 +644,7 @@ namespace dxvk {
       createTextureRef(ReplacementMaterialTextureType::Height),
       createTextureRef(ReplacementMaterialTextureType::Roughness),
       createTextureRef(ReplacementMaterialTextureType::Metallic),
+      TextureRef(), // SpecularF0
       createTextureRef(ReplacementMaterialTextureType::Emissive),
       TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), // SSS textures
       Material::Properties::roughnessAnisotropy(),
@@ -652,6 +653,8 @@ namespace dxvk {
       1.f, // OpacityConstant - unused since the AlbedoOpacity texture must be always present for baking
       Material::Properties::roughnessConstant(),
       Material::Properties::metallicConstant(),
+      Vector3(0.04f), // SpecularF0Constant
+      false, // UseSpecularF0Workflow
       Material::Properties::emissiveColorConstant(),
       Material::Properties::enableEmission(),
       // Setting expected constant values. Baked terrain should not need to have other values for the below material parameters set

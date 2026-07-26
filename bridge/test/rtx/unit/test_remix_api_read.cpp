@@ -48,6 +48,7 @@ int main(int argc, char * argv[]) {
 
   READ_DESERIALIZE_COMPARE(pDeserialize, MaterialInfo, mat);
   READ_DESERIALIZE_COMPARE(pDeserialize, MaterialInfoOpaque, matOpaque);
+  READ_DESERIALIZE_COMPARE(pDeserialize, MaterialInfoOpaqueSpecular, matOpaqueSpecular);
   READ_DESERIALIZE_COMPARE(pDeserialize, MaterialInfoOpaqueSubsurface, matOpaqueSubSurf);
   READ_DESERIALIZE_COMPARE(pDeserialize, MaterialInfoTranslucent, matTrans);
   READ_DESERIALIZE_COMPARE(pDeserialize, MaterialInfoPortal, matPortal);

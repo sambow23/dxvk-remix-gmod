@@ -19,7 +19,8 @@ namespace dxvk {
           D3D9DeviceEx*             pDevice,
     const D3D9_COMMON_TEXTURE_DESC* pDesc,
           D3DRESOURCETYPE           ResourceType,
-          HANDLE*                   pSharedHandle)
+          HANDLE*                   pSharedHandle,
+          VkExternalMemoryHandleTypeFlagBits sharedHandleType)
     : m_device(pDevice), m_desc(*pDesc), m_type(ResourceType) {
     if (m_desc.Format == D3D9Format::Unknown)
       m_desc.Format = (m_desc.Usage & D3DUSAGE_DEPTHSTENCIL)
@@ -51,7 +52,8 @@ namespace dxvk {
                           !(m_desc.Usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL));
 
       try {
-        m_image = CreatePrimaryImage(ResourceType, plainSurface, pSharedHandle);
+        m_image = CreatePrimaryImage(
+          ResourceType, plainSurface, pSharedHandle, sharedHandleType);
       }
       catch (const DxvkError& e) {
         // D3DUSAGE_AUTOGENMIPMAP and offscreen plain is mutually exclusive
@@ -59,7 +61,8 @@ namespace dxvk {
         if (m_desc.Usage & D3DUSAGE_AUTOGENMIPMAP || plainSurface) {
           m_desc.Usage &= ~D3DUSAGE_AUTOGENMIPMAP;
           m_desc.MipLevels = 1;
-          m_image = CreatePrimaryImage(ResourceType, false, pSharedHandle);
+          m_image = CreatePrimaryImage(
+            ResourceType, false, pSharedHandle, sharedHandleType);
         }
         else
           throw e;
@@ -233,7 +236,11 @@ namespace dxvk {
   }
 
 
-  Rc<DxvkImage> D3D9CommonTexture::CreatePrimaryImage(D3DRESOURCETYPE ResourceType, bool TryOffscreenRT, HANDLE* pSharedHandle) const {
+  Rc<DxvkImage> D3D9CommonTexture::CreatePrimaryImage(
+      D3DRESOURCETYPE ResourceType,
+      bool TryOffscreenRT,
+      HANDLE* pSharedHandle,
+      VkExternalMemoryHandleTypeFlagBits sharedHandleType) const {
     DxvkImageCreateInfo imageInfo;
     imageInfo.type            = GetImageTypeFromResourceType(ResourceType);
     imageInfo.format          = m_mapping.ConversionFormatInfo.FormatColor != VK_FORMAT_UNDEFINED
@@ -259,11 +266,10 @@ namespace dxvk {
     imageInfo.shared          = m_desc.IsBackBuffer;
 
     if (pSharedHandle) {
-      imageInfo.sharing.type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT;
+      imageInfo.sharing.type = sharedHandleType;
       imageInfo.sharing.mode = (*pSharedHandle == INVALID_HANDLE_VALUE || *pSharedHandle == nullptr)
         ? DxvkSharedHandleMode::Export
         : DxvkSharedHandleMode::Import;
-      imageInfo.sharing.type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT;
       imageInfo.sharing.handle = *pSharedHandle;
       imageInfo.shared = true;
       // TODO: validate metadata?

@@ -253,7 +253,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 368,
+      static_assert(sizeof(remixapi_Interface) == 384,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -458,6 +458,60 @@ namespace remix {
     std::filesystem::path cpp_roughnessTexture {};
     std::filesystem::path cpp_metallicTexture {};
     std::filesystem::path cpp_heightTexture {};
+  };
+
+  // Can be linked after MaterialInfoOpaqueEXT. Presence selects dielectric
+  // specular-F0 workflow instead of the opaque material's metallic workflow.
+  struct MaterialInfoOpaqueSpecularEXT : remixapi_MaterialInfoOpaqueSpecularEXT {
+    MaterialInfoOpaqueSpecularEXT() {
+      sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT;
+      pNext = nullptr;
+      specularF0Texture = {};
+      specularF0Constant = { 0.04f, 0.04f, 0.04f };
+      STATIC_ASSERT_SIZEOF(remixapi_MaterialInfoOpaqueSpecularEXT, 40);
+    }
+
+    MaterialInfoOpaqueSpecularEXT(const MaterialInfoOpaqueSpecularEXT& other)
+      : remixapi_MaterialInfoOpaqueSpecularEXT(other)
+      , cpp_specularF0Texture(other.cpp_specularF0Texture) {
+      cpp_fixPointers();
+    }
+    MaterialInfoOpaqueSpecularEXT(MaterialInfoOpaqueSpecularEXT&& other) noexcept
+      : remixapi_MaterialInfoOpaqueSpecularEXT(other)
+      , cpp_specularF0Texture(std::move(other.cpp_specularF0Texture)) {
+      cpp_fixPointers();
+    }
+    MaterialInfoOpaqueSpecularEXT& operator=(const MaterialInfoOpaqueSpecularEXT& other) {
+      if (this == &other) {
+        return *this;
+      }
+      remixapi_MaterialInfoOpaqueSpecularEXT::operator=(other);
+      cpp_specularF0Texture = other.cpp_specularF0Texture;
+      cpp_fixPointers();
+      return *this;
+    }
+    MaterialInfoOpaqueSpecularEXT& operator=(MaterialInfoOpaqueSpecularEXT&& other) noexcept {
+      if (this == &other) {
+        return *this;
+      }
+      remixapi_MaterialInfoOpaqueSpecularEXT::operator=(other);
+      cpp_specularF0Texture = std::move(other.cpp_specularF0Texture);
+      cpp_fixPointers();
+      return *this;
+    }
+
+    void set_specularF0Texture(std::filesystem::path v) {
+      cpp_specularF0Texture = std::move(v);
+      specularF0Texture = cpp_specularF0Texture.c_str();
+    }
+
+  private:
+    void cpp_fixPointers() {
+      specularF0Texture = cpp_specularF0Texture.c_str();
+      STATIC_ASSERT_SIZEOF(remixapi_MaterialInfoOpaqueSpecularEXT, 40);
+    }
+
+    std::filesystem::path cpp_specularF0Texture {};
   };
 
   // Can be linked to MaterialInfoOpaqueEXT

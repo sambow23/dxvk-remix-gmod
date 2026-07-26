@@ -22,7 +22,12 @@
 #include "rtx_semaphore.h"
 
 namespace dxvk {
-  RtxSemaphore* RtxSemaphore::createTimeline(DxvkDevice* device, const char* name, uint64_t initialValue, bool win32Shared) {
+  RtxSemaphore* RtxSemaphore::createTimeline(
+      DxvkDevice* device,
+      const char* name,
+      uint64_t initialValue,
+      bool win32Shared,
+      VkExternalSemaphoreHandleTypeFlagBits sharedHandleType) {
     RtxSemaphore* ret = new RtxSemaphore();
     ret->m_device = device;
     ret->m_isTimeline = true;
@@ -37,7 +42,7 @@ namespace dxvk {
     if (win32Shared) {
       sharedInfo.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
       sharedInfo.pNext = nullptr;
-      sharedInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+      sharedInfo.handleTypes = sharedHandleType;
 
       timelineCreateInfo.pNext = &sharedInfo;
     }
@@ -53,6 +58,19 @@ namespace dxvk {
     if (result != VK_SUCCESS) {
       throw DxvkError(str::format("Timeline semaphore creation failed with: ",
                                   result));
+    }
+
+    if (win32Shared) {
+      VkSemaphoreGetWin32HandleInfoKHR handleInfo = {};
+      handleInfo.sType =
+        VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
+      handleInfo.semaphore = ret->m_sema;
+      handleInfo.handleType = sharedHandleType;
+      if (device->vkd()->vkGetSemaphoreWin32HandleKHR(
+            device->handle(), &handleInfo, &ret->m_handle) != VK_SUCCESS) {
+        delete ret;
+        throw DxvkError("Timeline semaphore Win32 handle export failed");
+      }
     }
 
     ret->labelSemaphore(name);

@@ -840,16 +840,34 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   // Apply material modifiers
   roughness = saturate(roughness * cb.opaqueMaterialArgs.roughnessScale + cb.opaqueMaterialArgs.roughnessBias);
 
-  // Load Metallic
+  // Load Metallic or dielectric specular F0. The two workflows share one
+  // texture slot because they are mutually exclusive for an opaque material.
 
+  const bool useSpecularF0 =
+    opaqueSurfaceMaterial.flags & OPAQUE_SURFACE_MATERIAL_FLAG_USE_SPECULAR_F0;
   float metallic = opaqueSurfaceMaterial.metallicConstant;
+  vec3 specularF0 = opaqueSurfaceMaterial.specularF0Constant;
 
   if (metallicLoaded)
   {
-    metallic = metallicSample.x;
+    if (useSpecularF0)
+    {
+      specularF0 = metallicSample.rgb;
+    }
+    else
+    {
+      metallic = metallicSample.x;
+    }
   }
-    
-  metallic = saturate(metallic * cb.opaqueMaterialArgs.metallicScale + cb.opaqueMaterialArgs.metallicBias);
+
+  if (useSpecularF0)
+  {
+    specularF0 = saturate(specularF0);
+  }
+  else
+  {
+    metallic = saturate(metallic * cb.opaqueMaterialArgs.metallicScale + cb.opaqueMaterialArgs.metallicBias);
+  }
 
   // Transform to desired Opaque Material Interaction values
 
@@ -861,8 +879,12 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
 
   // Note: Opacity factored into albedo and base reflectivity to ensure NEE and indirect lighting off of objects with opacity properly
   // account for how much light is being transmitted due to the opacity (similar to how Fresnel on glass works).
-  opaqueSurfaceMaterialInteraction.albedo = surface.isMatte ? vec3(0) : albedoToAdjustedAlbedo(albedo, metallic, opacity);
-  opaqueSurfaceMaterialInteraction.baseReflectivity = surface.isMatte ? vec3(0) : calcBaseReflectivity(albedo, metallic, opacity);
+  opaqueSurfaceMaterialInteraction.albedo = surface.isMatte
+    ? vec3(0)
+    : (useSpecularF0 ? albedo * opacity : albedoToAdjustedAlbedo(albedo, metallic, opacity));
+  opaqueSurfaceMaterialInteraction.baseReflectivity = surface.isMatte
+    ? vec3(0)
+    : (useSpecularF0 ? specularF0 * opacity : calcBaseReflectivity(albedo, metallic, opacity));
    
   // Note: Roughness loaded from texture is a perceptual roughness value (for optimal encoding), so this works as intended.
   calcRoughness(roughness, opaqueSurfaceMaterial.anisotropy,
