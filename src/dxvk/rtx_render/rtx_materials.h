@@ -591,7 +591,8 @@ struct RtOpaqueSurfaceMaterial {
     uint32_t subsurfaceMaterialIndex, bool isRaytracedRenderTarget, bool isHairCard,
     uint16_t samplerFeedbackStamp,
     uint32_t secondaryTextureIndex = 0,
-    bool albedoTextureIsSrgb = false, bool emissiveTextureIsSrgb = false
+    bool albedoTextureIsSrgb = false, bool emissiveTextureIsSrgb = false,
+    bool skyLitParticle = false
   ) :
     m_albedoOpacityTextureIndex{ albedoOpacityTextureIndex }, m_secondaryTextureIndex{secondaryTextureIndex}, m_normalTextureIndex{ normalTextureIndex },
     m_tangentTextureIndex { tangentTextureIndex }, m_heightTextureIndex { heightTextureIndex }, m_roughnessTextureIndex{ roughnessTextureIndex },
@@ -604,7 +605,8 @@ struct RtOpaqueSurfaceMaterial {
     m_thinFilmThicknessConstant { thinFilmThicknessConstant }, m_samplerIndex{ samplerIndex }, m_displaceIn{ displaceIn },
     m_displaceOut{ displaceOut }, m_subsurfaceMaterialIndex(subsurfaceMaterialIndex), m_isRaytracedRenderTarget(isRaytracedRenderTarget),
     m_isHairCard(isHairCard), m_samplerFeedbackStamp{ samplerFeedbackStamp },
-    m_albedoTextureIsSrgb{ albedoTextureIsSrgb }, m_emissiveTextureIsSrgb{ emissiveTextureIsSrgb }
+    m_albedoTextureIsSrgb{ albedoTextureIsSrgb }, m_emissiveTextureIsSrgb{ emissiveTextureIsSrgb },
+    m_skyLitParticle{ skyLitParticle }
   {
     updateCachedData();
     updateCachedHash();
@@ -648,6 +650,12 @@ struct RtOpaqueSurfaceMaterial {
     }
     if (m_emissiveTextureIsSrgb) {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB;
+    }
+
+    // Fork (2026-07-26): sky-lit particle materials (precipitation) get a sky-ambient
+    // term in the resolver's opacity lighting approximation - see shared_constants.h.
+    if (m_skyLitParticle) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE;
     }
 
     float displaceIn = m_displaceIn * getDisplacementInFactor();
@@ -857,6 +865,7 @@ private:
       uint32_t secondaryTextureIndex;
       uint32_t albedoTextureIsSrgb;       // NOTE: uint32_t to avoid padding
       uint32_t emissiveTextureIsSrgb;     // NOTE: uint32_t to avoid padding
+      uint32_t skyLitParticle;            // NOTE: uint32_t to avoid padding
       // NOTE: There must be NO padding between members, as the struct is used for hashing
     };
     static_assert(alignof(HashStruct) == 4 && sizeof(HashStruct) % 4 == 0);
@@ -889,6 +898,7 @@ private:
       m_secondaryTextureIndex,
       m_albedoTextureIsSrgb,
       m_emissiveTextureIsSrgb,
+      m_skyLitParticle,
     };
     m_cachedHash = XXH3_64bits(&hashData, sizeof(hashData));
   }
@@ -943,6 +953,9 @@ private:
   // shader skips its software gamma correction for that channel. Derived from the texture format on the CPU.
   bool m_albedoTextureIsSrgb;
   bool m_emissiveTextureIsSrgb;
+
+  // Fork (2026-07-26): sky-ambient term in the resolver's particle lighting approximation.
+  bool m_skyLitParticle;
 
   uint16_t m_samplerFeedbackStamp;
 
