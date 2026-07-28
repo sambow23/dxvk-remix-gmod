@@ -311,10 +311,23 @@ struct Surface
     set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 1) : packedFlagUnset(data0b.z, 1 << 1); }
   }
 
-  // flags0 bit 2 (data0b.z) is FREE again. It briefly held isDecalCategory (fork —
-  // 2026-06-18), a blend-independent decal flag read by the cloud-shadow zenith
-  // gate; that gate and flag were removed 2026-06-19 when the cloud shadow moved
-  // onto the sun term in the NEE (no geometry test needed any more).
+  property bool skateCharacterMaskRecolor
+  {
+    get { return packedFlagGet(data0b.z, 1 << 2); }
+    set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 2) : packedFlagUnset(data0b.z, 1 << 2); }
+  }
+
+  property bool skateCharacterHair
+  {
+    get { return packedFlagGet(data0b.z, 1 << 3); }
+    set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 3) : packedFlagUnset(data0b.z, 1 << 3); }
+  }
+
+  property bool skateAlbedoGamma2
+  {
+    get { return packedFlagGet(data0b.z, 1 << 4); }
+    set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 4) : packedFlagUnset(data0b.z, 1 << 4); }
+  }
 
   property uint16_t hashPacked
   {

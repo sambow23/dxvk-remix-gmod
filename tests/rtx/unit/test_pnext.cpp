@@ -176,6 +176,39 @@ namespace pnext_test_app {
     }
   }
 
+  void test_skateColorSpaceExtension() {
+    auto character = remixapi_InstanceInfoSkateCharacterEXT {};
+    {
+      character.sType =
+        REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SKATE_CHARACTER_EXT;
+      character.pNext = nullptr;
+      character.colorMode = 3;
+    }
+    auto colorSpace = remixapi_InstanceInfoSkateColorSpaceEXT {};
+    {
+      colorSpace.sType =
+        REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SKATE_COLOR_SPACE_EXT;
+      colorSpace.pNext = &character;
+      colorSpace.albedoUsesGamma2 = true;
+    }
+    auto info = remixapi_InstanceInfo {};
+    {
+      info.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+      info.pNext = &colorSpace;
+    }
+
+    if (pnext::find< remixapi_InstanceInfoSkateColorSpaceEXT >(&info) !=
+        &colorSpace) {
+      throw dxvk::DxvkError { ERROR_INTRO
+        "pnext::find< remixapi_InstanceInfoSkateColorSpaceEXT > failed" };
+    }
+    if (pnext::find< remixapi_InstanceInfoSkateCharacterEXT >(&info) !=
+        &character) {
+      throw dxvk::DxvkError { ERROR_INTRO
+        "Skate character extension was lost after color-space extension" };
+    }
+  }
+
   void test_memberDetection() {
     struct BadType_0 {
       int   sType_none;
@@ -259,6 +292,7 @@ int main() {
     pnext_test_app::test_const();
     pnext_test_app::test_getPNext();
     pnext_test_app::test_lightLocalOriginExtension();
+    pnext_test_app::test_skateColorSpaceExtension();
     pnext_test_app::test_memberDetection();
     pnext_test_app::test_wrapper();
   }

@@ -152,7 +152,7 @@ namespace dxvk {
   namespace {
     template<int RtInstanceSize> struct CheckRtInstanceSize {
       // The second line of the build error should contain the new size of RtInstance in the template argument, i.e. `dxvk::CheckRtInstanceSize<newSize>`
-      static_assert(RtInstanceSize == 768, "RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
+      static_assert(RtInstanceSize == 776, "RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
     };
     CheckRtInstanceSize<sizeof(RtInstance)> _rtInstanceSizeTest;
   }
@@ -1059,7 +1059,17 @@ namespace dxvk {
         currentInstance.surface.textureAlphaArg2Source = drawCall.getMaterialData().textureAlphaArg2Source;
         currentInstance.surface.textureAlphaOperation = drawCall.getMaterialData().textureAlphaOperation;
         currentInstance.surface.texgenMode = drawCall.getTransformData().texgenMode; // NOTE: Make it material data...
-        currentInstance.surface.tFactor = drawCall.getMaterialData().tFactor;
+        currentInstance.surface.skateCharacterMaskRecolor =
+          drawCall.getMaterialData().skateCharacterMaskRecolor;
+        currentInstance.surface.skateCharacterHair =
+          drawCall.getMaterialData().skateCharacterHair;
+        currentInstance.surface.skateAlbedoGamma2 =
+          drawCall.getMaterialData().skateAlbedoGamma2;
+        currentInstance.surface.tFactor =
+          (currentInstance.surface.skateCharacterMaskRecolor ||
+           currentInstance.surface.skateCharacterHair)
+            ? drawCall.getMaterialData().skateCharacterPackedTints
+            : drawCall.getMaterialData().tFactor;
         currentInstance.surface.alphaState = alphaState;
         currentInstance.surface.isAnimatedWater = currentInstance.testCategoryFlags(InstanceCategories::AnimatedWater);
         // Surface::isDecalCategory (fork — 2026-06-18) removed 2026-06-19 with the

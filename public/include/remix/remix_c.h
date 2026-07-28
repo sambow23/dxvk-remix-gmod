@@ -137,6 +137,8 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_LIGHT_INFO_LOCAL_ORIGIN_EXT           = 31,
     REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT     = 32,
     REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_TERRAIN_EXT      = 33,
+    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SKATE_CHARACTER_EXT     = 34,
+    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SKATE_COLOR_SPACE_EXT   = 35,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -487,6 +489,28 @@ extern "C" {
     uint32_t            writeMask;
     remixapi_Bool       isVertexColorBakedLighting;
   } remixapi_InstanceInfoBlendEXT;
+
+  // Skate-specific per-instance character shading. colorMode 2 reproduces
+  // livingworld_stamp's red/blue diffuse-mask palette; colorMode 3 applies
+  // hair tint and samples strand coverage at the secondary UV packed into
+  // COLOR0. Neither mode generates colorway-specific geometry or BLAS.
+  typedef struct remixapi_InstanceInfoSkateCharacterEXT {
+    remixapi_StructType sType;
+    void*               pNext;
+    uint32_t            colorMode;
+    remixapi_Float3D    tintA;
+    remixapi_Float3D    tintB;
+  } remixapi_InstanceInfoSkateCharacterEXT;
+
+  // Skate's source shaders decode gamma-authored diffuse colors with an
+  // exact square instead of the generic Remix gamma-2.2 approximation.
+  // Presence is per instance so it also covers fixed-function COLOR0 and
+  // texture-factor operations performed before the albedo decode.
+  typedef struct remixapi_InstanceInfoSkateColorSpaceEXT {
+    remixapi_StructType sType;
+    void*               pNext;
+    remixapi_Bool       albedoUsesGamma2;
+  } remixapi_InstanceInfoSkateColorSpaceEXT;
 
   typedef struct remixapi_InstanceInfoObjectPickingEXT {
     remixapi_StructType            sType;

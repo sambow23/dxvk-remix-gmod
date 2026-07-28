@@ -118,8 +118,9 @@ struct RtSurface {
     uint16_t flags0 = 0;
     flags0 |= normalFormat == VK_FORMAT_R32_UINT ? 1 : 0;
     flags0 |= isVertexColorBakedLighting ? (1 << 1) : 0;
-    // flags0 bit 2 freed 2026-06-19 (was isDecalCategory for the removed
-    // cloud-shadow zenith gate). Spare again.
+    flags0 |= skateCharacterMaskRecolor ? (1 << 2) : 0;
+    flags0 |= skateCharacterHair ? (1 << 3) : 0;
+    flags0 |= skateAlbedoGamma2 ? (1 << 4) : 0;
     // NOTE: Spare flags bits here
 
     writeGPUHelper(data, offset, flags0);
@@ -339,8 +340,16 @@ struct RtSurface {
   bool isClipPlaneEnabled = false;
   bool isTextureFactorBlend = false;
   bool isVertexColorBakedLighting = true;
-  // isDecalCategory (fork — 2026-06-18) removed 2026-06-19 with the cloud-shadow
-  // zenith gate that consumed it.
+  // Skate's livingworld character shader uses the diffuse red/blue channels
+  // as two palette masks. The two RGB5 colors share tFactor's 32 bits while
+  // this flag selects their custom decode.
+  bool skateCharacterMaskRecolor = false;
+  // Per-instance tint plus separate strand coverage sampled at the
+  // secondary UV packed into COLOR0.
+  bool skateCharacterHair = false;
+  // Skate's authored diffuse transfer is exactly gamma 2. This selects a
+  // square after fixed-function texture, COLOR0, and tFactor operations.
+  bool skateAlbedoGamma2 = false;
   bool isMotionBlurMaskOut = false;
   bool skipSurfaceInteractionSpritesheetAdjustment = false;
   bool ignoreTransparencyLayer = false;
@@ -1903,6 +1912,10 @@ struct LegacyMaterialData {
   D3DMATERIAL9 d3dMaterial = {};
   bool isTextureFactorBlend = false;
   bool isVertexColorBakedLighting = true;
+  bool skateCharacterMaskRecolor = false;
+  bool skateCharacterHair = false;
+  bool skateAlbedoGamma2 = false;
+  uint32_t skateCharacterPackedTints = 0;
 
   void setHashOverride(XXH64_hash_t hash) {
     m_cachedHash = hash;

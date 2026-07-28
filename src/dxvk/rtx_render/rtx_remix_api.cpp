@@ -1020,6 +1020,38 @@ dxvk::ExternalDrawState dxvk::RemixAPIPrivateAccessor::toRtDrawState(const remix
     prototype.materialData.blendMode.writeMask = (VkColorComponentFlags) extBlend->writeMask;
   }
 
+  if (auto extCharacter =
+        pnext::find<remixapi_InstanceInfoSkateCharacterEXT>(&info)) {
+    if (extCharacter->colorMode == 2) {
+      const auto pack5 = [](float value) {
+        return uint32_t(std::clamp(value, 0.0f, 1.0f) * 31.0f + 0.5f);
+      };
+      prototype.materialData.skateCharacterMaskRecolor = true;
+      prototype.materialData.skateCharacterPackedTints =
+        (pack5(extCharacter->tintA.x) << 0) |
+        (pack5(extCharacter->tintA.y) << 5) |
+        (pack5(extCharacter->tintA.z) << 10) |
+        (pack5(extCharacter->tintB.x) << 15) |
+        (pack5(extCharacter->tintB.y) << 20) |
+        (pack5(extCharacter->tintB.z) << 25);
+    } else if (extCharacter->colorMode == 3) {
+      const auto pack10 = [](float value) {
+        return uint32_t(std::clamp(value, 0.0f, 1.0f) * 1023.0f + 0.5f);
+      };
+      prototype.materialData.skateCharacterHair = true;
+      prototype.materialData.skateCharacterPackedTints =
+        (pack10(extCharacter->tintA.x) << 0) |
+        (pack10(extCharacter->tintA.y) << 10) |
+        (pack10(extCharacter->tintA.z) << 20);
+    }
+  }
+
+  if (auto extColorSpace =
+        pnext::find<remixapi_InstanceInfoSkateColorSpaceEXT>(&info)) {
+    prototype.materialData.skateAlbedoGamma2 =
+      convert::tobool(extColorSpace->albedoUsesGamma2);
+  }
+
   std::optional<RtxParticleSystemDesc> optParticles;
   if (auto extParticles = pnext::find<remixapi_InstanceInfoParticleSystemEXT>(&info)) {
     optParticles.emplace(convert::toRtParticleDesc(*extParticles));

@@ -600,6 +600,7 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   vec4 terrainAlbedoSample;
   vec4 terrainNormalSample;
   vec4 skateDecalOverlaySample;
+  vec4 skateHairAlphaSample;
 
   const bool terrainBlendEnabled =
     opaqueSurfaceMaterial.flags &
@@ -638,7 +639,7 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   const bool roughnessLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.roughnessTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, roughnessSample);
   const bool metallicLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.metallicTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, metallicSample);
   const bool emissiveColorLoaded =
-    !skateDecalOverlayEnabled &&
+    !skateDecalOverlayEnabled && !surface.skateCharacterHair &&
     surfaceMaterialInteractionTextureReadHelper(
       opaqueSurfaceMaterial.emissiveColorTextureIndex,
       opaqueSurfaceMaterial.samplerIndex,
@@ -679,6 +680,37 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
       opaqueSurfaceMaterial.samplerIndex,
       surfaceInteraction,
       skateDecalOverlaySample);
+
+    surfaceInteraction.textureCoordinates = savedCoordinates;
+    surfaceInteraction.textureGradientX = savedGradientX;
+    surfaceInteraction.textureGradientY = savedGradientY;
+  }
+  bool skateHairAlphaLoaded = false;
+  if (surface.skateCharacterHair)
+  {
+    const vec2 savedCoordinates = surfaceInteraction.textureCoordinates;
+    const vec2 savedGradientX = surfaceInteraction.textureGradientX;
+    const vec2 savedGradientY = surfaceInteraction.textureGradientY;
+
+    // Skate hair samples strand coverage with a second UV set. The API
+    // client packs each signed [-32, 32] component as two interpolable
+    // COLOR0 unorm8 channels, matching the existing decal-UV transport.
+    const float byteToUnorm16 = 255.0 / 65535.0;
+    vec2 hairUv;
+    hairUv.x =
+      (surfaceInteraction.vertexColor.x +
+       surfaceInteraction.vertexColor.y * 256.0) *
+        byteToUnorm16 * 64.0 - 32.0;
+    hairUv.y =
+      (surfaceInteraction.vertexColor.z +
+       surfaceInteraction.vertexColor.w * 256.0) *
+        byteToUnorm16 * 64.0 - 32.0;
+    surfaceInteraction.textureCoordinates = hairUv;
+    skateHairAlphaLoaded = surfaceMaterialInteractionTextureReadHelper(
+      opaqueSurfaceMaterial.emissiveColorTextureIndex,
+      opaqueSurfaceMaterial.samplerIndex,
+      surfaceInteraction,
+      skateHairAlphaSample);
 
     surfaceInteraction.textureCoordinates = savedCoordinates;
     surfaceInteraction.textureGradientX = savedGradientX;
@@ -779,6 +811,12 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
       opacity = albedoOpacitySample.a;
       thinFilmThickness = float(0.0f);
     }
+  }
+  if (skateHairAlphaLoaded)
+  {
+    // Diffuse alpha is gloss for Skate character materials. Strand coverage
+    // lives exclusively in the dedicated alpha texture.
+    opacity = skateHairAlphaSample.r;
   }
 
   if (skateDecalOverlayLoaded && !terrainAlbedoLoaded)
@@ -978,6 +1016,37 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
            skateDecalOverlaySample.a);
     albedo = sqrt(max(decalLinear, vec3(0.0)));
   }
+
+  if (surface.skateCharacterMaskRecolor)
+  {
+    // livingworld_stamp treats low-green texels as a two-channel palette:
+    // red selects tint A, blue selects tint B. Preserve real-color regions
+    // whose squared green exceeds 0.035^2. Both tints are per instance and
+    // packed as RGB5 pairs in tFactor, avoiding colorway-specific textures,
+    // materials, meshes, and BLAS.
+    const uint packedTints = surface.tFactor;
+    const vec3 tintA = vec3(
+      float((packedTints >> 0) & 31u),
+      float((packedTints >> 5) & 31u),
+      float((packedTints >> 10) & 31u)) / 31.0f;
+    const vec3 tintB = vec3(
+      float((packedTints >> 15) & 31u),
+      float((packedTints >> 20) & 31u),
+      float((packedTints >> 25) & 31u)) / 31.0f;
+    // The original shader explicitly squares the sampled atlas before both
+    // its green threshold and red/blue palette weighting.
+    const vec3 sourceLinear = albedo * albedo;
+    const vec3 recoloredLinear =
+      sourceLinear.g > 0.001225f
+        ? sourceLinear
+        : tintA * sourceLinear.r + tintB * sourceLinear.b;
+    // Bridge the exact linear recolor back to the transfer selected below.
+    // Current Skate submissions use gamma 2; retain the generic gamma-2.2
+    // bridge for older API clients that only provided the palette mode.
+    albedo = surface.skateAlbedoGamma2
+      ? sqrt(max(recoloredLinear, vec3(0.0)))
+      : linearToGamma(max(recoloredLinear, vec3(0.0)));
+  }
   
 #if defined(RAY_TRACING_PRIMARY_RAY)
   if (cb.debugView == DEBUG_VIEW_OPAQUE_NORMAL_RESOLUTION_CHECKERS) 
@@ -986,10 +1055,25 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   }
 #endif
 
-  // Note: Gamma correct albedo input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
-  // automatically do this conversion.
-  // Todo: Disable this for when a sRGB texture is the source of the albedo.
-  albedo = gammaToLinear(albedo);
+  // Skate's Xenos shaders use an exact square for gamma-authored diffuse
+  // textures. Select it after legacy texture/COLOR0/tFactor operations so
+  // eyes, hair, clothing tints, and foliage all share the game's transfer.
+  // Other Remix clients retain the generic gamma-2.2 approximation.
+  albedo = surface.skateAlbedoGamma2
+    ? albedo * albedo
+    : gammaToLinear(albedo);
+
+  if (surface.skateCharacterHair)
+  {
+    // RGB10 leaves enough precision for dark brown/red hair while applying
+    // the captured shader constant exactly once in linear space.
+    const uint packedTint = surface.tFactor;
+    const vec3 hairTint = vec3(
+      float((packedTint >> 0) & 1023u),
+      float((packedTint >> 10) & 1023u),
+      float((packedTint >> 20) & 1023u)) / 1023.0f;
+    albedo *= hairTint;
+  }
 
   // Note: Gamma correct emissive color input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
   // automatically do this conversion.
