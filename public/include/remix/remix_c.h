@@ -136,6 +136,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_UI_DRAW_LIST                         = 30,
     REMIXAPI_STRUCT_TYPE_LIGHT_INFO_LOCAL_ORIGIN_EXT           = 31,
     REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPECULAR_EXT     = 32,
+    REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_TERRAIN_EXT      = 33,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -263,6 +264,30 @@ extern "C" {
     remixapi_Path       specularF0Texture;
     remixapi_Float3D    specularF0Constant;
   } remixapi_MaterialInfoOpaqueSpecularEXT;
+
+  // Valid only if remixapi_MaterialInfo contains
+  // remixapi_MaterialInfoOpaqueEXT in its pNext chain. Applies a second,
+  // independently tiled terrain textures. The macro overlay applies broad
+  // color variation; layerAlbedoTexture and layerNormalTexture are blended
+  // from surface slope using the authored Skate terrain curve.
+  typedef struct remixapi_MaterialInfoOpaqueTerrainEXT {
+    remixapi_StructType sType;
+    void*               pNext;
+    remixapi_Path       macroOverlayTexture;
+    float               macroOverlayUvScale;
+    float               macroOverlayOpacity;
+    remixapi_Path       layerAlbedoTexture;
+    remixapi_Path       layerNormalTexture;
+    float               layerUvScale;
+    float               normalBlendPower;
+    float               normalBlendOffset;
+    float               albedoBlendPower;
+    float               albedoBlendOffset;
+    // Skate environment/decalterrain overlay. Its UV is encoded in the
+    // submitted vertex color by the application and decoded by the fork.
+    remixapi_Path       decalOverlayTexture;
+    remixapi_Bool       decalOverlayTileable;
+  } remixapi_MaterialInfoOpaqueTerrainEXT;
 
   // Valid only if remixapi_MaterialInfo contains remixapi_MaterialInfoOpaqueEXT in pNext chain
   typedef struct remixapi_MaterialInfoOpaqueSubsurfaceEXT {

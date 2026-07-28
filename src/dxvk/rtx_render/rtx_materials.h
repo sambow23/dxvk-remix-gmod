@@ -556,7 +556,17 @@ struct RtOpaqueSurfaceMaterial {
     uint32_t samplerIndex, float displaceIn, float displaceOut,
     uint32_t subsurfaceMaterialIndex, bool isRaytracedRenderTarget,
     uint16_t samplerFeedbackStamp,
-    uint32_t secondaryTextureIndex = 0
+    uint32_t secondaryTextureIndex = 0,
+    bool terrainBlendEnabled = false,
+    float terrainBlendUvScale = 1.0f,
+    float terrainBlendOpacity = 1.0f,
+    float terrainLayerUvScale = 1.0f,
+    float terrainNormalBlendPower = 1.0f,
+    float terrainNormalBlendOffset = 0.0f,
+    float terrainAlbedoBlendPower = 1.0f,
+    float terrainAlbedoBlendOffset = 0.0f,
+    bool skateDecalOverlayEnabled = false,
+    bool skateDecalOverlayTileable = false
   ) :
     m_albedoOpacityTextureIndex{ albedoOpacityTextureIndex }, m_secondaryTextureIndex{secondaryTextureIndex}, m_normalTextureIndex{ normalTextureIndex },
     m_tangentTextureIndex { tangentTextureIndex }, m_heightTextureIndex { heightTextureIndex }, m_roughnessTextureIndex{ roughnessTextureIndex },
@@ -569,7 +579,17 @@ struct RtOpaqueSurfaceMaterial {
     m_ignoreAlphaChannel { ignoreAlphaChannel }, m_enableThinFilm { enableThinFilm }, m_alphaIsThinFilmThickness { alphaIsThinFilmThickness },
     m_thinFilmThicknessConstant { thinFilmThicknessConstant }, m_samplerIndex{ samplerIndex }, m_displaceIn{ displaceIn },
     m_displaceOut{ displaceOut }, m_subsurfaceMaterialIndex(subsurfaceMaterialIndex), m_isRaytracedRenderTarget(isRaytracedRenderTarget),
-    m_samplerFeedbackStamp{ samplerFeedbackStamp }
+    m_samplerFeedbackStamp{ samplerFeedbackStamp },
+    m_terrainBlendEnabled{ terrainBlendEnabled },
+    m_terrainBlendUvScale{ terrainBlendUvScale },
+    m_terrainBlendOpacity{ terrainBlendOpacity },
+    m_terrainLayerUvScale{ terrainLayerUvScale },
+    m_terrainNormalBlendPower{ terrainNormalBlendPower },
+    m_terrainNormalBlendOffset{ terrainNormalBlendOffset },
+    m_terrainAlbedoBlendPower{ terrainAlbedoBlendPower },
+    m_terrainAlbedoBlendOffset{ terrainAlbedoBlendOffset },
+    m_skateDecalOverlayEnabled{ skateDecalOverlayEnabled },
+    m_skateDecalOverlayTileable{ skateDecalOverlayTileable }
   {
     updateCachedData();
     updateCachedHash();
@@ -605,6 +625,19 @@ struct RtOpaqueSurfaceMaterial {
     if (m_useSpecularF0Workflow) {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_USE_SPECULAR_F0;
     }
+    if (m_terrainBlendEnabled &&
+        (m_secondaryTextureIndex != BINDING_INDEX_INVALID ||
+         m_tangentTextureIndex != BINDING_INDEX_INVALID ||
+         m_heightTextureIndex != BINDING_INDEX_INVALID)) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_USE_TERRAIN_BLEND;
+    }
+    if (m_skateDecalOverlayEnabled &&
+        m_emissiveColorTextureIndex != BINDING_INDEX_INVALID) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_USE_SKATE_DECAL_OVERLAY;
+      if (m_skateDecalOverlayTileable) {
+        flags |= OPAQUE_SURFACE_MATERIAL_FLAG_SKATE_DECAL_TILEABLE;
+      }
+    }
 
     float displaceIn = m_displaceIn * getDisplacementInFactor();
     float displaceOut = m_displaceOut * getDisplacementOutFactor();
@@ -638,7 +671,11 @@ struct RtOpaqueSurfaceMaterial {
     writeGPUHelper(data, offset, glm::packHalf1x16(displaceIn));
     writeGPUHelper(data, offset, glm::packHalf1x16(displaceOut));
     writeGPUHelperExplicit<2>(data, offset, m_heightTextureIndex);
-    writeGPUHelper(data, offset, glm::packHalf1x16(m_cachedThinFilmNormalizedThicknessConstant));
+    writeGPUHelper(
+      data, offset,
+      glm::packHalf1x16(m_terrainBlendEnabled
+                         ? m_terrainAlbedoBlendOffset
+                         : m_cachedThinFilmNormalizedThicknessConstant));
 
     // data[12 - 15]
     writeGPUHelperExplicit<2>(data, offset, m_emissiveColorTextureIndex);
@@ -647,11 +684,15 @@ struct RtOpaqueSurfaceMaterial {
     writeGPUHelperExplicit<2>(data, offset, m_normalTextureIndex);
 
     // data[16 - 19]
-    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorConstant.x));
-    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorConstant.y));
-    writeGPUHelper(data, offset, glm::packHalf1x16(m_emissiveColorConstant.z));
+    writeGPUHelper(data, offset, glm::packHalf1x16(
+      m_terrainBlendEnabled ? m_terrainLayerUvScale : m_emissiveColorConstant.x));
+    writeGPUHelper(data, offset, glm::packHalf1x16(
+      m_terrainBlendEnabled ? m_terrainNormalBlendPower : m_emissiveColorConstant.y));
+    writeGPUHelper(data, offset, glm::packHalf1x16(
+      m_terrainBlendEnabled ? m_terrainNormalBlendOffset : m_emissiveColorConstant.z));
     assert(m_cachedEmissiveIntensity <= FLOAT16_MAX);
-    writeGPUHelper(data, offset, glm::packHalf1x16(m_cachedEmissiveIntensity));
+    writeGPUHelper(data, offset, glm::packHalf1x16(
+      m_terrainBlendEnabled ? m_terrainAlbedoBlendPower : m_cachedEmissiveIntensity));
 
     // data[20 - 23]
     writeGPUHelper(data, offset, glm::packHalf1x16(m_roughnessConstant));
@@ -670,12 +711,15 @@ struct RtOpaqueSurfaceMaterial {
     writeGPUHelper(data, offset, glm::packHalf1x16(m_specularF0Constant.y));
     writeGPUHelper(data, offset, glm::packHalf1x16(m_specularF0Constant.z));
 
-    writeGPUPadding<4>(data, offset);
+    // data[30-31]
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_terrainBlendUvScale));
+    writeGPUHelper(data, offset, glm::packHalf1x16(m_terrainBlendOpacity));
     assert(offset - oldOffset == kSurfaceMaterialGPUSize);
   }
 
   bool validate() const {
     const bool hasTexture = m_albedoOpacityTextureIndex != kSurfaceMaterialInvalidTextureIndex ||
+                            m_secondaryTextureIndex != kSurfaceMaterialInvalidTextureIndex ||
                             m_normalTextureIndex != kSurfaceMaterialInvalidTextureIndex ||
                             m_tangentTextureIndex != kSurfaceMaterialInvalidTextureIndex ||
                             m_heightTextureIndex != kSurfaceMaterialInvalidTextureIndex ||
@@ -794,7 +838,7 @@ struct RtOpaqueSurfaceMaterial {
 private:
   void updateCachedHash() {
     static_assert(
-      sizeof(*this) == 136,
+      sizeof(*this) == 176,
       "add new member for hashing if needed: add a MEMBER into the struct + add a VALUE into the list-init"
     );
     struct HashStruct {
@@ -825,6 +869,16 @@ private:
       uint32_t isRaytracedRenderTarget;   // NOTE: uint32_t to avoid padding
       uint32_t samplerFeedbackStamp;      // NOTE: uint32_t to avoid padding
       uint32_t secondaryTextureIndex;
+      uint32_t terrainBlendEnabled;
+      float terrainBlendUvScale;
+      float terrainBlendOpacity;
+      float terrainLayerUvScale;
+      float terrainNormalBlendPower;
+      float terrainNormalBlendOffset;
+      float terrainAlbedoBlendPower;
+      float terrainAlbedoBlendOffset;
+      uint32_t skateDecalOverlayEnabled;
+      uint32_t skateDecalOverlayTileable;
       // NOTE: There must be NO padding between members, as the struct is used for hashing
     };
     static_assert(alignof(HashStruct) == 4 && sizeof(HashStruct) % 4 == 0);
@@ -856,6 +910,16 @@ private:
       m_isRaytracedRenderTarget,
       m_samplerFeedbackStamp,
       m_secondaryTextureIndex,
+      m_terrainBlendEnabled,
+      m_terrainBlendUvScale,
+      m_terrainBlendOpacity,
+      m_terrainLayerUvScale,
+      m_terrainNormalBlendPower,
+      m_terrainNormalBlendOffset,
+      m_terrainAlbedoBlendPower,
+      m_terrainAlbedoBlendOffset,
+      m_skateDecalOverlayEnabled,
+      m_skateDecalOverlayTileable,
     };
     m_cachedHash = XXH3_64bits(&hashData, sizeof(hashData));
   }
@@ -908,6 +972,17 @@ private:
   bool m_isRaytracedRenderTarget;
 
   uint16_t m_samplerFeedbackStamp;
+
+  bool m_terrainBlendEnabled;
+  float m_terrainBlendUvScale;
+  float m_terrainBlendOpacity;
+  float m_terrainLayerUvScale;
+  float m_terrainNormalBlendPower;
+  float m_terrainNormalBlendOffset;
+  float m_terrainAlbedoBlendPower;
+  float m_terrainAlbedoBlendOffset;
+  bool m_skateDecalOverlayEnabled;
+  bool m_skateDecalOverlayTileable;
 
   XXH64_hash_t m_cachedHash;
 

@@ -646,7 +646,9 @@ namespace dxvk {
       createTextureRef(ReplacementMaterialTextureType::Metallic),
       TextureRef(), // SpecularF0
       createTextureRef(ReplacementMaterialTextureType::Emissive),
-      TextureRef(), TextureRef(), TextureRef(), TextureRef(), TextureRef(), // SSS textures
+      TextureRef(), TextureRef(), TextureRef(), TextureRef(), // SSS textures
+      TextureRef(), // Skate decal overlay
+      TextureRef(), // Secondary texture
       Material::Properties::roughnessAnisotropy(),
       Material::Properties::emissiveIntensity(),
       Vector3(1, 1, 1), // AlbedoConstant - unused since the AlbedoOpacity texture must be always present for baking
@@ -682,7 +684,17 @@ namespace dxvk {
       // NOTE: The terrain defines it's own sampler, and these are the modes it uses.
       lss::Mdl::Filter::Linear,
       lss::Mdl::WrapMode::Clamp, // U
-      lss::Mdl::WrapMode::Clamp  // V
+      lss::Mdl::WrapMode::Clamp, // V
+      false, // API terrain blend disabled for already-baked terrain
+      1.0f,
+      1.0f,
+      1.0f,
+      1.0f,
+      0.0f,
+      1.0f,
+      0.0f,
+      false, // Skate decal overlay
+      false  // Skate decal tile wrapping
     ));
 
     m_hasInitializedMaterialDataThisFrame = true;

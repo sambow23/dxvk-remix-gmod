@@ -69,7 +69,8 @@ struct OpaqueSurfaceMaterial
   float16_t displaceIn;
   float16_t displaceOut;
   uint16_t heightTextureIndex;
-  // note: thinFilmThicknessConstant should be between 0 and 1 
+  // note: thinFilmThicknessConstant should be between 0 and 1. When
+  // USE_TERRAIN_BLEND is set this slot contains terrainAlbedoBlendOffset.
   float16_t thinFilmThicknessConstant;
 
   // For performance, we want to keep fields used in the visibility check in the first 32 bytes.
@@ -78,12 +79,17 @@ struct OpaqueSurfaceMaterial
   // If it isn't used for visibility, it should go below and be overridden in opaqueSurfaceMaterialCreate().
 
   // 12-15
+  // With USE_SKATE_DECAL_OVERLAY, emissiveColorTextureIndex contains the
+  // opaque road/graffiti/wood overlay instead of emission.
   uint16_t emissiveColorTextureIndex;
   uint16_t roughnessTextureIndex;
   uint16_t metallicTextureIndex;
   uint16_t normalTextureIndex;
 
   // 16-19
+  // When USE_TERRAIN_BLEND is set these four otherwise-unused emission slots
+  // contain layerUvScale, normalBlendPower, normalBlendOffset and
+  // albedoBlendPower respectively.
   f16vec3 emissiveColorConstant;
   float16_t emissiveIntensity;
 
@@ -104,8 +110,11 @@ struct OpaqueSurfaceMaterial
 
   // Todo: Fixed function blend state info here in the future (Actually this should go on a Legacy Material, or some sort of non-PBR Legacy Surface)
 
-  // padding (to keep size matching with MemoryPolymorphicSurfaceMaterial)
-  uint16_t data[2];
+  // 30-31. Valid when OPAQUE_SURFACE_MATERIAL_FLAG_USE_TERRAIN_BLEND is set;
+  // secondaryTextureIndex contains the macro overlay, tangentTextureIndex the
+  // second albedo and heightTextureIndex the second tangent-space normal.
+  float16_t terrainBlendUvScale;
+  float16_t terrainBlendOpacity;
 
   bool hasValidDisplacement() {
     return flags & OPAQUE_SURFACE_MATERIAL_FLAG_HAS_DISPLACEMENT;

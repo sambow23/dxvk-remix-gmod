@@ -46,6 +46,7 @@
   X(SubsurfaceThicknessTexture,              subsurface_thickness_texture,         TextureRef, void, void, {}) \
   X(SubsurfaceSingleScatteringAlbedoTexture, subsurface_single_scattering_texture, TextureRef, void, void, {}) \
   X(SubsurfaceRadiusTexture,                 subsurface_radius_texture,            TextureRef, void, void, {}) \
+  X(SkateDecalOverlayTexture,                skate_decal_overlay_texture,           TextureRef, void, void, {}) \
   X(SecondaryTexture,                        secondary_texture,                    TextureRef, void, void, {})
 
 
@@ -91,7 +92,19 @@
   /* Sampler State */ \
   X(FilterMode,                       filter_mode,                            uint8_t,        lss::Mdl::Filter::Nearest,  lss::Mdl::Filter::Linear,  lss::Mdl::Filter::Linear)  \
   X(WrapModeU,                        wrap_mode_u,                            uint8_t,        lss::Mdl::WrapMode::Clamp,  lss::Mdl::WrapMode::Clip,  lss::Mdl::WrapMode::Repeat) \
-  X(WrapModeV,                        wrap_mode_v,                            uint8_t,        lss::Mdl::WrapMode::Clamp,  lss::Mdl::WrapMode::Clip,  lss::Mdl::WrapMode::Repeat)
+  X(WrapModeV,                        wrap_mode_v,                            uint8_t,        lss::Mdl::WrapMode::Clamp,  lss::Mdl::WrapMode::Clip,  lss::Mdl::WrapMode::Repeat) \
+  /* API-submitted slope-blended terrain material layers. */ \
+  X(TerrainBlendEnabled,              terrain_blend_enabled,                 bool,           false,                      true,                      false) \
+  X(TerrainBlendUvScale,              terrain_blend_uv_scale,                float,          0.f,                        65504.0f,                  1.f) \
+  X(TerrainBlendOpacity,              terrain_blend_opacity,                 float,          0.f,                        1.f,                       1.f) \
+  X(TerrainLayerUvScale,              terrain_layer_uv_scale,                float,          0.f,                        65504.0f,                  1.f) \
+  X(TerrainNormalBlendPower,          terrain_normal_blend_power,            float,          0.f,                        64.0f,                     1.f) \
+  X(TerrainNormalBlendOffset,         terrain_normal_blend_offset,           float,          -64.f,                      64.0f,                     0.f) \
+  X(TerrainAlbedoBlendPower,          terrain_albedo_blend_power,            float,          0.f,                        64.0f,                     1.f) \
+  X(TerrainAlbedoBlendOffset,         terrain_albedo_blend_offset,           float,          -64.f,                      64.0f,                     0.f) \
+  /* Skate environment/decalterrain art, sampled with UV packed in COLOR0. */ \
+  X(SkateDecalOverlayEnabled,         skate_decal_overlay_enabled,            bool,           false,                      true,                      false) \
+  X(SkateDecalOverlayTileable,        skate_decal_overlay_tileable,           bool,           false,                      true,                      false)
 
 #define LIST_OPAQUE_MATERIAL_PARAMS(X)\
   LIST_OPAQUE_MATERIAL_TEXTURES(X) \

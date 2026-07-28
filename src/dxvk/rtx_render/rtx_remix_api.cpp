@@ -298,12 +298,17 @@ namespace {
       std::filesystem::path subsurfaceThicknessTexture;
       std::filesystem::path subsurfaceSingleScatteringAlbedoTexture;
       std::filesystem::path subsurfaceRadiusTexture;
+      std::filesystem::path terrainBlendTexture;
+      std::filesystem::path terrainLayerAlbedoTexture;
+      std::filesystem::path terrainLayerNormalTexture;
+      std::filesystem::path skateDecalOverlayTexture;
     };
 
     PreloadSource makePreloadSource(const remixapi_MaterialInfo& info) {
       // TODO: C++20 designated initializers
       if (auto extOpaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
         auto extSpecular = pnext::find<remixapi_MaterialInfoOpaqueSpecularEXT>(&info);
+        auto extTerrain = pnext::find<remixapi_MaterialInfoOpaqueTerrainEXT>(&info);
         auto extSubsurface = pnext::find<remixapi_MaterialInfoOpaqueSubsurfaceEXT>(&info);
         return PreloadSource {
           topath(info.albedoTexture),   // albedoTexture;
@@ -319,6 +324,10 @@ namespace {
           topath(extSubsurface ? extSubsurface->subsurfaceThicknessTexture              : nullptr), // subsurfaceThicknessTexture;
           topath(extSubsurface ? extSubsurface->subsurfaceSingleScatteringAlbedoTexture : nullptr), // subsurfaceSingleScatteringAlbedoTexture;
           topath(s_apiVersion >= REMIXAPI_VERSION_MAKE(0, 5, 1) && extSubsurface ? extSubsurface->subsurfaceRadiusTexture : nullptr), // subsurfaceRadiusTexture;
+          topath(extTerrain ? extTerrain->macroOverlayTexture : nullptr), // terrainBlendTexture;
+          topath(extTerrain ? extTerrain->layerAlbedoTexture : nullptr), // terrainLayerAlbedoTexture;
+          topath(extTerrain ? extTerrain->layerNormalTexture : nullptr), // terrainLayerNormalTexture;
+          topath(extTerrain ? extTerrain->decalOverlayTexture : nullptr), // skateDecalOverlayTexture;
         };
       }
       if (auto extTranslucent = pnext::find<remixapi_MaterialInfoTranslucentEXT>(&info)) {
@@ -336,6 +345,10 @@ namespace {
           {}, // subsurfaceThicknessTexture;
           {}, // subsurfaceSingleScatteringAlbedoTexture;
           {}, // subsurfaceRadiusTexture;
+          {}, // terrainBlendTexture;
+          {}, // terrainLayerAlbedoTexture;
+          {}, // terrainLayerNormalTexture;
+          {}, // skateDecalOverlayTexture;
         };
       }
       if (auto extPortal = pnext::find<remixapi_MaterialInfoPortalEXT>(&info)) {
@@ -353,6 +366,10 @@ namespace {
           {}, // subsurfaceThicknessTexture;
           {}, // subsurfaceSingleScatteringAlbedoTexture;
           {}, // subsurfaceRadiusTexture;
+          {}, // terrainBlendTexture;
+          {}, // terrainLayerAlbedoTexture;
+          {}, // terrainLayerNormalTexture;
+          {}, // skateDecalOverlayTexture;
         };
       }
       return {};
@@ -387,8 +404,12 @@ namespace {
         return MaterialData { OpaqueMaterialData{
           preloadTexture(preload.albedoTexture),
           preloadTexture(preload.normalTexture),
-          preloadTexture(preload.tangentTexture),
-          preloadTexture(preload.heightTexture),
+          preloadTexture(preload.terrainLayerAlbedoTexture.empty()
+                           ? preload.tangentTexture
+                           : preload.terrainLayerAlbedoTexture),
+          preloadTexture(preload.terrainLayerNormalTexture.empty()
+                           ? preload.heightTexture
+                           : preload.terrainLayerNormalTexture),
           preloadTexture(preload.roughnessTexture),
           preloadTexture(preload.metallicTexture),
           preloadTexture(preload.specularF0Texture),
@@ -397,7 +418,8 @@ namespace {
           preloadTexture(preload.subsurfaceThicknessTexture),
           preloadTexture(preload.subsurfaceSingleScatteringAlbedoTexture),
           preloadTexture(preload.subsurfaceRadiusTexture),
-          TextureRef(),
+          preloadTexture(preload.skateDecalOverlayTexture),
+          preloadTexture(preload.terrainBlendTexture),
           src.getAnisotropyConstant(),
           src.getEmissiveIntensity(),
           src.getAlbedoConstant(),
@@ -432,7 +454,17 @@ namespace {
           src.getSubsurfaceMaxSampleRadius(),
           src.getFilterMode(),
           src.getWrapModeU(),
-          src.getWrapModeV()
+          src.getWrapModeV(),
+          src.getTerrainBlendEnabled(),
+          src.getTerrainBlendUvScale(),
+          src.getTerrainBlendOpacity(),
+          src.getTerrainLayerUvScale(),
+          src.getTerrainNormalBlendPower(),
+          src.getTerrainNormalBlendOffset(),
+          src.getTerrainAlbedoBlendPower(),
+          src.getTerrainAlbedoBlendOffset(),
+          src.getSkateDecalOverlayEnabled(),
+          src.getSkateDecalOverlayTileable()
         } };
       }
       case MaterialDataType::Translucent: 
@@ -485,8 +517,17 @@ namespace {
     MaterialData toRtMaterialWithoutTexturePreload(const remixapi_MaterialInfo& info) {
       if (auto extOpaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
         auto extSpecular = pnext::find<remixapi_MaterialInfoOpaqueSpecularEXT>(&info);
+        auto extTerrain = pnext::find<remixapi_MaterialInfoOpaqueTerrainEXT>(&info);
         auto extSubsurface = pnext::find<remixapi_MaterialInfoOpaqueSubsurfaceEXT>(&info);
+        const bool terrainBlendEnabled =
+          extTerrain != nullptr &&
+          (extTerrain->macroOverlayTexture != nullptr ||
+           extTerrain->layerAlbedoTexture != nullptr ||
+           extTerrain->layerNormalTexture != nullptr);
+        const bool skateDecalOverlayEnabled =
+          extTerrain != nullptr && extTerrain->decalOverlayTexture != nullptr;
         return MaterialData { OpaqueMaterialData {
+          {},
           {},
           {},
           {},
@@ -535,6 +576,17 @@ namespace {
           info.filterMode,
           info.wrapModeU,
           info.wrapModeV,
+          terrainBlendEnabled,
+          extTerrain ? extTerrain->macroOverlayUvScale : 1.0f,
+          extTerrain ? extTerrain->macroOverlayOpacity : 1.0f,
+          extTerrain ? extTerrain->layerUvScale : 1.0f,
+          extTerrain ? extTerrain->normalBlendPower : 1.0f,
+          extTerrain ? extTerrain->normalBlendOffset : 0.0f,
+          extTerrain ? extTerrain->albedoBlendPower : 1.0f,
+          extTerrain ? extTerrain->albedoBlendOffset : 0.0f,
+          skateDecalOverlayEnabled,
+          skateDecalOverlayEnabled &&
+            tobool(extTerrain->decalOverlayTileable),
         } };
       }
       if (auto extTranslucent = pnext::find<remixapi_MaterialInfoTranslucentEXT>(&info)) {

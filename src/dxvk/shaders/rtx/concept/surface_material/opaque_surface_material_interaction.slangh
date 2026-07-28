@@ -596,6 +596,17 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   vec4 roughnessSample;
   vec4 metallicSample;
   vec4 emissiveColorSample;
+  vec4 terrainBlendSample;
+  vec4 terrainAlbedoSample;
+  vec4 terrainNormalSample;
+  vec4 skateDecalOverlaySample;
+
+  const bool terrainBlendEnabled =
+    opaqueSurfaceMaterial.flags &
+    OPAQUE_SURFACE_MATERIAL_FLAG_USE_TERRAIN_BLEND;
+  const bool skateDecalOverlayEnabled =
+    opaqueSurfaceMaterial.flags &
+    OPAQUE_SURFACE_MATERIAL_FLAG_USE_SKATE_DECAL_OVERLAY;
 
   const bool albedoOpacityLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.albedoOpacityTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, albedoOpacitySample);
   const bool normalLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.normalTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, normalSample);
@@ -617,16 +628,112 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     surfaceInteraction.textureCoordinates = savedCoordinates;
   }
 
-  const bool tangentLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.tangentTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, tangentSample);
+  const bool tangentLoaded =
+    !terrainBlendEnabled &&
+    surfaceMaterialInteractionTextureReadHelper(
+      opaqueSurfaceMaterial.tangentTextureIndex,
+      opaqueSurfaceMaterial.samplerIndex,
+      surfaceInteraction,
+      tangentSample);
   const bool roughnessLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.roughnessTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, roughnessSample);
   const bool metallicLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.metallicTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, metallicSample);
-  const bool emissiveColorLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.emissiveColorTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, emissiveColorSample);
+  const bool emissiveColorLoaded =
+    !skateDecalOverlayEnabled &&
+    surfaceMaterialInteractionTextureReadHelper(
+      opaqueSurfaceMaterial.emissiveColorTextureIndex,
+      opaqueSurfaceMaterial.samplerIndex,
+      surfaceInteraction,
+      emissiveColorSample);
+  bool skateDecalOverlayLoaded = false;
+  if (skateDecalOverlayEnabled)
+  {
+    const vec2 savedCoordinates = surfaceInteraction.textureCoordinates;
+    const vec2 savedGradientX = surfaceInteraction.textureGradientX;
+    const vec2 savedGradientY = surfaceInteraction.textureGradientY;
+
+    // The API app packs each signed [-32, 32] UV component as a biased
+    // 16-bit fixed-point value split across two COLOR0 unorm8 channels.
+    // Recombining the normalized bytes linearly preserves barycentric
+    // interpolation, unlike reinterpreting interpolated half-float bits.
+    const float byteToUnorm16 = 255.0 / 65535.0;
+    vec2 decalUv;
+    decalUv.x =
+      (surfaceInteraction.vertexColor.x +
+       surfaceInteraction.vertexColor.y * 256.0) *
+        byteToUnorm16 * 64.0 - 32.0;
+    decalUv.y =
+      (surfaceInteraction.vertexColor.z +
+       surfaceInteraction.vertexColor.w * 256.0) *
+        byteToUnorm16 * 64.0 - 32.0;
+    if (!(opaqueSurfaceMaterial.flags &
+          OPAQUE_SURFACE_MATERIAL_FLAG_SKATE_DECAL_TILEABLE))
+    {
+      decalUv = saturate(decalUv);
+    }
+    surfaceInteraction.textureCoordinates = decalUv;
+    // The second UV normally has comparable density to the base surface UV.
+    // Retaining its gradients gives stable ray-cone mip selection without
+    // adding another geometry buffer solely for derivatives.
+    skateDecalOverlayLoaded = surfaceMaterialInteractionTextureReadHelper(
+      opaqueSurfaceMaterial.emissiveColorTextureIndex,
+      opaqueSurfaceMaterial.samplerIndex,
+      surfaceInteraction,
+      skateDecalOverlaySample);
+
+    surfaceInteraction.textureCoordinates = savedCoordinates;
+    surfaceInteraction.textureGradientX = savedGradientX;
+    surfaceInteraction.textureGradientY = savedGradientY;
+  }
+  bool terrainBlendLoaded = false;
+  bool terrainAlbedoLoaded = false;
+  bool terrainNormalLoaded = false;
+  if (terrainBlendEnabled)
+  {
+    const vec2 savedCoordinates = surfaceInteraction.textureCoordinates;
+    const vec2 savedGradientX = surfaceInteraction.textureGradientX;
+    const vec2 savedGradientY = surfaceInteraction.textureGradientY;
+
+    const float macroUvScale =
+      float(opaqueSurfaceMaterial.terrainBlendUvScale);
+    surfaceInteraction.textureCoordinates =
+      savedCoordinates * macroUvScale;
+    surfaceInteraction.textureGradientX = savedGradientX * macroUvScale;
+    surfaceInteraction.textureGradientY = savedGradientY * macroUvScale;
+    terrainBlendLoaded = surfaceMaterialInteractionTextureReadHelper(
+      opaqueSurfaceMaterial.secondaryTextureIndex,
+      opaqueSurfaceMaterial.samplerIndex,
+      surfaceInteraction,
+      terrainBlendSample);
+
+    const float layerUvScale =
+      float(opaqueSurfaceMaterial.emissiveColorConstant.x);
+    surfaceInteraction.textureCoordinates = savedCoordinates * layerUvScale;
+    surfaceInteraction.textureGradientX = savedGradientX * layerUvScale;
+    surfaceInteraction.textureGradientY = savedGradientY * layerUvScale;
+    terrainAlbedoLoaded = surfaceMaterialInteractionTextureReadHelper(
+      opaqueSurfaceMaterial.tangentTextureIndex,
+      opaqueSurfaceMaterial.samplerIndex,
+      surfaceInteraction,
+      terrainAlbedoSample);
+    terrainNormalLoaded = surfaceMaterialInteractionTextureReadHelper(
+      opaqueSurfaceMaterial.heightTextureIndex,
+      opaqueSurfaceMaterial.samplerIndex,
+      surfaceInteraction,
+      terrainNormalSample);
+
+    surfaceInteraction.textureCoordinates = savedCoordinates;
+    surfaceInteraction.textureGradientX = savedGradientX;
+    surfaceInteraction.textureGradientY = savedGradientY;
+  }
   
   // Load Emissive Color
 
-  vec3 emissiveColor = opaqueSurfaceMaterial.emissiveColorConstant;
+  vec3 emissiveColor = (terrainBlendEnabled || skateDecalOverlayEnabled)
+    ? vec3(0.0)
+    : opaqueSurfaceMaterial.emissiveColorConstant;
 
-  if (emissiveColorLoaded)
+  if (emissiveColorLoaded &&
+      !terrainBlendEnabled && !skateDecalOverlayEnabled)
   {
     emissiveColor = emissiveColorSample.xyz;
   }
@@ -672,6 +779,29 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
       opacity = albedoOpacitySample.a;
       thinFilmThickness = float(0.0f);
     }
+  }
+
+  if (skateDecalOverlayLoaded && !terrainAlbedoLoaded)
+  {
+    // environment.decal composites its opaque surface art before the macro
+    // weathering layer. The art texture's alpha is coverage, not output
+    // transparency; the underlying wall/road remains one opaque surface.
+    albedo = lerp(albedo, skateDecalOverlaySample.rgb,
+                  skateDecalOverlaySample.a);
+  }
+
+  if (terrainBlendLoaded && !terrainAlbedoLoaded)
+  {
+    // Skate's macro overlay is authored in the game's squared linear-color
+    // convention. Apply sqrt in gamma space so the later albedo
+    // gamma-to-linear conversion yields one linear multiply, matching:
+    // base.rgb *= lerp(1, sqrt(macro.rgb), opacity * macro.a).
+    const float layerWeight =
+      saturate(float(opaqueSurfaceMaterial.terrainBlendOpacity) *
+               terrainBlendSample.a);
+    albedo *= lerp(vec3(1.0),
+                   sqrt(max(terrainBlendSample.rgb, vec3(0.0))),
+                   layerWeight);
   }
 
 #if defined(RAY_TRACING_PRIMARY_RAY)
@@ -745,49 +875,48 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     opacity = 1.f;
   }
   
-  // Note: Gamma correct albedo input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
-  // automatically do this conversion.
-  // Todo: Disable this for when a sRGB texture is the source of the albedo.
-  albedo = gammaToLinear(albedo);
-  
-  // Note: Gamma correct emissive color input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
-  // automatically do this conversion.
-  // Todo: Disable this for when a sRGB texture is the source of the emissive color.
-  emissiveColor = gammaToLinear(emissiveColor);
-  
-  // Apply material modifiers/overrides
-  albedo = saturate(albedo * cb.opaqueMaterialArgs.albedoScale + cb.opaqueMaterialArgs.albedoBias);
-  
-  if (cb.opaqueMaterialArgs.enableThinFilmOverride)
-  {
-    // Note: Thickness override is already normalized to the proper 0-1 range by the CPU to match how the albedo texture alpha channel encodes thickness.
-    thinFilmThickness = cb.opaqueMaterialArgs.thinFilmNormalizedThicknessOverride;
-  }
-
   // Load Normal
 
   vec3 normal = surfaceInteraction.geometryNormal;
   // Note: Defaults to 0 as this indicates no normal detail (which should be the case when a normal map is not present).
   float normalDetail = 0.0f;
 
-  if (normalLoaded)
+  if (normalLoaded || terrainNormalLoaded)
   {
-    vec3 tangentNormal;
+    vec3 tangentNormal = vec3(0.0, 0.0, 1.0);
 
     // Terrain baker produces decoded tangentNormal and (first) normal.
-    if (isBakedTerrain)  
+    if (normalLoaded && isBakedTerrain)
     {
       // REMIX-2224: Normals blended during terrain baking using programmable shaders can sometimes end up being invalid so we sanitize them at this point
       tangentNormal = sanitize(normalSample.xyz, cb.isZUp ? vec3(0.f, 0.f, 1.f) : vec3(0.f, 1.f, 0.f));
     }
-    else // Decode encoded normal sample
+    else if (normalLoaded) // Decode encoded normal sample
     {
       // Note: Using f16 from texture to decode from is fine as the original texture is only 8 bits of precision.
       tangentNormal = unsignedOctahedralToHemisphereDirection(vec2(normalSample.xy), cb.opaqueMaterialArgs.normalIntensity);
     }
     
-    const f16mat3 tangentToWorld = transpose(worldToTangent);
+    if (terrainNormalLoaded)
+    {
+      const float geometryUp = cb.isZUp
+        ? surfaceInteraction.geometryNormal.z
+        : surfaceInteraction.geometryNormal.y;
+      const float normalLayerWeight = saturate(
+        1.0 -
+        abs(pow(abs(geometryUp),
+                float(opaqueSurfaceMaterial.emissiveColorConstant.y)) -
+            float(opaqueSurfaceMaterial.emissiveColorConstant.z)));
+      const vec3 terrainTangentNormal =
+        unsignedOctahedralToHemisphereDirection(
+          vec2(terrainNormalSample.xy),
+          cb.opaqueMaterialArgs.normalIntensity);
+      tangentNormal =
+        normalize(lerp(tangentNormal, terrainTangentNormal,
+                       normalLayerWeight));
+    }
 
+    const f16mat3 tangentToWorld = transpose(worldToTangent);
     normal = normalize(mul(tangentToWorld, tangentNormal));
 
     // REMIX-2224: Normals blended during terrain baking using programmable shaders can sometimes end up being invalid
@@ -811,6 +940,44 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
 
     }
   }
+
+  if (terrainAlbedoLoaded)
+  {
+    const float shadedUp = cb.isZUp ? normal.z : normal.y;
+    const float albedoLayerWeight = saturate(
+      1.0 -
+      abs(pow(abs(shadedUp),
+              float(opaqueSurfaceMaterial.emissiveIntensity)) -
+          float(opaqueSurfaceMaterial.thinFilmThicknessConstant)));
+
+    vec3 terrainLinear =
+      lerp(albedo * albedo,
+           terrainAlbedoSample.rgb * terrainAlbedoSample.rgb,
+           albedoLayerWeight);
+    if (terrainBlendLoaded)
+    {
+      const vec3 macroAdjustment = saturate(
+        (terrainBlendSample.rgb - vec3(0.5)) *
+          float(opaqueSurfaceMaterial.terrainBlendOpacity) +
+        vec3(0.5));
+      terrainLinear *= macroAdjustment;
+    }
+    // The common path below performs the software gamma-to-linear step. Put
+    // the original terrain shader's squared blend back in gamma space so that
+    // conversion reproduces its exact linear result.
+    albedo = sqrt(max(terrainLinear, vec3(0.0)));
+  }
+
+  if (skateDecalOverlayLoaded && terrainAlbedoLoaded)
+  {
+    // decalterrain applies its decal after the squared terrain-layer and
+    // macro blend: lerp(terrainLinear, decal.rgb^2, decal.a).
+    const vec3 decalLinear =
+      lerp(albedo * albedo,
+           skateDecalOverlaySample.rgb * skateDecalOverlaySample.rgb,
+           skateDecalOverlaySample.a);
+    albedo = sqrt(max(decalLinear, vec3(0.0)));
+  }
   
 #if defined(RAY_TRACING_PRIMARY_RAY)
   if (cb.debugView == DEBUG_VIEW_OPAQUE_NORMAL_RESOLUTION_CHECKERS) 
@@ -818,6 +985,26 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     storeColorOverlayedWithTextureResolutionCheckersInDebugView(normal, opaqueSurfaceMaterial.normalTextureIndex, surfaceInteraction);
   }
 #endif
+
+  // Note: Gamma correct albedo input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
+  // automatically do this conversion.
+  // Todo: Disable this for when a sRGB texture is the source of the albedo.
+  albedo = gammaToLinear(albedo);
+
+  // Note: Gamma correct emissive color input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
+  // automatically do this conversion.
+  // Todo: Disable this for when a sRGB texture is the source of the emissive color.
+  emissiveColor = gammaToLinear(emissiveColor);
+
+  // Apply material modifiers/overrides
+  albedo = saturate(albedo * cb.opaqueMaterialArgs.albedoScale + cb.opaqueMaterialArgs.albedoBias);
+
+  if (cb.opaqueMaterialArgs.enableThinFilmOverride)
+  {
+    // Note: Thickness override is already normalized to the proper 0-1 range by the CPU to match how the albedo texture alpha channel encodes thickness.
+    thinFilmThickness = cb.opaqueMaterialArgs.thinFilmNormalizedThicknessOverride;
+  }
+
   // Load Tangent
 
   // Todo
@@ -891,7 +1078,11 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     opaqueSurfaceMaterialInteraction.isotropicRoughness,
     opaqueSurfaceMaterialInteraction.anisotropicRoughness);
 
-  opaqueSurfaceMaterialInteraction.emissiveRadiance = emissiveBlendOverrideInfluence * emissiveColor * opaqueSurfaceMaterial.emissiveIntensity;
+  opaqueSurfaceMaterialInteraction.emissiveRadiance =
+    (terrainBlendEnabled || skateDecalOverlayEnabled)
+      ? vec3(0.0)
+      : emissiveBlendOverrideInfluence * emissiveColor *
+        opaqueSurfaceMaterial.emissiveIntensity;
 
   opaqueSurfaceMaterialInteraction.subsurfaceMaterialInteraction =
     subSurfaceMaterialReadHelper(opaqueSurfaceMaterial.subsurfaceMaterialIndex, surfaceInteraction, opaqueSurfaceMaterial.samplerIndex);

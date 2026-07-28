@@ -1521,6 +1521,7 @@ namespace dxvk {
       texturePresenceMask |= opaqueMaterialData.getSubsurfaceSingleScatteringAlbedoTexture().isImageEmpty() ? 0u : (1u << 10);
       texturePresenceMask |= opaqueMaterialData.getSubsurfaceRadiusTexture().isImageEmpty()          ? 0u : (1u << 11);
       texturePresenceMask |= opaqueMaterialData.getSpecularF0Texture().isImageEmpty()                ? 0u : (1u << 12);
+      texturePresenceMask |= opaqueMaterialData.getSkateDecalOverlayTexture().isImageEmpty()         ? 0u : (1u << 13);
       preCreationHash = XXH64(&texturePresenceMask, sizeof(texturePresenceMask), preCreationHash);
     }
 
@@ -1607,11 +1608,22 @@ namespace dxvk {
       trackTexture(opaqueMaterialData.getNormalTexture(), normalTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
       trackTexture(opaqueMaterialData.getTangentTexture(), tangentTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
       trackTexture(opaqueMaterialData.getHeightTexture(), heightTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
-      trackTexture(opaqueMaterialData.getEmissiveColorTexture(), emissiveColorTextureIndex, hasTexcoords, true, samplerFeedbackStamp);
+      if (opaqueMaterialData.getSkateDecalOverlayEnabled()) {
+        // Skate's custom opaque overlay reuses the otherwise-empty emissive
+        // GPU texture slot; its flag makes the shader sample it as decal art.
+        trackTexture(opaqueMaterialData.getSkateDecalOverlayTexture(),
+                     emissiveColorTextureIndex, hasTexcoords, true,
+                     samplerFeedbackStamp);
+      } else {
+        trackTexture(opaqueMaterialData.getEmissiveColorTexture(),
+                     emissiveColorTextureIndex, hasTexcoords, true,
+                     samplerFeedbackStamp);
+      }
 
       emissiveIntensity = opaqueMaterialData.getEmissiveIntensity() * RtxOptions::emissiveIntensity();
       emissiveColorConstant = opaqueMaterialData.getEmissiveColorConstant();
-      enableEmissive = opaqueMaterialData.getEnableEmission();
+      enableEmissive = opaqueMaterialData.getEnableEmission() &&
+                       !opaqueMaterialData.getSkateDecalOverlayEnabled();
       anisotropy = opaqueMaterialData.getAnisotropyConstant();
         
       thinFilmEnable = opaqueMaterialData.getEnableThinFilm();
@@ -1688,7 +1700,17 @@ namespace dxvk {
         thinFilmThicknessConstant, samplerIndex, displaceIn, displaceOut, 
         subsurfaceMaterialIndex, isUsingRaytracedRenderTarget,
         samplerFeedbackStamp,
-        secondaryTextureIndex
+        secondaryTextureIndex,
+        opaqueMaterialData.getTerrainBlendEnabled(),
+        opaqueMaterialData.getTerrainBlendUvScale(),
+        opaqueMaterialData.getTerrainBlendOpacity(),
+        opaqueMaterialData.getTerrainLayerUvScale(),
+        opaqueMaterialData.getTerrainNormalBlendPower(),
+        opaqueMaterialData.getTerrainNormalBlendOffset(),
+        opaqueMaterialData.getTerrainAlbedoBlendPower(),
+        opaqueMaterialData.getTerrainAlbedoBlendOffset(),
+        opaqueMaterialData.getSkateDecalOverlayEnabled(),
+        opaqueMaterialData.getSkateDecalOverlayTileable()
       };
 
       accumulateOpaqueMaterialAggregates(opaqueSurfaceMaterial);
