@@ -206,6 +206,8 @@ namespace remix {
     remixapi_ErrorCode                GetGameValue(const char* key, char* out_buffer, uint32_t in_buffer_size, uint32_t* out_actual_size);
     Result< void >                    AddTextureHash(const char* textureCategory, const char* textureHash);
     Result< void >                    RemoveTextureHash(const char* textureCategory, const char* textureHash);
+    Result< remixapi_TextureHandle >  CreateTexture(const remixapi_TextureInfo& info);
+    Result< void >                    DestroyTexture(remixapi_TextureHandle handle);
 
     // DXVK interoperability
     Result< IDirect3D9Ex* >                  dxvk_CreateD3D9(bool editorModeEnabled = false);
@@ -321,6 +323,26 @@ namespace remix {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.RemoveTextureHash(textureCategory, textureHash);
+  }
+
+  inline Result< remixapi_TextureHandle > Interface::CreateTexture(const remixapi_TextureInfo& info) {
+    if (!m_CInterface.CreateTexture) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+
+    remixapi_TextureHandle handle = nullptr;
+    const remixapi_ErrorCode status = m_CInterface.CreateTexture(&info, &handle);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return handle;
+  }
+
+  inline Result< void > Interface::DestroyTexture(remixapi_TextureHandle handle) {
+    if (!m_CInterface.DestroyTexture) {
+      return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+    return m_CInterface.DestroyTexture(handle);
   }
 
   inline Result< void > Interface::Present(const remixapi_PresentInfo* info) {
