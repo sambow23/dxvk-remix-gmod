@@ -42,6 +42,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace dxvk { namespace fork_precipitation {
@@ -876,8 +877,16 @@ namespace dxvk { namespace fork_precipitation {
                         "(Weather Preset Editor -> Precipitation); these are the\n"
                         "budget and spawn-volume knobs shared by every preset.");
 
+    // Built once: the panel no longer sits under Weather, so the preset
+    // coupling is not implied by position any more and has to be said.
+    static const std::string s_enableTooltip =
+        std::string(enableObject().getDescription()) +
+        "\n\nMaster switch only. How hard it rains is driven by the active "
+        "weather preset's precipitation intensity, so with this enabled and a "
+        "clear preset active you will still see nothing.";
+
     RemixGui::Checkbox("Enable Precipitation", &enableObject());
-    RemixGui::SetTooltipToLastWidgetOnHover(enableObject().getDescription());
+    RemixGui::SetTooltipToLastWidgetOnHover(s_enableTooltip.c_str());
 
     // Per-preset look values (intensity, fall speed, drop size, color, sky
     // light, ...) are edited in the Weather Preset Editor like every other

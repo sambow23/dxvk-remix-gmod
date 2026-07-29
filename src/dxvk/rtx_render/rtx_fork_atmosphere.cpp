@@ -1756,6 +1756,14 @@ namespace fork_hooks {
 
         ImGui::TreePop();
       }
+
+      // ----- Precipitation (global) -----
+      // Sibling of Clouds, not a child of the Weather panel: these are budget,
+      // spawn-volume, collision and material knobs — the precipitation analogue
+      // of Clouds > Performance — and every one of them is a global RtxOption.
+      // The per-preset look values stay in the weather preset editor, generated
+      // from WEATHER_PRESET_FIELD_LIST.
+      fork_hooks::showPrecipitationUI();
     }
   }
 

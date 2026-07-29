@@ -1220,11 +1220,11 @@ namespace dxvk { namespace fork_weather {
       ImGui::TreePop();
     }
 
-    // ---- Precipitation globals (budget / spawn volume / collision) ----
-    // The per-preset look values live in the preset editor, generated from the
-    // field table like everything else; these are the shared, non-weather knobs.
-    ImGui::Separator();
-    fork_hooks::showPrecipitationUI();
+    // Precipitation's global knobs (budget / spawn volume / collision) used to
+    // hang off the bottom of this panel. They are system and performance
+    // controls rather than weather-authoring ones, so they now sit as their own
+    // top-level tree next to Clouds in showAtmosphereUI. The per-preset look
+    // values still live in the preset editor, generated from the field table.
   }
   // ---------------------------------------------------------------------------
   // renderEditorWindow — the pop-out per-preset editor (separate movable window,
