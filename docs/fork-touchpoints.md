@@ -671,8 +671,7 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `remixapi_SetupCamera` (devLock RAII guard) — 1 LOC. Not extracted to a hook. The `LockDevice()` guard is scope-tied to the function body (its destructor must run at end-of-function), so a hook cannot own it without rewriting the entire function. Tracked here per the fridge-list invariant.
   *Adds `auto devLock = remixDevice->LockDevice()` so the EmitCs call that submits external camera data is race-safe.*
 
-- **Inline tweak** at `remixapi_DrawInstance` (devLock RAII guard) — 1 LOC. Same reasoning as SetupCamera. Scope-tied RAII guard cannot be extracted without lifting the entire function. Tracked here per the fridge-list invariant.
-  *Adds `auto devLock = remixDevice->LockDevice()` inside the EmitCs block that calls `commitExternalGeometryToRT`.*
+- **RETIRED 2026-07-29 (upstream sync)** — the `remixapi_DrawInstance` devLock RAII guard is gone. Upstream restructured the function to serialize on the api-level `s_mutex` instead of the device lock, hoisting the `toRtDrawState` conversion outside the lock and emitting with `EmitCs<false>` (`AllowFlush=false`). The fork's `LockDevice()` guard was dropped in favour of upstream's scheme; `remixapi_SetupCamera` above still carries its own guard because upstream did not restructure that one. `remixapi_DrawInstance` is now upstream's function verbatim plus the two fork hook calls below.
 
 - **Hook** at `remixapi_DrawInstance` (beginScene dispatch) → `fork_hooks::notifyBeginScene` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7c).
   *One-liner call. Atomically exchanges `s_inFrame` to true and fires `s_beginCallback` on the first frame submission.*
@@ -799,6 +798,7 @@ initializer list and can't be lifted into a separate TU.
 
 - **Hook** at `SceneManager::submitExternalDraw` (before submesh loop) → `fork_hooks::externalDrawMeshReplacement` in `rtx_fork_submit.cpp`
   *Checks for USD mesh/light replacements keyed on the API mesh handle hash; call site handles the early-exit + `drawReplacements` dispatch since those are private SceneManager methods.*
+  *2026-07-29 (upstream sync): the call site's replacement-template setup now goes through `DrawCallState::modifyGeometryData()` instead of writing `replacementDrawCall.geometryData` directly — upstream moved `geometryData` into the private section behind that accessor, and `SceneManager` is not a friend of `DrawCallState` (the fork hooks and `D3D9Rtx` are). Same for `modifyMaterialData()` at the `setHashOverride` site below.*
 
 - **Hook** at `SceneManager::submitExternalDraw` (inside `if (material != nullptr)`, before `setHashOverride`) → `fork_hooks::externalDrawMaterialReplacement` in `rtx_fork_submit.cpp`
   *Checks for USD material replacements via `getReplacementMaterial()` and updates the `material` pointer in-place if one is found.*
@@ -3088,7 +3088,7 @@ instead of x^2.2, so software-linearized inputs (notably albedo the FO4
 plugin submits as UNORM) match the hardware sampler's sRGB decode;
 linearToGamma (output encode) is deliberately left as x^(1/2.2).
 
-- **`src/dxvk/shaders/rtx/utility/shared_constants.h`** - fork-touchpoint inline tweak. *Adds OPAQUE_SURFACE_MATERIAL_FLAG_ALBEDO/EMISSIVE_TEXTURE_IS_SRGB at TYPE_OFFSET(5/6).*
+- **`src/dxvk/shaders/rtx/utility/shared_constants.h`** - fork-touchpoint inline tweak. *Adds OPAQUE_SURFACE_MATERIAL_FLAG_ALBEDO/EMISSIVE_TEXTURE_IS_SRGB at TYPE_OFFSET(6/7). (Originally 5/6; renumbered on the 2026-07-29 upstream sync — upstream took TYPE_OFFSET(5) for `OPAQUE_SURFACE_MATERIAL_FLAG_IS_HAIR_CARD`. These offsets are a shared, silently-colliding namespace: check for a free slot on every sync.)*
 - **`src/dxvk/rtx_render/rtx_texture.h`** - fork-touchpoint inline tweak. *Adds TextureUtils::isSRGB(VkFormat).*
 - **`src/dxvk/shaders/rtx/concept/surface_material/opaque_surface_material_interaction.slangh`** - fork-owned change. *Skips gammaToLinear for albedo/emissive when the loaded source texture is sRGB.*
 - **`src/dxvk/rtx_render/rtx_materials.h`** - fork-owned change. *RtOpaqueSurfaceMaterial carries albedoTextureIsSrgb/emissiveTextureIsSrgb (ctor/members/hash/writeGPUData flags); hash static_assert 120 -> 128.*
@@ -3583,7 +3583,7 @@ replaced by one dial: `rtx.weather.precipitation.appearance.skyLightScale`
 applies immediately with no descriptor/material rebuild). Stale glow keys in
 saved configs are harmless.
 
-- **`src/dxvk/shaders/rtx/utility/shared_constants.h`** - fork-touchpoint inline tweak. *`OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE` (TYPE_OFFSET(7)).*
+- **`src/dxvk/shaders/rtx/utility/shared_constants.h`** - fork-touchpoint inline tweak. *`OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE` (TYPE_OFFSET(8)). (Originally 7; renumbered on the 2026-07-29 upstream sync, which pushed the sRGB pair up to 6/7.)*
 - **`src/dxvk/rtx_render/rtx_material_data.h`** - fork-touchpoint inline tweak. *`X(SkyLitParticle, sky_lit_particle, bool, ...)` in LIST_OPAQUE_MATERIAL_CONSTANTS.*
 - **`src/dxvk/rtx_render/rtx_materials.h`** - fork-touchpoint inline tweaks. *`RtOpaqueSurfaceMaterial`: defaulted ctor param, member, flags pack, hash-struct entry.*
 - **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** - fork-touchpoint inline tweak. *Passes `getSkyLitParticle()` into the GPU material.*

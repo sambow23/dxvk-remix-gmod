@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 namespace dxvk { namespace fork_precipitation {
@@ -845,7 +846,9 @@ namespace dxvk { namespace fork_precipitation {
     // the categories that reach the instance come from the draw call.)
     const CategoryFlags categories {};
 
-    ExternalDrawState state {
+    // commitExternalGeometryToRT takes ownership via unique_ptr (upstream
+    // changed the signature; picked up in the 2026-07-29 sync).
+    auto state = std::make_unique<ExternalDrawState>(ExternalDrawState {
       std::move(drawCall),
       reinterpret_cast<remixapi_MeshHandle>(kMeshHandleValue),
       CameraType::Main,
@@ -853,7 +856,7 @@ namespace dxvk { namespace fork_precipitation {
       /* doubleSided */ true,
       desc,
       {}
-    };
+    });
 
     ctx.commitExternalGeometryToRT(std::move(state));
     m_wasActive = true;

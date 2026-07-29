@@ -2463,9 +2463,10 @@ namespace dxvk {
       // the USD replacement material takes precedence, and use a neutral default material
       // since the replacement will provide its own.
       DrawCallState replacementDrawCall = state.drawCall;
-      replacementDrawCall.geometryData = submeshes[0];
-      replacementDrawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-      replacementDrawCall.geometryData.externalMaterial = nullptr;
+      RasterGeometry& replacementGeometry = replacementDrawCall.modifyGeometryData();
+      replacementGeometry = submeshes[0];
+      replacementGeometry.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+      replacementGeometry.externalMaterial = nullptr;
 
       MaterialData renderMaterialData = LegacyMaterialData().as<OpaqueMaterialData>();
       drawReplacements(ctx, &replacementDrawCall, pReplacements, renderMaterialData, replacementInstance);
