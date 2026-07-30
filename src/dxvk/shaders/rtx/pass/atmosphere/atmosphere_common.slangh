@@ -494,12 +494,23 @@ float cloudPlanetRadius(AtmosphereArgs args) {
 // callers marching a non-default slab (layer 2 cirrus deck, etc.). The
 // args-only overload below stays semantically identical to the original
 // for everything still marching the primary cumulus slab.
-float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args,
-                                  float slabAltitudeKm, float slabThicknessKm) {
-  float cloudR = cloudPlanetRadius(args);
+// Radius-parameterized core (fork — 2026-07-30, cloud march perf). cloudPlanetRadius
+// evaluates an exp() and is frame-CONSTANT, but the march calls this helper up to
+// five times per sample (the density tap, two near-field sun taps, two moon taps),
+// so the exp was being re-evaluated deep inside the hot loop. Callers that already
+// hold the radius (marchCloudSlab / the shade context) pass it in; the convenience
+// overloads below preserve the original signatures bit-for-bit.
+float computeCloudHeightFractionR(vec3 samplePos, float cloudR,
+                                   float slabAltitudeKm, float slabThicknessKm) {
   vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
   float altitudeAboveSea = length(samplePos - planetCenter) - cloudR;
   return saturate((altitudeAboveSea - slabAltitudeKm) / max(slabThicknessKm, 0.001f));
+}
+
+float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args,
+                                  float slabAltitudeKm, float slabThicknessKm) {
+  return computeCloudHeightFractionR(samplePos, cloudPlanetRadius(args),
+                                     slabAltitudeKm, slabThicknessKm);
 }
 
 float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
@@ -1694,6 +1705,23 @@ float sampleCloudGroundShadow_OptionB_impl(vec3 worldPos, vec3 sunDir,
                                             AtmosphereArgs args, bool isZUp,
                                             Texture3D<float> dSunTex,
                                             SamplerState dSunSampler) {
+  // Clouds disabled -> no cloud shadow (fork — 2026-07-30). Two reasons this
+  // gate belongs here rather than at the call sites:
+  //   * Correctness: every consumer gated only on cloudVoxelShadowsEnable, so
+  //     with clouds off but voxel shadows on, terrain was still being shadowed
+  //     by clouds that render nothing. The analytical twin
+  //     (evalCloudGroundShadow) has always early-outed on cloudEnabled; this
+  //     makes both shadow paths agree on what "clouds off" means.
+  //   * The D_sun grid this reads is no longer baked while clouds are off (see
+  //     the cloudEnabled gate on the voxel-grid dispatches in
+  //     rtx_atmosphere.cpp::computeLuts), so without this the lookup would
+  //     return whatever the last bake left behind.
+  // Placed in the shared _impl so the production wrapper AND the debug-view
+  // form inherit it — the enum-875 gate compares the two, so they must match.
+  if (args.cloudEnabled < 0.5f) {
+    return 1.0f;
+  }
+
   // Y-up conversion (worldPos AND sunDir both swapped). MUST be identical
   // to the swap done at the production NEE call sites; the enum-875 gate
   // exists specifically to catch any divergence here.

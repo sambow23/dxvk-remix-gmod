@@ -1440,6 +1440,29 @@ namespace fork_hooks {
               "lobes, notches and full splits that break round singular "
               "blobs into varied cloud clusters (the GT7 mid-band role). "
               "Live, no rebake. Higher costs some empty-space-skip perf.");
+          // Restored to the panel (fork — 2026-07-30) after the curation pass
+          // demoted it to conf-only as "pinned 3 km". It is the single most
+          // expensive knob in the cloud march — at 3 km it drives TWO full
+          // density-sampler calls per dense lit sample, roughly 58% of the
+          // pass's texture taps — so it is the primary live perf-ablation
+          // lever, and those have to be ImGui widgets to be usable in-game.
+          RemixGui::DragFloat("Sun Shadow (Near)", &RtxOptions::nubis3SunNearFieldKmObject(),
+                              0.05f, 0.0f, 3.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Range over which sun occlusion is measured with LIVE density "
+              "taps instead of the D_sun grid — this is what gives each lobe "
+              "its own sunlit face and shadowed crevice (Nubis p.129). "
+              "0 = grid only. PERF: by far the most expensive cloud knob; "
+              "drag to 0 to measure the ceiling of any near-field optimization.");
+          RemixGui::DragFloat("Lighting LOD", &RtxOptions::cloudLightingLodThresholdObject(),
+                              0.002f, 0.0f, 0.25f, "%.3f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Skips the expensive Sun Shadow (Near) refinement and the moon "
+              "shadow march on samples that barely reach the pixel — weight = "
+              "view transmittance x aerial haze x the sample's own opacity. "
+              "Recovers most of Sun Shadow (Near)'s cost while keeping the "
+              "lobe shading where it is actually visible. Raise until crevice "
+              "contrast or edges visibly soften, then back off. 0 = off.");
           RemixGui::DragFloat("Edge Wisp Cut", &RtxOptions::nubis3EdgeErosionObject(),
                               0.02f, 0.0f, 3.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(

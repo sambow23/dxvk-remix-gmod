@@ -1785,6 +1785,29 @@ namespace dxvk {
                "crevices — the directional cue that makes clouds read as 3D "
                "volumes instead of reshaped blobs. 0 = grid only (cheaper, "
                "softer). Applies live.");
+    // Default 0 = OFF (fork — 2026-07-30). Tested and rejected as a perf fix: at
+    // 0.02 it recovered no measurable time, because the cost is not concentrated
+    // in low-visibility samples (the march already exits at viewTransmittance
+    // < 0.01, so the actionable band is narrow); at 0.07 it did buy time but
+    // visibly degraded the look. Kept as an optional quality/perf trade — it is
+    // still a better trade than setting Sun Shadow (Near) to 0 outright — but it
+    // must not be on by default.
+    RTX_OPTION("rtx.atmosphere", float, cloudLightingLodThreshold, 0.0f,
+               "Nubis3: contribution-weighted lighting LOD [0..0.25]. A march "
+               "sample's contribution weight is view transmittance x aerial "
+               "haze x its own opacity — exactly the factor its color is "
+               "multiplied by in the composite. Samples below this threshold "
+               "skip the expensive near-field live sun refinement (two full "
+               "density-sampler calls, ~9 of ~16 texture taps per dense "
+               "sample) and the moon shadow march, falling back to the D_sun "
+               "grid and unshadowed moonlight — the same fallbacks the "
+               "existing thin-sample density gates already use, so this only "
+               "coarsens lighting that was designed to degrade that way and "
+               "never removes cloud material. Targets deep-in-cloud and "
+               "distance-dimmed samples, which pay full price while "
+               "contributing almost nothing to the pixel. Raise until edges "
+               "or crevice contrast visibly soften, then back off. "
+               "0 = disabled (every sample fully refined). Applies live.");
     RTX_OPTION("rtx.atmosphere", float, nubis3FineDetailStrength, 0.0f,
                "Nubis3: fine-frequency detail band [0..2] (GT7-style third "
                "noise band). A third tap of the detail volume at 2.11x "

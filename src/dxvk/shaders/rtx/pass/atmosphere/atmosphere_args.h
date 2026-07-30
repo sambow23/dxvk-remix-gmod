@@ -481,7 +481,13 @@ struct AtmosphereArgs {
   float padRetired5;               // retired: legacy vertical noise stretch.
 
   // ----- (former Worley carve params — retired with the legacy 256^3 bake) -----
-  float padRetired6;
+  // Contribution-weighted lighting LOD threshold (fork — 2026-07-30, perf).
+  // A march sample whose contribution weight (viewTransmittance x aerial haze x
+  // its own opacity) falls below this drops the near-field live sun refinement
+  // and the moon shadow march, falling back to the D_sun grid and unshadowed
+  // moonlight respectively. 0 disables the LOD. Rides the former padRetired6
+  // slot — CB layout unchanged (16-byte-row discipline preserved).
+  float cloudLightingLodThreshold;
   float padRetired7;
   uint  padRetired8;
   float cloudAerialHazePerKm;      // Aerial-perspective HAZE on cloud radiance (1/km). Dims distant

@@ -968,7 +968,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.padRetired0 = 0u;
   args.padRetired4 = 0u;
   args.padRetired5 = 0.0f;
-  args.padRetired6 = 0.0f;
+  args.cloudLightingLodThreshold = RtxOptions::cloudLightingLodThreshold();
   args.padRetired7 = 0.0f;
   args.padRetired8 = 0u;
   args.padRetired9 = 0.0f;
@@ -1427,6 +1427,18 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   // cloud-body lighting (which tolerates one step of staleness), so it falls back
   // to the km granularity gate — meaning toggling cloudVoxelShadowsEnable measures
   // the full cost of the cloud-shadow feature (per-frame grid bake + the NEE fold).
+  // Clouds-disabled gate (fork — 2026-07-30, perf). These two bakes are
+  // 256x256x32 voxels at 8 (D_sun) and 6 (D_ambient) density taps each, and
+  // they ran EVERY frame regardless of cloudEnabled — measured at ~0.5 ms in
+  // the 2026-06-11 bisect. Nothing consumes them while clouds are off: the
+  // view march early-outs per pixel on cloudEnabled, and the terrain
+  // cloud-shadow path now early-outs too (see the matching gate in
+  // sampleCloudGroundShadow_OptionB_impl, atmosphere_common.slangh — required,
+  // or it would read the last bake left in the grid). So with clouds off this
+  // was pure waste, and it was silently inflating every "cost of the sky
+  // alone" measurement.
+  const bool cloudsEnabled = RtxOptions::cloudEnabled();
+
   bool voxelGridsDirty = true;
   if (RtxOptions::cloudVoxelGridRebakeGranularityKm() > 0.0f && !RtxOptions::cloudVoxelShadowsEnable()) {
     AtmosphereArgs voxelKey = getAtmosphereArgs();
@@ -1437,7 +1449,13 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
     }
   }
 
-  if (RtxOptions::debugDispatchCloudVoxelGrids() && voxelGridsDirty) {
+  if (!cloudsEnabled) {
+    // Force a fresh bake on the frame clouds come back, rather than trusting a
+    // key that went stale while the gate was closed.
+    memset(&m_cachedVoxelGridKey, 0, sizeof(m_cachedVoxelGridKey));
+  }
+
+  if (cloudsEnabled && RtxOptions::debugDispatchCloudVoxelGrids() && voxelGridsDirty) {
     ctx->emitMemoryBarrier(0,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_SHADER_WRITE_BIT,

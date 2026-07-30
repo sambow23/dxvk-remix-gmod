@@ -101,6 +101,28 @@ float valueErosion(float value, float erosion) {
 // an SDF). NOTE for Phase C: a blended distance is NOT metric — stepping must
 // use min(taps) with a safety factor, not this blend.
 // ---------------------------------------------------------------------------
+// coarseOd (fork — 2026-07-30, perf): the LIVE optical-depth taps only. A 2-tap
+// shadow integral over 3 km cannot see two of the sampler's features, so they are
+// dropped for those callers:
+//   * the hex 3-tap blend zone — it exists to hide the texture repeat's seams, and
+//     a seam cannot be seen inside an optical depth. Forced to the dominant-vertex
+//     tap, which the fast path already uses over ~70% of the plane.
+//   * the two-scale de-tile second tap (noiseB) — same reasoning: it hides the
+//     detail volume's repeat when a cloud face is viewed flat-on. Using noiseA
+//     directly keeps the mean EXACT (every channel is bake-normalized to 0.5) and
+//     restores full variance, so no re-expansion is needed.
+// Deliberately NOT dropped, despite both being tempting: the step-6d mid tap (its
+// shape-variety displacement is ±0.55 km of level-set motion at the shipping
+// setting — it CREATES the lobes whose self-shadowing the near-field refinement
+// exists to capture, so removing it would systematically un-shadow exactly the
+// target structure) and the page-123 sharpen pow (nubis3SharpenStrength defaults
+// to 1, so the exponent is part of the density definition, not a flourish).
+//
+// This flag is uniform per call site, so each inlined copy specializes and the
+// untaken branch is dead-code-eliminated. The D_sun / D_ambient BAKES must never
+// pass true — the shared sampler is what makes rendered clouds and the shadow grids
+// iso-consistent by construction; see sampleCloudDensityNubis3Coarse below, which
+// is wired only into the three live-tap sites.
 float sampleCloudDensityNubis3(vec3 worldPosKm,
                                float heightFraction,
                                float typeLocal,
@@ -111,6 +133,7 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
                                Texture3D<float> nvdfSdf,
                                Texture3D<float4> detailNoise,
                                SamplerState cloudSampler,
+                               bool coarseOd,
                                out float profileOut,
                                out float detailSigned,
                                out float sdfKmOut,
@@ -137,21 +160,27 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   //    metrically-valid distance bound for Phase C stepping (the weighted
   //    blend is not a distance). In the fast path the rendered field IS the
   //    single dominant tap, so its distance is the right bound there.
+  // The per-tap frac() on the horizontal coords is dropped (fork — 2026-07-30,
+  // perf): tileUV is ALREADY fracced above and the hex offsets are in [0,1), so
+  // these operands are bounded to [0,2) and the sampler's REPEAT address mode
+  // wraps them identically. Safe precisely BECAUSE the range is small — see the
+  // note at the detail taps below, where the operand is unbounded and the frac
+  // is load-bearing.
   float sdfKm;
   float sdfMinKm;
   if (args.cloudHexTilingEnable > 0.5f) {
     CloudHexTile hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
-    if (hex.w1 > 0.95f) {
+    if (hex.w1 > 0.95f || coarseOd) {
       sdfKm = nvdfSdf.SampleLevel(cloudSampler,
-          vec3(frac(tileUV.x + hex.off1.x), v, frac(tileUV.y + hex.off1.y)), 0).r;
+          vec3(tileUV.x + hex.off1.x, v, tileUV.y + hex.off1.y), 0).r;
       sdfMinKm = sdfKm;
     } else {
       float s1 = nvdfSdf.SampleLevel(cloudSampler,
-          vec3(frac(tileUV.x + hex.off1.x), v, frac(tileUV.y + hex.off1.y)), 0).r;
+          vec3(tileUV.x + hex.off1.x, v, tileUV.y + hex.off1.y), 0).r;
       float s2 = nvdfSdf.SampleLevel(cloudSampler,
-          vec3(frac(tileUV.x + hex.off2.x), v, frac(tileUV.y + hex.off2.y)), 0).r;
+          vec3(tileUV.x + hex.off2.x, v, tileUV.y + hex.off2.y), 0).r;
       float s3 = nvdfSdf.SampleLevel(cloudSampler,
-          vec3(frac(tileUV.x + hex.off3.x), v, frac(tileUV.y + hex.off3.y)), 0).r;
+          vec3(tileUV.x + hex.off3.x, v, tileUV.y + hex.off3.y), 0).r;
       sdfKm = hex.w1 * s1 + hex.w2 * s2 + hex.w3 * s3;
       sdfMinKm = min(s1, min(s2, s3));
     }
@@ -212,12 +241,16 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   // round 2026-07-16; the old vec4(.5,.5,.3,.3) here compensated unmeasured
   // raw means, and was wrong for all four channels — measured wispy ~0.72,
   // billowy ~0.155).
+  // NOTE on the frac() calls at the detail taps below: unlike the SDF taps
+  // above, these are LOAD-BEARING and must not be removed as "redundant under a
+  // REPEAT sampler". boilPos carries the world position plus the wind, boil and
+  // evolution offsets, which accumulate without bound over a session, so
+  // boilPos * detailFreq can reach the hundreds. Doing the wrap in fp32 here
+  // keeps the coordinate small before the texture unit converts it to its
+  // limited-precision fixed-point form; handing the raw magnitude to the
+  // sampler instead loses sub-texel precision and would show up as drift or
+  // wobble in the detail field late in a session.
   float detailFreq = args.cloudDetailScale / args.cloudNoiseTileKm;
-  vec4 noiseA = detailNoise.SampleLevel(cloudSampler, frac(boilPos * detailFreq), 0);
-  vec4 noiseB = detailNoise.SampleLevel(cloudSampler,
-      frac(boilPos * (detailFreq * 0.531f) + vec3(0.37f, 0.61f, 0.13f)), 0);
-  const vec4 kChannelMean = vec4(0.5f, 0.5f, 0.5f, 0.5f);
-  vec4 noise = saturate(kChannelMean + (lerp(noiseA, noiseB, 0.4f) - kChannelMean) * 1.35f);
 
   // Frequency blends key on a PROVISIONAL (pre-wobble) profile — the wobble
   // itself is built from these channels, so the final profile isn't known yet.
@@ -238,6 +271,67 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   const float kAltTypeSwing = 0.5f;
   float typeShaped = saturate(saturate(typeLocal)
                               + (smoothstep(0.1f, 0.8f, heightFraction) - 0.5f) * kAltTypeSwing);
+
+  // 6d. Mid-frequency silhouette lobes (GT7 pp.229-230 — fork, detail round
+  //     2026-07-16). Silhouette spectrum audit: bodies are km-scale smooth
+  //     (JFA distance field), detail content spans 87-875 m — the 1-2.5 km
+  //     octave was EMPTY, and GT7's rule is that exactly this too-wide gap
+  //     between shape and detail scales is what reads as synthetic (worst
+  //     flat-on at the deck base). Their fix, verbatim: reuse the same
+  //     texture rescaled to fill the gap, zero new memory. A third tap at
+  //     0.193x the base frequency puts the LOW channels at ~2.4 km — pure
+  //     km-scale lobes (this tap's high channels would only duplicate
+  //     already-covered scales, so the low channels alone feed the signal;
+  //     both are mean-0.5 by the bake normalization, so the sum stays
+  //     zero-mean). The 60/40 blend keeps the combined signal in
+  //     [-0.5, 0.5], preserving the step-5 early-out bound and the
+  //     conservative sdfStepKmOut excursion term. This tap repeats every
+  //     ~14.5 km — beyond the noise tile itself — so it needs no de-tiling.
+  //
+  //     TAP ORDER (fork — 2026-07-30, perf): this tap moved AHEAD of the
+  //     two-scale base taps below so the surface gate can run on it alone.
+  //     The base taps are the expensive pair (two volume fetches plus the
+  //     whole erosion composite), and every sample inside the maxOutwardKm
+  //     skirt band used to pay for them before the step-7 gate threw the
+  //     result away — and the SDF sphere-trace deliberately parks samples in
+  //     exactly that band, ~11 of them per surface approach at the default
+  //     50 m adaptive step. Nothing above this point needs the base taps.
+  vec4 noiseMid = detailNoise.SampleLevel(cloudSampler,
+      frac(boilPos * (detailFreq * 0.193f) + vec3(0.71f, 0.29f, 0.53f)), 0);
+  float wobbleMid = lerp(noiseMid.r - 0.5f,
+                         noiseMid.b * 0.3f - 0.15f,
+                         typeShaped);
+
+  // Conservative surface gate on the mid tap alone. The final displacement is
+  //   sdfLive -= (0.6*w_n + 0.4*w_m) * wobbleKm + w_m * shapeVarietyKm
+  // with w_n (the step-6c base-tap wobble) bounded to [-0.5, 0.5] by
+  // construction, so its maximum outward pull is 0.3*wobbleKm. Anything still
+  // outside the surface by more than that after the mid terms is guaranteed
+  // empty for ANY value of w_n — skip the base taps entirely. At the shipping
+  // default cloudDetailStrength = 0 (wobbleKm = 0) this IS the exact step-7
+  // gate; above zero it stays strictly conservative, so the density this
+  // function returns is unchanged either way.
+  float sdfAfterMid = sdfLive - 0.4f * wobbleMid * wobbleKm
+                    - wobbleMid * args.nubis3ShapeVarietyKm;
+  if (sdfAfterMid >= 0.3f * wobbleKm) {
+    sdfKmOut = sdfAfterMid;
+    return 0.0f;
+  }
+
+  // Two-scale de-tile base taps (see the step-6 header note above).
+  vec4 noiseA = detailNoise.SampleLevel(cloudSampler, frac(boilPos * detailFreq), 0);
+  vec4 noise;
+  if (coarseOd) {
+    // De-tile blend dropped for optical-depth taps: noiseA is already mean-0.5 by
+    // bake normalization and carries full variance on its own, so no blend and no
+    // re-expansion — mean exact, variance within ~3% of the blended field.
+    noise = noiseA;
+  } else {
+    vec4 noiseB = detailNoise.SampleLevel(cloudSampler,
+        frac(boilPos * (detailFreq * 0.531f) + vec3(0.37f, 0.61f, 0.13f)), 0);
+    const vec4 kChannelMean = vec4(0.5f, 0.5f, 0.5f, 0.5f);
+    noise = saturate(kChannelMean + (lerp(noiseA, noiseB, 0.4f) - kChannelMean) * 1.35f);
+  }
 
   // Wispy: low->high frequency over the profile (fine filaments deeper in).
   float wispyNoise = lerp(noise.r, noise.g, profileProv);
@@ -297,26 +391,9 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   float billowyWobble = lerp(noise.b, noise.a, kWobbleHiMix) * 0.3f - 0.15f;
   float wobbleSignal  = lerp(wispyWobble, billowyWobble, typeShaped);
 
-  // 6d. Mid-frequency silhouette lobes (GT7 pp.229-230 — fork, detail round
-  //     2026-07-16). Silhouette spectrum audit: bodies are km-scale smooth
-  //     (JFA distance field), detail content spans 87-875 m — the 1-2.5 km
-  //     octave was EMPTY, and GT7's rule is that exactly this too-wide gap
-  //     between shape and detail scales is what reads as synthetic (worst
-  //     flat-on at the deck base). Their fix, verbatim: reuse the same
-  //     texture rescaled to fill the gap, zero new memory. A third tap at
-  //     0.193x the base frequency puts the LOW channels at ~2.4 km — pure
-  //     km-scale lobes (this tap's high channels would only duplicate
-  //     already-covered scales, so the low channels alone feed the signal;
-  //     both are mean-0.5 by the bake normalization, so the sum stays
-  //     zero-mean). The 60/40 blend keeps the combined signal in
-  //     [-0.5, 0.5], preserving the step-5 early-out bound and the
-  //     conservative sdfStepKmOut excursion term. This tap repeats every
-  //     ~14.5 km — beyond the noise tile itself — so it needs no de-tiling.
-  vec4 noiseMid = detailNoise.SampleLevel(cloudSampler,
-      frac(boilPos * (detailFreq * 0.193f) + vec3(0.71f, 0.29f, 0.53f)), 0);
-  float wobbleMid = lerp(noiseMid.r - 0.5f,
-                         noiseMid.b * 0.3f - 0.15f,
-                         typeShaped);
+  // 6d's mid tap + wobbleMid now run ABOVE, ahead of the base taps, so the
+  // surface gate can skip them (fork — 2026-07-30, perf). Only the blend is
+  // left here, in its original position and order.
   wobbleSignal = wobbleSignal * 0.6f + wobbleMid * 0.4f;
 
   // 6e. SHAPE VARIETY (fork — 2026-07-17, user direction from the GT7
@@ -508,6 +585,11 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
 // Convenience overload without the shape out params (optical-depth taps).
 // The huge cameraDistKm keeps the near-camera HF detail off — bake grids and
 // shadow taps must not depend on the camera.
+//
+// FULL path (coarseOd = false). This is the overload the D_sun / D_ambient bake
+// integrands call, and it must stay full-fidelity: one sampler serving both the
+// view march and the bakes is what makes the rendered iso-surface and the shadow
+// grids consistent by construction.
 float sampleCloudDensityNubis3(vec3 worldPosKm,
                                float heightFraction,
                                float typeLocal,
@@ -523,6 +605,30 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   float sdfStepUnused;
   return sampleCloudDensityNubis3(worldPosKm, heightFraction, typeLocal, coverageLocal,
                                   densityScale, 1e6f, args, nvdfSdf, detailNoise, cloudSampler,
+                                  /*coarseOd=*/false,
+                                  profileUnused, detailUnused, sdfUnused, sdfStepUnused);
+}
+
+// COARSE path (coarseOd = true) — LIVE optical-depth taps ONLY (the near-field sun
+// refinement and the two moon-shadow marches). Drops the hex blend zone and the
+// de-tile second tap: ~4.6 -> ~3.0 texture taps per call. Never call this from a
+// bake integrand; see the coarseOd note on the main sampler.
+float sampleCloudDensityNubis3Coarse(vec3 worldPosKm,
+                                     float heightFraction,
+                                     float typeLocal,
+                                     float coverageLocal,
+                                     float densityScale,
+                                     AtmosphereArgs args,
+                                     Texture3D<float> nvdfSdf,
+                                     Texture3D<float4> detailNoise,
+                                     SamplerState cloudSampler) {
+  float profileUnused;
+  float detailUnused;
+  float sdfUnused;
+  float sdfStepUnused;
+  return sampleCloudDensityNubis3(worldPosKm, heightFraction, typeLocal, coverageLocal,
+                                  densityScale, 1e6f, args, nvdfSdf, detailNoise, cloudSampler,
+                                  /*coarseOd=*/true,
                                   profileUnused, detailUnused, sdfUnused, sdfStepUnused);
 }
 
@@ -619,8 +725,9 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
   const int   kSamplesMax   = 24;
   float tExitFull = tExit;
   tExit = min(tExit, kMaxSunPathKm);
-  int   samples = clamp(int(ceil(tExit / 0.6f)), 8, kSamplesMax);
-  float stepLen = tExit / float(samples);
+  // (the old single [0, tExit] lattice's `samples` / `stepLen` are gone — the
+  // near and far sections below each derive their own, and together partition
+  // the path exactly.)
   float tapJitter = hash31(worldPosYUpKm * 173.3f);
 
   vec2 sampleXZKm = vec2(worldPosYUpKm.x + args.cameraWorldPosYUpKm.x,
@@ -630,15 +737,76 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
-  for (int i = 0; i < kSamplesMax; ++i) {
-    if (i >= samples) {
-      break;
-    }
-    vec3 samplePos = worldPosYUpKm + (float(i) + tapJitter) * stepLen * sunDirYUp;
+  // ===== DE-JITTERED NEAR SECTION (fork — 2026-07-30, perf) =====
+  //
+  // The near-field LIVE sun refinement in the view march exists, per its own
+  // comment, because "the grid bake integrates with ~0.6 km jittered taps and
+  // bilinear filtering smooths what survives, so lobe-scale self-shadowing is
+  // low-passed away". That explanation does not survive arithmetic:
+  //   * this bake already spends 5-8 taps inside the first 3 km (8 when the sun
+  //     path is short, 5 at 0.6 km steps on a long path) — DENSER along the sun
+  //     ray than the live refinement's 2 taps at 0.75 / 2.25 km;
+  //   * grid texels are ~47 m horizontally (12 km / 256) and ~95 m vertically —
+  //     far above Nyquist for the 1-2.5 km lobes in question, and trilinear
+  //     blur is ~1 texel.
+  // So the lobe signal is representable here and is NOT being low-passed away.
+  //
+  // What actually differs is estimator COHERENCE. The tap phase is
+  // hash31(worldPosYUpKm * 173.3) — decorrelated per voxel, world-anchored and
+  // FROZEN. Sampling 87-875 m detail content at ~0.5 km strata leaves a per-voxel
+  // OD standard deviation of roughly 0.15-0.25, and through exp(-sigma * OD) with
+  // sigma = 4 that is up to a ~2x static shading swing at 1-2 texel (50-150 m)
+  // granularity — worst exactly on lit faces, where low OD makes the exponential
+  // most sensitive. The lobe gradients ARE in the grid, buried under frozen
+  // mottle. The live refinement wins not by resolving more, but by being a
+  // DETERMINISTIC estimator whose taps are anchored to the shade point, so its
+  // (much larger) quadrature bias varies continuously and reads as shading
+  // structure instead of noise.
+  //
+  // Fix: make the near section a deterministic fixed-count quadrature and leave
+  // the far tail jittered. A FIXED count matters — the historical "concentric
+  // arcs" artifact came from the ceil(tExit / 0.6) count jumping between
+  // neighbouring voxels at km-scale steps, not from determinism, so a fixed
+  // 8-tap near section cannot reintroduce it. Cost is ~zero: those 5-8 taps were
+  // already being spent over this range.
+  //
+  // The far section keeps the original jittered scheme; its taps are the ones
+  // whose undersampling genuinely needs decorrelating, and its contribution is
+  // deep enough in the exponential that mottle there is invisible.
+  const float kCoherentNearKm  = 3.0f;   // matches nubis3SunNearFieldKm's range
+  const int   kCoherentNearTaps = 8;
+  float nearEnd = min(tExit, kCoherentNearKm);
+  float nearStep = nearEnd / float(kCoherentNearTaps);
+  [unroll]
+  for (int i = 0; i < kCoherentNearTaps; ++i) {
+    vec3 samplePos = worldPosYUpKm + (float(i) + 0.5f) * nearStep * sunDirYUp;
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudBakeDensity(samplePos, hf, typeLocal, coverageLocal,
                                            args, cloudSampler, nvdfSdf, detailNoise);
-    opticalDepth += density * stepLen;
+    opticalDepth += density * nearStep;
+  }
+
+  // Far section: the original jittered scheme, RE-BASED to exactly partition
+  // [nearEnd, tExit]. Re-basing rather than skipping taps of the old [0, tExit]
+  // lattice matters — skipping would leave a jittered partial cell at the
+  // handoff, whose width varies per voxel, reintroducing exactly the per-voxel
+  // variance the near section exists to remove, right at the boundary. Here the
+  // tap weights sum to (tExit - nearEnd) by construction for every voxel.
+  float farLen = tExit - nearEnd;
+  if (farLen > 1e-4f) {
+    int   farSamples = clamp(int(ceil(farLen / 0.6f)), 4, kSamplesMax);
+    float farStep    = farLen / float(farSamples);
+    for (int i = 0; i < kSamplesMax; ++i) {
+      if (i >= farSamples) {
+        break;
+      }
+      vec3 samplePos = worldPosYUpKm
+                     + (nearEnd + (float(i) + tapJitter) * farStep) * sunDirYUp;
+      float hf = computeCloudHeightFraction(samplePos, args);
+      float density = sampleCloudBakeDensity(samplePos, hf, typeLocal, coverageLocal,
+                                             args, cloudSampler, nvdfSdf, detailNoise);
+      opticalDepth += density * farStep;
+    }
   }
 
   // Coarse far tail: 8 jittered taps over [12 km .. min(exit, 40 km)] —

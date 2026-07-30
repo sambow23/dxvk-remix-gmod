@@ -3618,3 +3618,237 @@ live-edited mid-storm.
 - **`RtxOptions.md`** - REGEN PENDING.
 
 ---
+
+## Workstream - cloud march hot-path hoists (fork - 2026-07-30, perf)
+
+Pure perf pass over the Nubis Cubed cloud raymarch, prompted by an external review
+noting the inner loops likely repeat work that belongs outside the hot path. No look
+change is intended: every edit is either an exact hoist of a loop-invariant
+subexpression or a provably-conservative skip of dead work. Full audit + the ranked
+backlog of what is NOT yet done lives outside the repo at
+`Fable_5_testing/cloud-perf-optimization-plan.md`.
+
+Four changes:
+
+1. **Ray/frame-constant lighting hoisted out of the per-sample evaluator.**
+   `CloudShadeContext` now has two halves - the original frame-constant fields, plus
+   a ray-constant half filled once per ray by the new `cloudShadeContextBeginRay`.
+   Moved out of `evalNubisCubedSampleCore` and the two per-sample moon blocks: the
+   sun dot product, both Henyey-Greenstein lobe evaluations, the sigma_ms sun-dot
+   term, the powder view fade, the underside darkening amount, the sunset ambient
+   ramp, both energy-conserving lobe weights, the micro-AO gain, the ambient-shadow
+   amount, and - the largest - the Wrenninge moon phase-octave loop, a 3-iteration
+   loop over `hgPhase()` that produced an identical value at every one of the
+   march's 64-96 samples. Two dead `exp()`s are now also branch-skipped: the
+   sunset cool-blend reach curve above `cloudSunsetAmbientRampHighSun` (every midday
+   frame) and the underside `skyDown` when darkening is zero.
+2. **Density-sampler tap reorder.** The step-6d mid-frequency tap moved ahead of the
+   two-scale base taps so a conservative surface gate can run on it alone. The base
+   pair (two volume fetches plus the erosion composite) used to be paid by every
+   sample in the `maxOutwardKm` skirt band before the step-7 gate discarded the
+   result - and the SDF sphere-trace parks samples in exactly that band. The gate
+   bounds the unknown base-tap wobble by its construction range [-0.5, 0.5], so it
+   is exact at the shipping default `cloudDetailStrength = 0` and strictly
+   conservative above it; returned density is unchanged either way.
+3. **`cloudPlanetRadius` hoisted.** It evaluates an `exp()` and is frame-constant,
+   but `computeCloudHeightFraction` called it up to five times per march sample (the
+   density tap, two near-field sun taps, two moon taps). New
+   `computeCloudHeightFractionR` takes the radius as a parameter; the radius lives
+   in `CloudShadeContext.cloudRadiusKm`.
+4. **D_ambient tap skipped when it cannot matter.** `downTau`'s only consumer is
+   `verticalLight`, which is exactly 1 whenever `darkenStrength` is 0 - the whole
+   night / low-sun band, and any config with `cloudBottomDarkening = 0`. Saves one
+   3D texture tap plus an `exp()` per dense sample there.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *`CloudShadeContext` moved above the evaluator and split frame-constant /
+  ray-constant; new `cloudShadeContextBeginRay` called once per ray from
+  `marchCloudLayers`; `evalNubisCubedSampleCore` signature takes the context in place
+  of the six view/sun/sky vectors it used to receive; both moon blocks drop their
+  per-sample octave loop; `sampleCloudSunOpticalDepth_local` / `_localSlab` take the
+  cloud radius; D_ambient tap gated on `ctx.darkenStrength`.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *Step-6d mid tap + `wobbleMid` moved ahead of the two-scale base taps, with the
+  conservative surface gate between them.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** - fork-owned addition.
+  *`computeCloudHeightFractionR` radius-parameterized core; both existing overloads
+  now delegate to it, unchanged.*
+
+No RTX_OPTION, CB, or binding changes - `RtxOptions.md` regen not required.
+
+---
+
+## Workstream - clouds-off gate on the cloud voxel-grid bakes (fork - 2026-07-30, perf + correctness)
+
+The D_sun / D_ambient voxel grids (256x256x32 voxels, 8 and 6 density taps per
+voxel respectively) were dispatched every frame regardless of `cloudEnabled` -
+measured at ~0.5 ms in the 2026-06-11 sky-perf bisect, which flagged the missing
+gate as a follow-on that was never done. With clouds off nothing consumes them, so
+the cost was pure waste, and it silently inflated every "what does the sky alone
+cost" measurement.
+
+Gating the bake alone would have been a bug: the terrain cloud-shadow consumer was
+gated only on `cloudVoxelShadowsEnable`, so a closed gate would have left it
+sampling whatever the last bake left in the grid. That path turns out to have had a
+pre-existing correctness bug of the same shape - with `cloudEnabled` off and
+`cloudVoxelShadowsEnable` on, terrain was already being shadowed by clouds that
+render nothing, while the analytical twin `evalCloudGroundShadow` had always
+early-outed on `cloudEnabled`. Both shadow paths now agree.
+
+The consumer gate lives in the shared `_impl` rather than at the call sites: there
+are several consumers (surface NEE, volumetric NEE, the SSS fold, the debug view)
+and the enum-875 debug view exists specifically to compare the production and debug
+forms, so they must not diverge.
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change.
+  *`computeLuts` takes a `cloudsEnabled` local; the D_sun / D_ambient dispatch
+  condition gains it. While the gate is closed the cached voxel-grid key is zeroed
+  each frame so the frame clouds return forces a fresh bake instead of trusting a
+  key that went stale behind the gate.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** - fork-owned change.
+  *`sampleCloudGroundShadow_OptionB_impl` early-returns 1.0 when
+  `args.cloudEnabled < 0.5`, mirroring `evalCloudGroundShadow`'s long-standing gate.*
+
+No RTX_OPTION, CB, or binding changes - `RtxOptions.md` regen not required.
+
+---
+
+## Workstream - contribution-weighted cloud lighting LOD (fork - 2026-07-30, perf)
+
+Ablation measured the near-field live sun refinement (`nubis3SunNearFieldKm`, shipped
+at its 3 km cap) at **~1 ms of the 3.3 ms cloud pass** - dragging it to 0 recovers
+the full millisecond but loses the lobe self-shadowing that makes clouds read as
+volumes. It costs two full density-sampler calls per dense lit sample, roughly 9 of
+the ~16 3D texture taps.
+
+It was gated on `density >= 0.05` alone - nothing about visibility. With
+`cloudDensity` = 4 the view transmittance decays geometrically, so a large fraction
+of dense samples sit deep inside the cloud paying full price while contributing
+almost nothing to the pixel.
+
+New `cloudLightingLodThreshold` gates both the near-field sun refinement and the
+moon shadow march on the sample's ACTUAL contribution weight - view transmittance x
+aerial haze x its own opacity, which is exactly the factor its color is multiplied
+by in the composite. Folding aerial haze into the weight also retires
+distance-dimmed samples automatically, with an error bound, instead of needing a
+hand-tuned distance cutoff.
+
+Both fallbacks are the ones the existing thin-sample density gates already use (the
+D_sun grid, and unshadowed moonlight), so this only ever coarsens lighting that was
+designed to degrade that way - it never removes cloud material. There is no held
+value or refresh quantum: the weight is a deterministic function of already-jittered
+quantities, so the switch point moves with the jitter like every other threshold in
+the march, unlike the caching patterns that caused the posterization family.
+
+Enabling it required hoisting the Beer-Lambert and aerial-perspective factors above
+the lighting block - an exact reorder, since they depend only on density, segment
+length and camera distance, all final at that point.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *`integrateCloudSample` computes `effectiveDensity` / `stepTransmittance` /
+  `aerialT_haze` / `aerialT_fade` before the lighting and derives `sampleWeight` +
+  `refineLighting` from them; the near-field sun gate and the moon shadow gate both
+  take `refineLighting`. The accumulation at the end reuses the hoisted values.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-owned change.
+  *`cloudLightingLodThreshold` rides the former `padRetired6` slot; CB layout unchanged.*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-owned change. *New RTX_OPTION, default 0.02.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change. *CB fill replaces the padRetired6 zero-fill.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned change.
+  *"Lighting LOD" slider under Clouds > Shape, plus "Sun Shadow (Near)" restored to
+  the panel (the curation pass had demoted it to conf-only as "pinned 3 km"; it is
+  the primary live perf-ablation lever and those have to be ImGui widgets).*
+
+**`RtxOptions.md` REGEN PENDING** (new `rtx.atmosphere.cloudLightingLodThreshold`).
+
+---
+
+## Workstream - de-jittered D_sun near section (fork - 2026-07-30, perf)
+
+Attacks the largest measured cost in the cloud pass: the near-field LIVE sun
+refinement is **~1 ms of the 3.3 ms** (`nubis3SunNearFieldKm` 3 -> 0 recovers
+exactly that), costing two full density-sampler calls per dense lit sample.
+
+The refinement's own comment justifies it as "the grid bake integrates with ~0.6 km
+jittered taps and bilinear filtering smooths what survives, so lobe-scale
+self-shadowing is low-passed away". That is arithmetically false:
+
+- the bake already spends **5-8 taps inside the first 3 km** (8 on a short sun path,
+  5 at 0.6 km steps on a long one) - DENSER along the sun ray than the live
+  refinement's 2 taps at 0.75 / 2.25 km;
+- grid texels are ~47 m horizontal (12 km / 256) and ~95 m vertical, far above
+  Nyquist for the 1-2.5 km lobes in question; trilinear blur is ~1 texel.
+
+The lobe signal is representable in the grid and is not being low-passed away. What
+differs is estimator COHERENCE. The tap phase is `hash31(worldPosYUpKm * 173.3)` -
+decorrelated per voxel, world-anchored, frozen. Sampling 87-875 m detail content at
+~0.5 km strata leaves per-voxel OD sigma ~0.15-0.25, and through `exp(-sigma * OD)`
+with sigma = 4 that is up to a ~2x STATIC shading swing at 1-2 texel (50-150 m)
+granularity - worst on lit faces, where low OD makes the exponential most sensitive.
+The lobe gradients are present but buried under frozen mottle. The live refinement
+wins by being a DETERMINISTIC estimator anchored to the shade point: its (larger)
+quadrature bias varies continuously and reads as shading structure, not noise.
+
+Fix: the near section becomes a deterministic fixed-count quadrature (8 taps, phase
+0.5, over `min(tExit, 3 km)`); the far tail keeps its jitter, where undersampling
+genuinely needs decorrelating and the contribution sits deep enough in the
+exponential that mottle is invisible. A FIXED count is required - the historical
+"concentric arcs" artifact came from `ceil(tExit / 0.6)` jumping between neighbouring
+voxels, not from determinism, so a fixed near count cannot reintroduce it.
+
+The far section is RE-BASED to partition `[nearEnd, tExit]` rather than having taps
+skipped out of the old `[0, tExit]` lattice. Skipping would leave a jittered partial
+cell at the handoff whose width varies per voxel - reintroducing exactly the
+per-voxel variance the near section removes, right at the boundary. Re-based, the
+tap weights sum to the path length exactly for every voxel (verified for
+tExit = 1.5 / 3 / 6 / 12 km). Bake tap count goes 8/10/20 -> 8/13/23.
+
+**Zero shade-path changes**: `nubis3SunNearFieldKm = 0` already routes the evaluator
+to the pure grid tap, so the restored "Sun Shadow (Near)" slider IS the in-game A/B
+between live and baked near-field. If the grid-only look holds, the knob ships at 0
+and the ~1 ms is recovered.
+
+Also fixes the same frozen mottle in terrain cloud shadows, which read the same grid.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *`sampleCloudSunOpticalDepthAtWorld` splits into a deterministic 8-tap near section
+  and the original jittered scheme re-based onto the remaining path. The old single
+  `samples` / `stepLen` lattice is gone. Bake integrand still uses the FULL sampler
+  (`coarseOd = false`), so render/grid iso-parity is untouched.*
+
+OPEN, only if the knob ships at 0: with `cloudVoxelShadowsEnable = false` the grid
+falls back to the granularity key, which zeroes the boil/evolution animation fields -
+so the grid would go stale against animated detail. Either force per-frame bakes when
+`nubis3SunNearFieldKm == 0`, or fold a quantized boil phase into the voxel key.
+(Not a problem in the shipping config: `cloudVoxelShadowsEnable` defaults true, which
+makes `voxelGridsDirty` unconditionally true and the grid rebake every frame.)
+
+---
+
+## Note - cloud march micro-optimizations (fork - 2026-07-30, perf)
+
+Two small changes shipped alongside the cloud perf work above, plus one negative
+result worth recording so it is not re-attempted:
+
+- **`[unroll]` on the moon precompute loop** (`cloud_march_common.slangh`). Its two
+  sibling MAX_MOONS loops were already unrolled; this one was not. Predicted to
+  eliminate the shader's only local-memory arrays (a 256 B `MoonParams[4]` plus
+  three `vec3[4]`) by making every index constant. **MEASURED: it did not.**
+  Re-parsing the rebuilt SPIR-V gave byte-identical accounting (1 function, 309
+  Function-storage vars, 2,048 B, still one 256 B `array[4]`). A cross-shader
+  correlation showed the array tracks *reading* `moons[]` at all — it is absent from
+  every atmosphere shader that never touches moons, including ones that also copy
+  `AtmosphereArgs` by value, so it is caused neither by the dynamic index nor by the
+  CB copy. **Standing lesson: a Function-storage array in SPIR-V does NOT imply
+  scratch in the final ISA** — constant-indexed local arrays are routinely promoted
+  by the driver's own SROA, so SPIR-V local accounting cannot settle occupancy
+  questions. The `[unroll]` was kept (bit-identical, consistent with its siblings)
+  but is not a win.
+- **`frac()` dropped on the SDF taps only** (`cloud_nubis3_common.slangh`). `tileUV`
+  is already fracced and the hex offsets are in [0,1), so those operands are bounded
+  to [0,2) and the sampler's REPEAT mode wraps them identically. Deliberately KEPT on
+  the detail taps: `boilPos` carries wind/boil/evolution offsets that accumulate
+  without bound over a session, so `boilPos * detailFreq` can reach the hundreds, and
+  the frac is what keeps the coordinate small before the texture unit converts it to
+  limited-precision fixed point. A comment marks this at the site.
+
+---
