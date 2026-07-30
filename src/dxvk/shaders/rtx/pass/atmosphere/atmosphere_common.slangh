@@ -1718,7 +1718,21 @@ float sampleCloudGroundShadow_OptionB_impl(vec3 worldPos, vec3 sunDir,
   //     return whatever the last bake left behind.
   // Placed in the shared _impl so the production wrapper AND the debug-view
   // form inherit it — the enum-875 gate compares the two, so they must match.
-  if (args.cloudEnabled < 0.5f) {
+  // The coverage half of this gate is NOT redundant with the cloudEnabled half
+  // (fork — 2026-07-30, second pass). Coverage is applied as a live LEVEL-SET
+  // OFFSET, so driving it to 0 only shrinks bodies by
+  // (0 - nvdfNominalCoverage) * nvdfCoverageOffsetKm ~ 130 m at defaults — the
+  // density field still contains clouds. What makes them disappear on screen is
+  // the render pass's hard early-out at effectiveCoverageMean < 0.01
+  // (cloud_render.comp.slang). Without the matching threshold here, the D_sun
+  // grid keeps integrating that still-present field and terrain stays shadowed
+  // by clouds nothing is drawing — reported as "set coverage 0.8 -> 0 and the
+  // shadows persist". The analytical twin evalCloudGroundShadow has always had
+  // both halves; this is what it takes to agree with it.
+  //
+  // Plain cloudCoverageMean (not the render pass's layer-2 max) is correct here:
+  // the D_sun grid is baked over the layer-1 slab only.
+  if (args.cloudEnabled < 0.5f || args.cloudCoverageMean < 0.01f) {
     return 1.0f;
   }
 

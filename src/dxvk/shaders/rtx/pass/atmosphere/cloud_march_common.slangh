@@ -883,42 +883,29 @@ bool integrateCloudSample(float tSampleKm,
     downTau = sampleDAmbient(samplePos, args, /*isZUp=*/false) * args.cloudDensity;
   }
 
-  // Near-field live sun occlusion (fork — 2026-07-17; Nubis p.129 "first
-  // light samples live, grid for the far field"). The D_sun grid bake
-  // integrates with ~0.6 km jittered taps and bilinear grid filtering
-  // smooths what survives, so lobe-scale (1-2.5 km) self-shadowing is
-  // low-passed away — mid-band lobes read only where they cross the
-  // silhouette ("same blob, different outline"). Two live taps of the SAME
-  // displaced density field over the first nubis3SunNearFieldKm give every
-  // lobe its own sunlit face and shadowed crevice — the directional cue
-  // that makes toward/away-camera structure read as volume. The grid tap
-  // moves to the range end so it contributes only the FAR field (no double
-  // count); every D_sun consumer downstream (T_primary, body lobe,
-  // ambientShadow, warm/cool blend) sharpens together. The density gate
-  // mirrors the moon block's 0.05 skip: thin skirt samples keep the smooth
-  // grid, and their own transparency masks the seam. densityScale = 1
-  // matches the bake integrand's convention (grid OD is unit-density km).
+  // Sun occlusion comes entirely from the D_sun voxel grid (fork — 2026-07-30).
+  //
+  // This is where the near-field LIVE sun refinement used to run: two extra
+  // density-sampler calls per dense lit sample, marching the first 3 km toward
+  // the sun and handing off to the grid beyond. It existed because the grid was
+  // believed to low-pass lobe-scale self-shadowing away. It did not — the bake
+  // already spends 5-8 taps inside that same 3 km (denser along the sun ray than
+  // the refinement's 2), and grid texels sit far above Nyquist for 1-2.5 km
+  // lobes. The actual defect was a FROZEN per-voxel tap phase, whose noise
+  // through exp(-sigma * OD) buried the lobe gradients under static mottle.
+  //
+  // De-jittering the bake's near section (a deterministic fixed-count quadrature
+  // — see sampleCloudSunOpticalDepthAtWorld) fixed the estimator instead of
+  // papering over it per sample. The grid-only result was preferred over the old
+  // live-refined look in an 11-person vote, on top of recovering ~1 ms of the
+  // 3.3 ms pass, so the live path is gone rather than merely defaulted off.
+  //
+  // Note for anyone re-introducing per-sample sun work here: this pass is
+  // tap-latency-bound and warp-synchronized, so per-lane conditional work does
+  // NOT convert to time — a contribution-weighted gate on exactly this block
+  // measured a recovery of precisely zero. Only warp/dispatch-uniform reductions
+  // (or moving work to the once-per-frame bake, as here) pay off.
   float dSunOverride = -1.0f;
-  if (args.nubis3SunNearFieldKm > 1e-3f
-      && ctx.sunDirYUp.y > 0.001f
-      && density >= 0.05f
-      && refineLighting) {
-    const int kSunNearTaps = 2;
-    float nearStep = args.nubis3SunNearFieldKm / float(kSunNearTaps);
-    float liveOD = 0.0f;
-    for (int nt = 0; nt < kSunNearTaps; ++nt) {
-      vec3 p = samplePos + ctx.sunDirYUp * ((float(nt) + 0.5f) * nearStep);
-      float phf = computeCloudHeightFractionR(p, ctx.cloudRadiusKm,
-                                              slabAltitudeKm, slabThicknessKm);
-      float pd = sampleCloudDensityNubis3Coarse(p, phf, typeLocal, coverageLocal, 1.0f, args,
-                                                AtmosphereCloudNvdfSdf, AtmosphereCloudDetailNoise3D,
-                                                AtmosphereCloudNoise3DSampler);
-      liveOD += pd * nearStep;
-    }
-    dSunOverride = liveOD
-                 + sampleDSun(samplePos + ctx.sunDirYUp * args.nubis3SunNearFieldKm,
-                              args, /*isZUp=*/false);
-  }
 
   NubisCubedLighting lighting = evalNubisCubedSampleCore(
       samplePos, density, nubisProfile, cloudSdfM, downTau, detailSigned,

@@ -3852,3 +3852,67 @@ result worth recording so it is not re-attempted:
   limited-precision fixed point. A comment marks this at the site.
 
 ---
+
+## Workstream - retire the live near-field sun path (fork - 2026-07-30, perf)
+
+Follows the de-jittered D_sun near section above. With the bake's near-field estimator
+made coherent, the grid-only look was compared against the live-refined look in an
+11-person vote and PREFERRED - on top of recovering ~1 ms of the 3.3 ms cloud pass.
+The live path is therefore removed outright rather than defaulted off.
+
+Verified at the IR level: `cloud_render.spv` static `SampleLevel` count drops 85 -> 65
+(SDF 40 -> 30, detail volume 32 -> 24, D_sun 5 -> 3), exactly the two inlined
+near-field sampler bodies (fixed-step + adaptive march) plus their two range-end grid
+taps. Runtime DLL shrinks ~56 KB.
+
+**A latent bug had to be fixed first.** `normalizeForSkyLutCache` zeroes
+`cloudBoilPhase` / `cloudEvolutionOffset*` on the stated grounds that they "feed only
+the view-path cloud taps, not any LUT bake". That holds for the sky LUTs but NOT for
+the D_sun / D_ambient bakes, whose integrand is the shared density sampler and so
+reads the animated detail field through `boilPos`. The voxel-grid cache key therefore
+never noticed clouds evolving. This was harmless while the live near-field taps
+re-sampled the animated field every frame; with them gone the grid is the sole source
+of sun occlusion, and any config running `cloudVoxelShadowsEnable = false` (which is
+the only path that consults the granularity key at all) would have lit animating
+clouds with a frozen shadow field - shadows visibly lagging the clouds they belong
+to. The animation fields are now restored into the key, quantized on the same km
+granularity as wind and camera, so staleness stays bounded by one step instead of
+forcing an unconditional per-frame bake.
+
+Kept deliberately: the coarse OD sampler path (both moon shadow marches still use it)
+and `cloudLightingLodThreshold` (now gates only the moon march; still defaults to 0
+and is still documented as tested-and-rejected).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *Near-field block deleted from `integrateCloudSample`; `dSunOverride` stays -1 so the
+  evaluator takes the pure grid tap. A note at the site records why the path existed,
+  why the bake fix supersedes it, and the warp-uniformity lesson - a
+  contribution-weighted gate on this exact block measured a recovery of precisely zero,
+  because the pass is tap-latency-bound and warp-synchronized, so per-lane conditional
+  work does not convert to time.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change.
+  *`normalizeForVoxelGridKey` captures and re-quantizes `cloudBoilPhase` /
+  `cloudEvolutionOffset*` after the base normalizer zeroes them. CB fill for the retired
+  option replaced by a pad zero-fill.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-owned change.
+  *`nubis3SunNearFieldKm` -> `padRetired12`; CB layout unchanged.*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-owned change. *RTX_OPTION removed.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned change.
+  *"Sun Shadow (Near)" slider removed; stale conf-only comment corrected.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** - fork-owned change.
+  *Second half of the voxel terrain-shadow gate: `|| args.cloudCoverageMean < 0.01f`.
+  User-reported: snapping coverage 0.8 -> 0 left terrain shadows behind. Coverage is a
+  live LEVEL-SET OFFSET, so 0 only shrinks bodies by ~130 m at defaults - the density
+  field still contains clouds. What removes them from screen is the render pass's
+  separate hard early-out at `effectiveCoverageMean < 0.01`, so the D_sun bake kept
+  integrating a field the renderer had stopped drawing. The analytical twin
+  `evalCloudGroundShadow` always had both halves of this condition; the earlier
+  cloudEnabled fix ported only one. Plain `cloudCoverageMean` (not the render pass's
+  layer-2 max) is correct here because the D_sun grid is baked over layer 1 only.
+  Distinct from the animation-key bug above: this one fires in ANY config, whereas the
+  staleness bug needs `cloudVoxelShadowsEnable = false`.*
+
+Note: user rtx.conf files carrying `rtx.atmosphere.nubis3SunNearFieldKm` will log a
+harmless unknown-option warning.
+
+---

@@ -510,6 +510,10 @@ namespace {
   void normalizeForVoxelGridKey(AtmosphereArgs& args) {
     const vec2 windKm = args.cloudWindOffset;
     const vec3 camKm  = args.cameraWorldPosYUpKm;
+    const float boilKm = args.cloudBoilPhase;
+    const vec3  evoKm  = vec3(args.cloudEvolutionOffsetX,
+                              args.cloudEvolutionOffsetY,
+                              args.cloudEvolutionOffsetZ);
     normalizeForSkyViewLutKey(args);
 
     const float stepKm = std::max(RtxOptions::cloudVoxelGridRebakeGranularityKm(), 1e-5f);
@@ -518,6 +522,26 @@ namespace {
     args.cameraWorldPosYUpKm.x = quantizeDirComponent(camKm.x, stepKm);
     args.cameraWorldPosYUpKm.y = quantizeDirComponent(camKm.y, stepKm);
     args.cameraWorldPosYUpKm.z = quantizeDirComponent(camKm.z, stepKm);
+
+    // Cloud ANIMATION must be in this key (fork — 2026-07-30). The base
+    // normalizer zeroes cloudBoilPhase / cloudEvolutionOffset* on the grounds
+    // that they "feed only the view-path cloud taps, not any LUT bake" — true of
+    // the sky LUTs, but NOT of the D_sun / D_ambient bakes, whose integrand is
+    // the shared density sampler and therefore reads the animated detail field
+    // through boilPos. Leaving them zeroed meant the grid never re-baked as the
+    // clouds evolved.
+    //
+    // This was previously masked: the near-field live sun taps re-sampled the
+    // animated field every frame, so stale grid content did not show. With that
+    // path removed the grid is the SOLE source of sun occlusion, and a frozen
+    // shadow field under animating cloud detail would read as shadows lagging
+    // the clouds they belong to. Quantized on the same km granularity as wind and
+    // camera, so the staleness stays bounded by one step rather than becoming
+    // per-frame.
+    args.cloudBoilPhase        = quantizeDirComponent(boilKm, stepKm);
+    args.cloudEvolutionOffsetX = quantizeDirComponent(evoKm.x, stepKm);
+    args.cloudEvolutionOffsetY = quantizeDirComponent(evoKm.y, stepKm);
+    args.cloudEvolutionOffsetZ = quantizeDirComponent(evoKm.z, stepKm);
 
     args.starBrightness     = 0.0f;
     args.starDensity        = 0.0f;
@@ -810,7 +834,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.nubis3ShapeVarietyKm     = std::min(std::max(RtxOptions::nubis3ShapeVarietyKm(), 0.0f), 1.5f);
     // Near-field live sun taps (fork — 2026-07-17). Live; view march + secondary
     // cloud LUT only (the voxel grids keep their full-path bake).
-    args.nubis3SunNearFieldKm     = std::min(std::max(RtxOptions::nubis3SunNearFieldKm(), 0.0f), 3.0f);
+    args.padRetired12             = 0.0f;
     // √-adaptive march step floor (fork — detail round 2026-07-16). Live;
     // affects the view march + secondary cloud LUT, so it stays in the LUT
     // cache keys (same class as nvdfStepScale / cloudViewStepKm).

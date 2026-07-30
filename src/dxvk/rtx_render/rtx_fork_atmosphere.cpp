@@ -1428,7 +1428,8 @@ namespace fork_hooks {
         // (fork - 2026-07-17 preset-tunability pass; was "Nubis3 Model
         // (SDF)"). Demoted to conf-only in the same pass — all live, all
         // set-once or internal march quality: nvdfCoverageOffsetKm,
-        // nubis3SharpenStrength, nubis3SunNearFieldKm (pinned 3 km),
+        // nubis3SharpenStrength (nubis3SunNearFieldKm was RETIRED
+        // 2026-07-30 along with the live near-field sun path),
         // nvdfStepScale, nubis3AdaptiveStepKm, nvdfNominalCoverage.
         // (Interior Texture / HF Detail / Fine Detail were demoted earlier
         // the same day — ship-at-0 / unreachable-in-normal-play.)
@@ -1440,20 +1441,6 @@ namespace fork_hooks {
               "lobes, notches and full splits that break round singular "
               "blobs into varied cloud clusters (the GT7 mid-band role). "
               "Live, no rebake. Higher costs some empty-space-skip perf.");
-          // Restored to the panel (fork — 2026-07-30) after the curation pass
-          // demoted it to conf-only as "pinned 3 km". It is the single most
-          // expensive knob in the cloud march — at 3 km it drives TWO full
-          // density-sampler calls per dense lit sample, roughly 58% of the
-          // pass's texture taps — so it is the primary live perf-ablation
-          // lever, and those have to be ImGui widgets to be usable in-game.
-          RemixGui::DragFloat("Sun Shadow (Near)", &RtxOptions::nubis3SunNearFieldKmObject(),
-                              0.05f, 0.0f, 3.0f, "%.2f km", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Range over which sun occlusion is measured with LIVE density "
-              "taps instead of the D_sun grid — this is what gives each lobe "
-              "its own sunlit face and shadowed crevice (Nubis p.129). "
-              "0 = grid only. PERF: by far the most expensive cloud knob; "
-              "drag to 0 to measure the ceiling of any near-field optimization.");
           RemixGui::DragFloat("Lighting LOD", &RtxOptions::cloudLightingLodThresholdObject(),
                               0.002f, 0.0f, 0.25f, "%.3f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
