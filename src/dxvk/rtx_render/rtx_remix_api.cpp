@@ -37,6 +37,7 @@
 #include "../dxvk_objects.h"
 #include "../imgui/dxvk_imgui.h"
 #include "rtx_context.h"
+#include "rtx_ray_portal_manager.h"
 #include "rtx_texture_manager.h"
 
 #include <remix/remix_c.h>
@@ -156,6 +157,14 @@ namespace {
   std::vector<PendingDomeUpdate>  s_pendingDomeUpdates;
   std::vector<remixapi_LightHandle> s_pendingLightDestroys;
   std::vector<PendingMeshCreate>    s_pendingMeshCreates;
+  // Runtime-owned instance definitions. These deliberately store only the
+  // base InstanceInfo so every pointer in the cached record remains valid.
+  std::unordered_map<remixapi_PersistentInstanceHandle, remixapi_InstanceInfo> s_persistentInstances;
+  std::atomic<uint64_t> s_nextPersistentInstanceHandle { 1 };
+  // Persistent-instance lifecycle changes are collected from arbitrary API
+  // call sites and applied on the CS thread by the native Present safe point.
+  std::unordered_map<remixapi_PersistentInstanceHandle, remixapi_InstanceInfo> s_pendingPersistentInstanceUpserts;
+  std::unordered_set<remixapi_PersistentInstanceHandle> s_pendingPersistentInstanceDestroys;
   // Track handles that were updated or created this frame to prevent re-adding after deletion in the same frame
   std::unordered_set<remixapi_LightHandle> s_handlesDeletedThisFrame;
   // Sticky: set once any external (C-API) light is registered. Used to gate the
@@ -2113,6 +2122,12 @@ namespace {
   remixapi_ErrorCode REMIXAPI_CALL remixapi_Shutdown(void) {
     // Clear fork-owned callback state (lives in rtx_fork_api_entry.cpp)
     dxvk::fork_hooks::shutdownCallbacks();
+    {
+      std::lock_guard lock { s_mutex };
+      s_persistentInstances.clear();
+      s_pendingPersistentInstanceUpserts.clear();
+      s_pendingPersistentInstanceDestroys.clear();
+    }
     if (s_dxvkDevice) {
       while (true) {
         ULONG left = s_dxvkDevice->Release();
@@ -2325,6 +2340,92 @@ namespace {
 
 extern "C"
 {
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_GetRayPortalCapabilities(
+    uint32_t* out_maxActivePortalSurfaces,
+    uint32_t* out_maxDedicatedPortalVolumes) {
+    if (!out_maxActivePortalSurfaces || !out_maxDedicatedPortalVolumes) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    *out_maxActivePortalSurfaces = maxRayPortalCount;
+    *out_maxDedicatedPortalVolumes = maxDedicatedRayPortalCount;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_CreatePersistentInstance(
+    const remixapi_InstanceInfo* info,
+    remixapi_PersistentInstanceHandle* out_handle) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!out_handle || !info || info->sType != REMIXAPI_STRUCT_TYPE_INSTANCE_INFO ||
+        info->pNext != nullptr || info->mesh == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    const remixapi_PersistentInstanceHandle handle =
+      s_nextPersistentInstanceHandle.fetch_add(1, std::memory_order_relaxed);
+    if (handle == 0) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    {
+      std::lock_guard lock { s_mutex };
+      s_persistentInstances.emplace(handle, *info);
+      s_pendingPersistentInstanceUpserts[handle] = *info;
+      s_pendingPersistentInstanceDestroys.erase(handle);
+    }
+    *out_handle = handle;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdatePersistentInstance(
+    remixapi_PersistentInstanceHandle handle,
+    const remixapi_InstanceInfo* info) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (handle == 0 || !info || info->sType != REMIXAPI_STRUCT_TYPE_INSTANCE_INFO ||
+        info->pNext != nullptr || info->mesh == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    {
+      std::lock_guard lock { s_mutex };
+      auto persistent = s_persistentInstances.find(handle);
+      if (persistent == s_persistentInstances.end()) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+      persistent->second = *info;
+      s_pendingPersistentInstanceUpserts[handle] = *info;
+      s_pendingPersistentInstanceDestroys.erase(handle);
+    }
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyPersistentInstance(
+    remixapi_PersistentInstanceHandle handle) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (handle == 0) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    {
+      std::lock_guard lock { s_mutex };
+      if (s_persistentInstances.erase(handle) == 0) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+      s_pendingPersistentInstanceUpserts.erase(handle);
+      s_pendingPersistentInstanceDestroys.insert(handle);
+    }
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void) {
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
     if (!remixDevice) {
@@ -2336,6 +2437,8 @@ extern "C"
     std::vector<PendingDomeUpdate> domeUpdates;
     std::vector<remixapi_LightHandle> destroys;
     std::vector<PendingMeshCreate> meshCreates;
+    std::unordered_map<remixapi_PersistentInstanceHandle, remixapi_InstanceInfo> persistentInstanceUpserts;
+    std::unordered_set<remixapi_PersistentInstanceHandle> persistentInstanceDestroys;
     {
       std::lock_guard lock { s_mutex };
       s_handlesDeletedThisFrame.clear();
@@ -2344,6 +2447,8 @@ extern "C"
       domeUpdates.swap(s_pendingDomeUpdates);
       destroys.swap(s_pendingLightDestroys);
       meshCreates.swap(s_pendingMeshCreates);
+      persistentInstanceUpserts.swap(s_pendingPersistentInstanceUpserts);
+      persistentInstanceDestroys.swap(s_pendingPersistentInstanceDestroys);
     }
     // Native-present fast path. If no C-API scene work is queued this frame and
     // no external light has ever been registered, there is nothing to apply or
@@ -2354,14 +2459,24 @@ extern "C"
     // consumers set s_externalLightApiUsed and keep the per-frame path.
     const bool hasPendingApiWork =
         !creates.empty() || !updates.empty() || !domeUpdates.empty() ||
-        !destroys.empty() || !meshCreates.empty();
+        !destroys.empty() || !meshCreates.empty() ||
+        !persistentInstanceUpserts.empty() || !persistentInstanceDestroys.empty();
     if (!hasPendingApiWork && !s_externalLightApiUsed.load(std::memory_order_relaxed)) {
       dxvk::fork_hooks::presentScreenOverlayFlush(remixDevice);
       return REMIXAPI_ERROR_CODE_SUCCESS;
     }
     auto devLock = remixDevice->LockDevice();
-    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), domeUpdates = std::move(domeUpdates), destroys = std::move(destroys), meshCreates = std::move(meshCreates)](dxvk::DxvkContext* ctx) mutable {
-      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+    remixDevice->EmitCs([
+      creates = std::move(creates),
+      updates = std::move(updates),
+      domeUpdates = std::move(domeUpdates),
+      destroys = std::move(destroys),
+      meshCreates = std::move(meshCreates),
+      persistentInstanceUpserts = std::move(persistentInstanceUpserts),
+      persistentInstanceDestroys = std::move(persistentInstanceDestroys)
+    ](dxvk::DxvkContext* ctx) mutable {
+      auto& sceneMgr = ctx->getCommonObjects()->getSceneManager();
+      auto& lightMgr = sceneMgr.getLightManager();
       // Apply destroys first
       for (auto h : destroys) {
         if (h) {
@@ -2441,6 +2556,17 @@ extern "C"
 
       // Apply any mesh creates not already flushed by remixapi_DrawInstance
       applyPendingMeshCreatesOnCs(ctx, meshCreates);
+
+      // Apply instance lifecycle changes only at this safe frame boundary.
+      // Their cached definitions are replayed by RtxContext before the next
+      // frame's scene resource and barrier preparation.
+      for (remixapi_PersistentInstanceHandle handle : persistentInstanceDestroys) {
+        sceneMgr.unregisterPersistentExternalDraw(handle);
+      }
+      for (const auto& persistent : persistentInstanceUpserts) {
+        sceneMgr.registerPersistentExternalDraw(
+          persistent.first, convert::toRtDrawState(persistent.second));
+      }
 
       // Ensure persistent auto-instancing happens every frame
       lightMgr.queueAutoInstancePersistent();

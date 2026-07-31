@@ -631,6 +631,11 @@ namespace dxvk {
         takeScreenshot("orgImage", targetImage);
       }
 
+      // Refresh runtime-owned API geometry before particles, texture uploads,
+      // render-pass spilling and barrier recording. Adding scene instances
+      // after those steps corrupts the command stream's resource assumptions.
+      getSceneManager().submitPersistentExternalDraws(this);
+
       RtxParticleSystemManager& particles = m_device->getCommon()->metaParticleSystem();
       particles.submitDrawState(this);
 

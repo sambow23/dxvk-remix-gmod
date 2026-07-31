@@ -153,6 +153,9 @@ public:
 
   void submitDrawState(Rc<DxvkContext> ctx, const DrawCallState& input, const MaterialData* overrideMaterialData);
   void submitExternalDraw(const Rc<DxvkContext>& ctx, std::unique_ptr<ExternalDrawState> state);
+  void registerPersistentExternalDraw(uint64_t handle, ExternalDrawState&& state);
+  void unregisterPersistentExternalDraw(uint64_t handle);
+  void submitPersistentExternalDraws(Rc<DxvkContext> ctx);
   void setStartInMediumMaterial(const MaterialData& translucentMaterial);
   void clearStartInMediumMaterial();
 
@@ -430,6 +433,7 @@ private:
 
   // TODO: expand to many different
   Rc<DxvkSampler> m_externalSampler = nullptr;
+  std::unordered_map<uint64_t, ExternalDrawState> m_persistentExternalDraws;
 
   std::atomic_bool m_forceFreeTextureMemory = false;
   std::atomic_bool m_forceFreeUnusedDxvkAllocatorChunks = false;

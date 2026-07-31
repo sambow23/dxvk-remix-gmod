@@ -63,9 +63,15 @@ void updateStateOnPortalCrossing(inout PortalSpace2BitsType portalSpace,
   {
   case PORTAL_SPACE_NONE:
   {
-    newPortalSpace = PORTAL_SPACE_PORTAL_0 + rayPortalIndex;
+    // Packed portal-space state only distinguishes the original pair. Rays
+    // through additional pairs still teleport normally, but use combined
+    // space so they do not alias portal 0/1 virtual instances or volumes.
+    newPortalSpace = rayPortalIndex < maxDedicatedRayPortalCount
+      ? PORTAL_SPACE_PORTAL_0 + rayPortalIndex
+      : PORTAL_SPACE_PORTAL_COMBINED;
 
-    newDynamicMask = rayPortalIndex == cb.virtualInstancePortalIndex
+    newDynamicMask = (rayPortalIndex < maxDedicatedRayPortalCount &&
+      rayPortalIndex == cb.virtualInstancePortalIndex)
       ? OBJECT_MASK_VIEWMODEL_VIRTUAL | OBJECT_MASK_PLAYER_MODEL
       : OBJECT_MASK_ALL_PLAYER_MODEL;
 

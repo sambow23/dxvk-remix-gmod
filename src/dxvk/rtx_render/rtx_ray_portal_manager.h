@@ -70,8 +70,7 @@ struct RayPortalPairInfo {
 class RayPortalManager : public CommonDeviceObject {
 public:
   using RayPortalInfosType = std::array<std::optional<RayPortalInfo>, maxRayPortalCount>;
-  // Portals get chain paired => max pairs == numPortals - 1
-  using RayPortalPairInfosType = std::array<std::optional<RayPortalPairInfo>, maxRayPortalCount - 1>;
+  using RayPortalPairInfosType = std::array<std::optional<RayPortalPairInfo>, maxRayPortalPairCount>;
 
   // Final portal state used for raytracing
   struct SceneData {
@@ -146,4 +145,3 @@ private:
 };
 
 }  // namespace dxvk
-

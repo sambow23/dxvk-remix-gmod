@@ -97,7 +97,12 @@ namespace dxvk {
 
     auto&& originalGeometryData = drawCall.getGeometryData();
     auto&& rayPortalSurfaceMaterial = material.getRayPortalSurfaceMaterial();
-    auto& rayPortalInfo = m_rayPortalInfos[rayPortalSurfaceMaterial.getRayPortalIndex()];
+    const uint8_t rayPortalIndex = rayPortalSurfaceMaterial.getRayPortalIndex();
+    if (rayPortalIndex >= maxRayPortalCount) {
+      instance.setHidden(true);
+      return;
+    }
+    auto& rayPortalInfo = m_rayPortalInfos[rayPortalIndex];
 
     // Note: Ignore duplicate Ray Portals if the index has already been set
     if (rayPortalInfo.has_value()) {
@@ -248,12 +253,11 @@ namespace dxvk {
     for (auto& rayPortalPairInfo : m_rayPortalPairInfos)
       rayPortalPairInfo.reset();
 
-    static_assert(maxRayPortalCount == 2);
-    // TODO: Fix Portal iteration (currently iterates in a pattern of 0,1, 1,2, 2,3 instead of 0,1, 2,3, 4,5 like it should)
-    for (std::size_t i = 0; i < m_rayPortalInfos.size() / 2; ++i) {
-      const uint8_t currentRayPortalIndex = i;
+    static_assert(maxRayPortalCount == maxRayPortalPairCount * 2);
+    for (std::size_t pairIndex = 0; pairIndex < m_rayPortalPairInfos.size(); ++pairIndex) {
+      const uint8_t currentRayPortalIndex = getRayPortalPairPortalBaseIndex(pairIndex);
       // Note: The Opposing Ray Portal is always the next one in sequence, allowing for traversal in pairs.
-      const uint8_t opposingRayPortalIndex = static_cast<uint8_t>(i) + 1;
+      const uint8_t opposingRayPortalIndex = currentRayPortalIndex + 1;
       auto&& rayPortalInfo = m_rayPortalInfos[currentRayPortalIndex];
       auto&& opposingRayPortalInfo = m_rayPortalInfos[opposingRayPortalIndex];
 
@@ -313,19 +317,19 @@ namespace dxvk {
                               *opposingRayPortalInfo,
                               *rayPortalInfo);
 
-      m_rayPortalPairInfos[currentRayPortalIndex].emplace(newRayPortalPairInfo);
-      
+      m_rayPortalPairInfos[pairIndex].emplace(newRayPortalPairInfo);
+
       // Set Ray Portal Light Information for the pair
 
       prepareRayPortalHitInfo(m_sceneData.rayPortalHitInfos[currentRayPortalIndex],
         m_pResourceCache->get(rayPortalInfo->materialIndex).getRayPortalSurfaceMaterial(),
         rayPortalInfo.value(),
-        m_rayPortalPairInfos[currentRayPortalIndex]->pairInfos[0].portalToOpposingPortalDirection);
+        m_rayPortalPairInfos[pairIndex]->pairInfos[0].portalToOpposingPortalDirection);
 
       prepareRayPortalHitInfo(m_sceneData.rayPortalHitInfos[opposingRayPortalIndex], 
         m_pResourceCache->get(opposingRayPortalInfo->materialIndex).getRayPortalSurfaceMaterial(),
         opposingRayPortalInfo.value(),
-        m_rayPortalPairInfos[currentRayPortalIndex]->pairInfos[1].portalToOpposingPortalDirection);
+        m_rayPortalPairInfos[pairIndex]->pairInfos[1].portalToOpposingPortalDirection);
 
       activeRayPortalCount += 2;
     }
@@ -480,14 +484,16 @@ namespace dxvk {
       for (uint32_t iEntry = pairPortalBaseIdx; iEntry < pairPortalBaseIdx + 2; iEntry++) {
 
         uint32_t iExit = getOpposingRayPortalIndex(iEntry);
+        const uint32_t localEntry = iEntry - pairPortalBaseIdx;
+        const uint32_t localExit = localEntry ^ 1;
 
         // Adjust the actual cam position by the ray offsets to give it a little tolerance in case
         // the cameras are very close to a portal plane (such as in case if it was pushed out
         // after being detected in-between previously). Otherwise a line-segment portal intersection test
         // below may reject the intersection
         // 1 * rayOffset wasn't enough, 2 * worked well
-        Vector3 _camPosT1 = camPosT1 + 2.f * portalPair->pairInfos[iEntry].entryPortalInfo.rayOffset;
-        Vector3 _camPosT2 = camPosT2 + 2.f * portalPair->pairInfos[iExit].entryPortalInfo.rayOffset;
+        Vector3 _camPosT1 = camPosT1 + 2.f * portalPair->pairInfos[localEntry].entryPortalInfo.rayOffset;
+        Vector3 _camPosT2 = camPosT2 + 2.f * portalPair->pairInfos[localExit].entryPortalInfo.rayOffset;
 
         auto lineSegmentIntersectsPortal = [&](
           const Vector3& l0, // line segment start
@@ -520,8 +526,8 @@ namespace dxvk {
 
         // Check 2: virtual camera to camera line segments must intersect entry and exit portals
         // Virtual camera is the camera that's transformed from Portal X to Portal Y coordinate system
-        Vector3 virtualCamPosT1inExitCoordSystem = getVirtualPosition(_camPosT1, portalPair->pairInfos[iEntry].portalToOpposingPortalDirection);
-        Vector3 virtualCamPosT2inEntryCoordSystem = getVirtualPosition(_camPosT2, portalPair->pairInfos[iExit].portalToOpposingPortalDirection);
+        Vector3 virtualCamPosT1inExitCoordSystem = getVirtualPosition(_camPosT1, portalPair->pairInfos[localEntry].portalToOpposingPortalDirection);
+        Vector3 virtualCamPosT2inEntryCoordSystem = getVirtualPosition(_camPosT2, portalPair->pairInfos[localExit].portalToOpposingPortalDirection);
 
         if (!(
           lineSegmentIntersectsPortal(virtualCamPosT1inExitCoordSystem, _camPosT2, *m_rayPortalInfos[iExit]) &&
@@ -540,13 +546,13 @@ namespace dxvk {
           };
 
           // Directional weights
-          Vector3 virtualCamDirT1inExitCoordSystem = Matrix3(portalPair->pairInfos[iEntry].portalToOpposingPortalDirection) * camDirT1;
+          Vector3 virtualCamDirT1inExitCoordSystem = Matrix3(portalPair->pairInfos[localEntry].portalToOpposingPortalDirection) * camDirT1;
           float wVirtualDir = (dot(virtualCamDirT1inExitCoordSystem, camDirT2) + 1) / 2;  // [-1, 1] => [0, 1]
           float _wDir = wDir;
           normalizeWeights(_wDir, wVirtualDir, sigmaDir, minDirWeight);
 
           // Positional weights
-          Vector3 predictedVirtualPosT2inExitCoordSystem = getVirtualPosition(predictedPosT2, portalPair->pairInfos[iEntry].portalToOpposingPortalDirection);
+          Vector3 predictedVirtualPosT2inExitCoordSystem = getVirtualPosition(predictedPosT2, portalPair->pairInfos[localEntry].portalToOpposingPortalDirection);
           float wVirtualPos = 1 / (length(predictedVirtualPosT2inExitCoordSystem - _camPosT2) + eps);
           float _wPos = wPos;
           normalizeWeights(_wPos, wVirtualPos, sigmaPos, minPosWeight);
@@ -555,7 +561,7 @@ namespace dxvk {
 
           if (candidateWeight > _wDir * _wPos && candidateWeight > maxCandidateWeight) {
             maxCandidateWeight = candidateWeight;
-            m_cameraTeleportationRayPortalDirectionInfo = &portalPair->pairInfos[iEntry];
+            m_cameraTeleportationRayPortalDirectionInfo = &portalPair->pairInfos[localEntry];
           }
         }
       }
@@ -605,8 +611,6 @@ namespace dxvk {
 
       // Rough tolerance accounting for any floating point error
       const float kCamPosDistanceTolerance = 0.001f * (lengthSqr(camPos) + lengthSqr(mainCamPos));
-
-      static_assert(maxRayPortalCount == 2);
 
       // Process all portal pairs
       for (auto& portalPair : m_rayPortalPairInfos) {
@@ -658,23 +662,20 @@ namespace dxvk {
 
     const RtCamera& mainCamera = cameraManager.getMainCamera();
 
-    // Note: we only support one portal pair here. Adding more pairs would require adding more CameraType members
-    // and adjusting volume integration and sampling code (see volume_lighting.slangh)
-    static_assert(maxRayPortalCount == 2);
+    // Volumetrics and CameraType only reserve cameras for the original pair.
+    // Additional pairs remain fully usable for ray traversal, but intentionally
+    // use main-space volumetrics.
+    const auto& portalPair = m_rayPortalPairInfos[0];
+    if (!portalPair.has_value()) {
+      return;
+    }
 
-    for (auto& portalPair : m_rayPortalPairInfos) {
-      if (portalPair.has_value()) {
-        // Iterate over portals in the pair.
-        for (int portalIndex = 0; portalIndex < 2; ++portalIndex) {
-          const Matrix4 portalViewMatrix = mainCamera.getWorldToView() * portalPair->pairInfos[!portalIndex].portalToOpposingPortalDirection;
-          
-          RtCamera& portalCamera = cameraManager.getCamera((CameraType::Enum) (CameraType::Portal0 + portalIndex));
-          portalCamera.update(m_device->getCurrentFrameId(), portalViewMatrix, mainCamera.getViewToProjection(),
-                              mainCamera.getFov(), mainCamera.getAspectRatio(), mainCamera.getNearPlane(), mainCamera.getFarPlane(), mainCamera.isLHS());
-        }
+    for (int portalIndex = 0; portalIndex < maxDedicatedRayPortalCount; ++portalIndex) {
+      const Matrix4 portalViewMatrix = mainCamera.getWorldToView() * portalPair->pairInfos[!portalIndex].portalToOpposingPortalDirection;
 
-        return;
-      }
+      RtCamera& portalCamera = cameraManager.getCamera((CameraType::Enum) (CameraType::Portal0 + portalIndex));
+      portalCamera.update(m_device->getCurrentFrameId(), portalViewMatrix, mainCamera.getViewToProjection(),
+                          mainCamera.getFov(), mainCamera.getAspectRatio(), mainCamera.getNearPlane(), mainCamera.getFarPlane(), mainCamera.isLHS());
     }
   }
   
