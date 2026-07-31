@@ -2007,7 +2007,9 @@ namespace dxvk {
 
     // Virtual instances for the view model and the player model are generated for the closest portal to the camera.
 
-    static_assert(maxRayPortalCount == 2);
+    // Instance-mask allocation only provides virtual view/player model space
+    // for the original portal pair. Additional pairs still trace static and
+    // regular dynamic scene geometry.
     auto& rayPortalPair = *rayPortalManager.getRayPortalPairInfos().begin();
 
     if (!rayPortalPair.has_value())
@@ -2092,8 +2094,7 @@ namespace dxvk {
       virtualInstance->m_isMarkedForGC = false;
       virtualInstance->setFrameLastUpdated(frameId);
 
-      // Virtual instances are to be visible only in their corresponding portal spaces
-      static_assert(maxRayPortalCount == 2);
+      // Virtual instances are visible only in the original pair's packed portal spaces.
       virtualInstance->m_vkInstance.mask = OBJECT_MASK_VIEWMODEL_VIRTUAL;
     
       // Update virtual instance transforms given the reference and the portal transform

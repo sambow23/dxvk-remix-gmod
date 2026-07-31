@@ -325,7 +325,8 @@ void integratePathVertex(
   {
     if (pathState.continueResolving)
     {
-      if (firstRayPortal != invalidRayPortalIndex)
+      // ReSTIR GI stores only the original pair's portal ID in two bits.
+      if (firstRayPortal < maxDedicatedRayPortalCount)
       {
         pathState.indirectLightPortalID = firstRayPortal;
       }
