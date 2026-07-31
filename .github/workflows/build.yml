@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ main, 'release/**' ]
+    branches: [ gmod-numos3, 'release/**' ]
   pull_request:
-    branches: [ main, 'release/**' ]
+    branches: [ gmod-numos3, 'release/**' ]
   # Manual build trigger: publishing a GitHub Release (typically from
   # modern-games-sdk-api) fires the workflow. Also enables
   # workflow_dispatch so the Actions UI "Run workflow" button works.
