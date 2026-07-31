@@ -2579,6 +2579,24 @@ namespace dxvk {
     }
   }
 
+  void SceneManager::registerPersistentExternalDraw(
+      uint64_t handle,
+      ExternalDrawState&& state) {
+    m_persistentExternalDraws.erase(handle);
+    m_persistentExternalDraws.emplace(handle, std::move(state));
+  }
+
+  void SceneManager::unregisterPersistentExternalDraw(uint64_t handle) {
+    m_persistentExternalDraws.erase(handle);
+  }
+
+  void SceneManager::submitPersistentExternalDraws(Rc<DxvkContext> ctx) {
+    for (const auto& persistent : m_persistentExternalDraws) {
+      auto frameState = std::make_unique<ExternalDrawState>(persistent.second);
+      submitExternalDraw(ctx, std::move(frameState));
+    }
+  }
+
   void SceneManager::destroyExternalMesh(remixapi_MeshHandle handle) {
     if (handle) {
       m_drawCallTracker.removeReplacementInstancesWithSpatialMapHash(

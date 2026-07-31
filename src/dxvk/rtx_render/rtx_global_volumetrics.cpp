@@ -967,7 +967,9 @@ namespace dxvk {
       1
     });
     m_froxelVolumeExtent.depth = froxelDepthSlices();
-    m_numFroxelVolumes = enableInPortals() ? maxRayPortalCount + 1 : 1;
+    // Dedicated froxel volumes remain limited to main + the original portal
+    // pair even when additional ray-only portal pairs are active.
+    m_numFroxelVolumes = enableInPortals() ? froxelVolumeCount : 1;
 
     VkExtent3D froxelGridFullDimensions = m_froxelVolumeExtent;
     // Note: preintegrated radiance is only computed for one (main) volume, not all of them
