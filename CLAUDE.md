@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # CLAUDE.md — agent entry point for Remix Plus
 
 This repo is **Remix Plus** — a port of NVIDIA's `dxvk-remix` focused
