@@ -2508,14 +2508,15 @@ namespace dxvk {
     replacementInstance->dirtyFlags.clr(ReplacementInstance::kDynamicFeatureMask);
 
     if (std::vector<AssetReplacement>* pReplacements = fork_hooks::externalDrawMeshReplacement(*m_pReplacer, meshHash)) {
-      // Copy the DrawCallState so we don't mutate the caller's state. Point geometryData
-      // at submeshes[0] as the replacement geometry template, clear externalMaterial so
-      // the USD replacement material takes precedence, and use a neutral default material
-      // since the replacement will provide its own.
+      // Copy the DrawCallState so we don't mutate the caller's state. Override its geometry
+      // with submeshes[0] as the replacement template, clear externalMaterial so the USD
+      // replacement material takes precedence, and use a neutral default material since
+      // the replacement will provide its own.
       DrawCallState replacementDrawCall = state.drawCall;
-      replacementDrawCall.geometryData = submeshes[0];
-      replacementDrawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-      replacementDrawCall.geometryData.externalMaterial = nullptr;
+      RasterGeometry replacementGeometry = submeshes[0];
+      replacementGeometry.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+      replacementGeometry.externalMaterial = nullptr;
+      replacementDrawCall.overrideGeometryData(&replacementGeometry);
 
       MaterialData renderMaterialData = LegacyMaterialData().as<OpaqueMaterialData>();
       drawReplacements(ctx, &replacementDrawCall, pReplacements, renderMaterialData, replacementInstance);
@@ -2578,9 +2579,11 @@ namespace dxvk {
 
   void SceneManager::registerPersistentExternalDraw(
       uint64_t handle,
-      ExternalDrawState&& state) {
+      std::unique_ptr<ExternalDrawState> state) {
     m_persistentExternalDraws.erase(handle);
-    m_persistentExternalDraws.emplace(handle, std::move(state));
+    if (state != nullptr) {
+      m_persistentExternalDraws.emplace(handle, std::move(*state));
+    }
   }
 
   void SceneManager::unregisterPersistentExternalDraw(uint64_t handle) {

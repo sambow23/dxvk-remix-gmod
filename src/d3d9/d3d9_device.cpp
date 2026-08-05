@@ -4658,7 +4658,9 @@ namespace dxvk {
           lookupHash(RtxOptions::terrainTextures(), imageHash) ||
           lookupHash(RtxOptions::lightmapTextures(), imageHash) ||
           lookupHash(RtxOptions::ignoreTextures(), imageHash) ||
-          lookupHash(RtxOptions::ignoreBakedLightingTextures(), imageHash);
+          // NV-DXVK start: GMod uses an allow-list for baked lighting.
+          lookupHash(RtxOptions::allowBakedLightingTextures(), imageHash);
+          // NV-DXVK end
         if (imageHash != kEmptyHash && !keepConfiguredHash) {
           pResource->ClearHash();
         }

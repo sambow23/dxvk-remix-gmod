@@ -153,7 +153,7 @@ public:
 
   void submitDrawState(Rc<DxvkContext> ctx, const DrawCallState& input, const MaterialData* overrideMaterialData);
   void submitExternalDraw(const Rc<DxvkContext>& ctx, std::unique_ptr<ExternalDrawState> state);
-  void registerPersistentExternalDraw(uint64_t handle, ExternalDrawState&& state);
+  void registerPersistentExternalDraw(uint64_t handle, std::unique_ptr<ExternalDrawState> state);
   void unregisterPersistentExternalDraw(uint64_t handle);
   void submitPersistentExternalDraws(Rc<DxvkContext> ctx);
   void setStartInMediumMaterial(const MaterialData& translucentMaterial);
