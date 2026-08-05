@@ -40,7 +40,7 @@ namespace dxvk {
     { InstanceCategories::AnimatedWater,           "remix_category:animated_water",           "Animated Water",            "rtx.animatedWaterTextures" },
     { InstanceCategories::ThirdPersonPlayerModel,  "remix_category:third_person_player_model","Third Person Player Model", "rtx.playerModelTextures" },
     { InstanceCategories::ThirdPersonPlayerBody,   "remix_category:third_person_player_body", "Third Person Player Body",  "rtx.playerModelBodyTextures" },
-    { InstanceCategories::IgnoreBakedLighting,     "remix_category:ignore_baked_lighting",    "Ignore Baked Lighting",     "rtx.allowBakedLightingTextures" },
+    { InstanceCategories::IgnoreBakedLighting,     "remix_category:ignore_baked_lighting",    "Ignore Baked Lighting",     nullptr },
     { InstanceCategories::IgnoreTransparencyLayer, "remix_category:ignore_transparency_layer","Ignore Transparency Layer", "rtx.ignoreTransparencyLayerTextures" },
     { InstanceCategories::ParticleEmitter,         "remix_category:particle_emitter",         "Particle Emitter",          "rtx.particleEmitterTextures" },
     { InstanceCategories::SmoothNormals,           "remix_category:smooth_normals",           "Smooth Normals",            "rtx.smoothNormalsTextures" },

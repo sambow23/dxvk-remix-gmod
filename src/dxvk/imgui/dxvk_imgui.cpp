@@ -209,7 +209,8 @@ namespace dxvk {
     {"ignorealphaontextures","Ignore Alpha Channel of Textures (optional)", &RtxOptions::ignoreAlphaOnTexturesObject()},
     {"raytracedRenderTargetTextures","Raytraced Render Target Textures (optional)", &RtxOptions::raytracedRenderTargetTexturesObject(), ImGUI::kTextureFlagsRenderTarget},
     {"particleemittertextures","Particle Emitters (optional)", &RtxOptions::particleEmitterTexturesObject()},
-    {"smoothnormalstextures","Smooth Normals (optional)", &RtxOptions::smoothNormalsTexturesObject()}
+    {"smoothnormalstextures","Smooth Normals (optional)", &RtxOptions::smoothNormalsTexturesObject()},
+    {"thinwalledtranslucenttextures","Thin-Walled Translucent (optional)", &RtxOptions::thinWalledOverrideTexturesObject()}
   };
 
   RemixGui::ComboWithKey<RenderPassGBufferRaytraceMode> renderPassGBufferRaytraceModeCombo {
@@ -2384,6 +2385,40 @@ namespace dxvk {
                 }
                 if (ImGui::IsItemHovered()) {
                   ImGui::SetTooltip("By default, emission is blocked for textures without an alpha channel.\nEnable this to force full albedo-based emission regardless.");
+                }
+
+                ImGui::Unindent();
+              }
+
+              // Show thickness control for Thin-Walled Translucent override
+              if (strcmp(rtxOption.uniqueId, "thinwalledtranslucenttextures") == 0 && rtxOption.bufferToggle) {
+                ImGui::Indent();
+
+                auto thinWallThicknessOverrides = RtxOptions::parseThinWallThicknessOverrides(RtxOptions::thinWallThicknessOverridesString());
+                float currentThickness = 1.0f; // Reasonable default for experimentation
+                auto thicknessIt = thinWallThicknessOverrides.find(texHash);
+                if (thicknessIt != thinWallThicknessOverrides.end()) {
+                  currentThickness = thicknessIt->second;
+                }
+
+                ImGui::Text("Thin Wall Thickness:");
+                ImGui::PushItemWidth(150.0f);
+                if (ImGui::DragFloat("##thin_wall_thickness", &currentThickness, 0.01f, 0.001f, 65504.0f, "%.3f")) {
+                  thinWallThicknessOverrides[texHash] = currentThickness;
+                  std::string thicknessString = RtxOptions::thinWallThicknessOverridesToString(thinWallThicknessOverrides);
+                  RtxOptions::thinWallThicknessOverridesStringObject().setDeferred(thicknessString);
+                }
+                ImGui::PopItemWidth();
+
+                if (ImGui::IsItemHovered()) {
+                  ImGui::SetTooltip("Overrides the Translucent material's thin wall thickness for this texture.\nOnly applies while Thin-Walled is enabled above.");
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Reset##thin_wall_thickness_reset")) {
+                  thinWallThicknessOverrides.erase(texHash);
+                  std::string thicknessString = RtxOptions::thinWallThicknessOverridesToString(thinWallThicknessOverrides);
+                  RtxOptions::thinWallThicknessOverridesStringObject().setDeferred(thicknessString);
                 }
 
                 ImGui::Unindent();

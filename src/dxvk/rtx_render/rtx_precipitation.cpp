@@ -616,7 +616,7 @@ namespace dxvk {
       {}
     });
 
-    ctx.commitExternalGeometryToRT(std::move(state));
+    ctx.commitExternalGeometryToRT(std::make_unique<ExternalDrawState>(std::move(state)));
     m_wasActive = true;
   }
 

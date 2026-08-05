@@ -248,6 +248,17 @@ namespace dxvk {
                   "Format: hash1,hash2,hash3\n"
                   "By default, emission is blocked for textures without an alpha channel. Adding a hash here\n"
                   "forces full albedo-based emission even when the texture has no alpha channel.");
+    RTX_OPTION("rtx", fast_unordered_set, thinWalledOverrideTextures, {},
+                  "Per-texture Thin-Walled override for legacy Translucent materials, set via the in-game\n"
+                  "Texture Selection menu.\n"
+                  "Textures listed here force their Translucent material's thin_walled input to true\n"
+                  "(no refraction, treated as a thin sheet) regardless of the value baked into the\n"
+                  "generated/authored material.");
+    RTX_OPTION("rtx", std::string, thinWallThicknessOverridesString, "",
+                  "Per-texture Thin Wall Thickness override for legacy Translucent materials with\n"
+                  "rtx.thinWalledOverrideTextures enabled, set via the in-game Texture Selection menu.\n"
+                  "Format: hash1:thickness1,hash2:thickness2\n"
+                  "Only takes effect for hashes also present in rtx.thinWalledOverrideTextures.");
     RTX_OPTION("rtx", fast_unordered_set, hideInstanceTextures, {},
                   "Textures on draw calls that should be hidden from rendering, but not totally ignored.\n"
                   "This is similar to rtx.ignoreTextures but instead of completely ignoring such draw calls they are only hidden from rendering, allowing for the hidden objects to still appear in captures.\n"
@@ -1739,6 +1750,47 @@ namespace dxvk {
         char hashStr[32];
         snprintf(hashStr, sizeof(hashStr), "%016llX", hash);
         result += hashStr;
+      }
+      return result;
+    }
+
+    // Helper functions for per-texture Thin Wall Thickness override parsing
+    static fast_unordered_cache<float> parseThinWallThicknessOverrides(const std::string& str) {
+      fast_unordered_cache<float> result;
+      if (str.empty()) {
+        return result;
+      }
+
+      const auto pairs = dxvk::str::split(str, ',');
+      for (const auto& pair : pairs) {
+        const auto hashThickness = dxvk::str::split(pair, ':');
+        if (hashThickness.size() == 2) {
+          try {
+            XXH64_hash_t hash = std::stoull(hashThickness[0], nullptr, 16);
+            float thickness = std::stof(hashThickness[1]);
+            result[hash] = thickness;
+          } catch (...) {
+            // Skip invalid entries
+          }
+        }
+      }
+      return result;
+    }
+
+    static std::string thinWallThicknessOverridesToString(const fast_unordered_cache<float>& cache) {
+      std::string result;
+      bool first = true;
+      for (const auto& pair : cache) {
+        if (!first) {
+          result += ",";
+        }
+        first = false;
+
+        char hashStr[32];
+        snprintf(hashStr, sizeof(hashStr), "%016llX", pair.first);
+        result += hashStr;
+        result += ":";
+        result += std::to_string(pair.second);
       }
       return result;
     }
