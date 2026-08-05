@@ -129,7 +129,7 @@ class "RemixInstanceCategoryAPI" (
         displayName = "Third Person Player Body"
     )
     bool remix_category:ignore_baked_lighting = 0 (
-        doc = "Textures for which to ignore two types of baked lighting, Texture Factors and Vertex Color.\n\nTexture Factor disablement:\nUsing this feature on selected textures will eliminate the texture factors.\nFor instance, if a game bakes lighting information into the Texture Factor for particular textures, applying this option will remove them.\nThis becomes useful when unexpected results occur due to the Texture Factor.\nConsider an example where the original texture contains red tints baked into the Texture Factor. If a user replaces the texture, it will blend with the red tints, resulting in an undesirable reddish outcome.\nIn such cases, users can employ this option to eliminate the unwanted tints from their replacement textures.\nSimilarly, users can tag textures if shadows are baked into the Texture Factor, causing the replacing texture to appear darker than anticipated.\n\nVertex Color disablement:\nUsing this feature on selected textures will eliminate the vertex colors.\n\nNote, enabling this setting will automatically disable multiple-stage texture factor blendings for the selected textures.\nOnly use this option when necessary, as the Texture Factor and Vertex Color can be used for simulating various texture effects, tagging a texture with this option will unexpectedly eliminate these effects."
+        doc = "Remix instance category: Ignore Baked Lighting."
         displayGroup = "Remix Categories"
         displayName = "Ignore Baked Lighting"
     )
@@ -152,5 +152,15 @@ class "RemixInstanceCategoryAPI" (
         doc = "Textures on draw calls that should be treated as alpha-tested hair cards.\nTagged materials preserve fine texture detail, render as cutouts instead of alpha blends, and disable backface culling."
         displayGroup = "Remix Categories"
         displayName = "Hair Cards"
+    )
+    bool remix_category:legacy_emissive = 0 (
+        doc = "Textures on draw calls that should be treated as legacy emissive elements.\nSimilar to worldspace UI but uses alpha channel for emissive if available, with per-texture controllable emissive strength."
+        displayGroup = "Remix Categories"
+        displayName = "Legacy Emissive"
+    )
+    bool remix_category:occluder = 0 (
+        doc = "Textures on geometry that should act as a sky occluder.\nAny ray hitting surfaces with these textures will show the sky instead of the surface or any geometry behind it.\nThis is useful for Source engine games where NODRAW materials are visible in RTX, allowing you to hide unwanted geometry while still showing the sky."
+        displayGroup = "Remix Categories"
+        displayName = "Occluder"
     )
 }

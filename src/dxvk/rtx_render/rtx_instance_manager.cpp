@@ -1211,6 +1211,26 @@ namespace dxvk {
           }
 
           currentInstance.m_isSubsurface = materialData->getOpaqueMaterialData().getSubsurfaceDiffusionProfile();
+        } else if (materialData->getType() == MaterialDataType::Translucent) {
+          // Per-texture Thin-Walled override, set via the in-game Texture Selection
+          // menu. Applied by legacy texture hash so it survives material rebuilds
+          // and matches the same hash the menu's checkbox/slider operate on.
+          const XXH64_hash_t textureHash = drawCall.getMaterialData().getColorTexture().getImageHash();
+          const auto& thinWalledSet = RtxOptions::thinWalledOverrideTextures();
+          if (thinWalledSet.find(textureHash) != thinWalledSet.end()) {
+            // Material data is cache-owned and const in the current upstream path,
+            // so apply the per-instance override to a deep copy.
+            patchedMaterialData = *materialData;
+            materialData = &patchedMaterialData;
+            auto& translucentMaterialData = patchedMaterialData.getTranslucentMaterialData();
+            translucentMaterialData.setEnableThinWalled(true);
+
+            const auto thicknessMap = RtxOptions::parseThinWallThicknessOverrides(RtxOptions::thinWallThicknessOverridesString());
+            const auto thicknessIt = thicknessMap.find(textureHash);
+            if (thicknessIt != thicknessMap.end()) {
+              translucentMaterialData.setThinWallThickness(thicknessIt->second);
+            }
+          }
         }
       }
 
