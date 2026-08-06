@@ -154,21 +154,46 @@ vec3 handleVisibilityVertex<let VisibilityMode : uint>(Ray ray, RayHitInfo rayHi
 
     // Extract the thin walled flag before evaluating the material interaction
     const bool isThinWalled = translucentSurfaceMaterial.thicknessOrMeasurementDistance < 0.0f;
+    const bool enableTransmissionMask =
+      (translucentSurfaceMaterial.flags & TRANSLUCENT_SURFACE_MATERIAL_FLAG_ENABLE_TRANSMISSION_MASK) != 0;
 
-    // Only evaluate the translucent attenuation for thin-walled materials because we're doing an unordered
-    // traversal and don't know the distance traveled in a thick material.
-    if (isThinWalled)
+    // Thick materials cannot evaluate volume attenuation here because visibility traversal is unordered and
+    // does not provide the distance traveled inside the volume. An opt-in texture mask is a surface term, so
+    // it can still attenuate thick materials without changing their refraction or volume behavior.
+    if (isThinWalled || enableTransmissionMask)
     {
       const TranslucentSurfaceMaterialInteraction translucentSurfaceMaterialInteraction =
         translucentSurfaceMaterialInteractionCreate(translucentSurfaceMaterial, surface, surfaceInteraction, rayInteraction);
 
-      // Approximate the attenuation distance based on the triangle normal
-      const float thickness = translucentSurfaceMaterialInteractionGetThinWallThickness(translucentSurfaceMaterialInteraction);
-      const float attenuationDistance = abs(evalThinAttenuationDistance(thickness, surfaceInteraction.geometryNormal, ray.direction));
-      const vec3 attenuationCoefficient = transmittanceToAttenuationCoefficient(translucentSurfaceMaterialInteraction.transmittanceColor, 1.0);
-      const vec3 volumeAttenuation = evalBeerLambertAttenuation(attenuationCoefficient, attenuationDistance);
+      vec3 surfaceAttenuation = vec3(1.0f);
+      if (enableTransmissionMask)
+      {
+        // Source glass textures are authored as surface color, so their RGB can be very dark even where
+        // alpha indicates highly transparent glass. Use alpha for transmission strength and normalized RGB
+        // only for the stain color; otherwise the albedo would absorb nearly all direct illumination.
+        const vec3 diffuseColor = saturate(translucentSurfaceMaterialInteraction.diffuseColor);
+        const float maxColorComponent = max(diffuseColor.x, max(diffuseColor.y, diffuseColor.z));
+        const vec3 transmissionTint = maxColorComponent > 1e-4f
+          ? diffuseColor * rcp(maxColorComponent)
+          : vec3(1.0f);
 
-      return volumeAttenuation;
+        surfaceAttenuation =
+          transmissionTint *
+          (1.0f - saturate(translucentSurfaceMaterialInteraction.diffuseOpacity));
+      }
+
+      if (isThinWalled)
+      {
+        // Approximate the attenuation distance based on the triangle normal
+        const float thickness = translucentSurfaceMaterialInteractionGetThinWallThickness(translucentSurfaceMaterialInteraction);
+        const float attenuationDistance = abs(evalThinAttenuationDistance(thickness, surfaceInteraction.geometryNormal, ray.direction));
+        const vec3 attenuationCoefficient = transmittanceToAttenuationCoefficient(translucentSurfaceMaterialInteraction.transmittanceColor, 1.0);
+        const vec3 volumeAttenuation = evalBeerLambertAttenuation(attenuationCoefficient, attenuationDistance);
+
+        surfaceAttenuation *= volumeAttenuation;
+      }
+
+      return surfaceAttenuation;
     }
   }
 

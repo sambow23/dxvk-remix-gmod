@@ -998,14 +998,15 @@ struct RtTranslucentSurfaceMaterial {
     float refractiveIndex,
     float transmittanceMeasurementDistance, const Vector3& transmittanceColor,
     bool enableEmission, float emissiveIntensity, const Vector3& emissiveColorConstant,
-    bool isThinWalled, float thinWallThickness, bool useDiffuseLayer, uint32_t samplerIndex) :
+    bool isThinWalled, float thinWallThickness, bool useDiffuseLayer, bool enableTransmissionMask, uint32_t samplerIndex) :
     m_normalTextureIndex(normalTextureIndex),
     m_transmittanceTextureIndex(transmittanceTextureIndex),
     m_emissiveColorTextureIndex(emissiveColorTextureIndex),
     m_refractiveIndex(refractiveIndex),
     m_transmittanceMeasurementDistance(transmittanceMeasurementDistance), m_transmittanceColor(transmittanceColor),
     m_enableEmission(enableEmission), m_emissiveIntensity(emissiveIntensity), m_emissiveColorConstant(emissiveColorConstant),
-    m_isThinWalled(isThinWalled), m_thinWallThickness(thinWallThickness), m_useDiffuseLayer(useDiffuseLayer), m_samplerIndex(samplerIndex)
+    m_isThinWalled(isThinWalled), m_thinWallThickness(thinWallThickness), m_useDiffuseLayer(useDiffuseLayer),
+    m_enableTransmissionMask(enableTransmissionMask), m_samplerIndex(samplerIndex)
   {
     updateCachedData();
     updateCachedHash();
@@ -1020,8 +1021,12 @@ struct RtTranslucentSurfaceMaterial {
     uint16_t flags = surfaceMaterialTypeTranslucent;
 
     // Note: Respect override flag here to let the GPU do less work in determining if the diffuse layer should be used or not.
-    if (m_useDiffuseLayer || getEnableDiffuseLayerOverrideHack()) {
+    const bool useDiffuseLayer = m_useDiffuseLayer || getEnableDiffuseLayerOverrideHack();
+    if (useDiffuseLayer) {
       flags |= TRANSLUCENT_SURFACE_MATERIAL_FLAG_USE_DIFFUSE_LAYER;
+    }
+    if (useDiffuseLayer && m_enableTransmissionMask) {
+      flags |= TRANSLUCENT_SURFACE_MATERIAL_FLAG_ENABLE_TRANSMISSION_MASK;
     }
 
     // data[0- 1]
@@ -1105,6 +1110,7 @@ private:
       uint32_t isThinWalled;    // NOTE: uint32_t to avoid padding
       float thinWallThickness;
       uint32_t useDiffuseLayer; // NOTE: uint32_t to avoid padding
+      uint32_t enableTransmissionMask; // NOTE: uint32_t to avoid padding
       uint32_t samplerIndex;
       // NOTE: There must be NO padding between members, as the struct is used for hashing
     };
@@ -1122,6 +1128,7 @@ private:
       m_isThinWalled,
       m_thinWallThickness,
       m_useDiffuseLayer,
+      m_enableTransmissionMask,
       m_samplerIndex,
     };
     m_cachedHash = XXH3_64bits(&hashData, sizeof(hashData));
@@ -1162,6 +1169,7 @@ private:
   bool m_isThinWalled;
   float m_thinWallThickness;
   bool m_useDiffuseLayer;
+  bool m_enableTransmissionMask;
 
   XXH64_hash_t m_cachedHash;
 
