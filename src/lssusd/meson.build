@@ -17,7 +17,7 @@ thread_dep = dependency('threads')
 
 libusd_embedded_data_files = files([
   '../../external/omni_core_materials/Base/AperturePBR_Opacity.mdl',
-  '../../external/omni_core_materials/Base/AperturePBR_Translucent.mdl',
+  '../mdl/Base/AperturePBR_Translucent.mdl',
   '../../external/omni_core_materials/Base/AperturePBR_Model.mdl',
   '../../external/omni_core_materials/Base/AperturePBR_Normal.mdl',
   '../../external/omni_core_materials/Base/AperturePBR_SpriteSheet.mdl',

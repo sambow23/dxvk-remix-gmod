@@ -28,6 +28,10 @@ test_env = environment({'MALLOC_PERTURB_': '0'})
 foreach external_dll : external_dll_paths
   test_env.append('PATH', external_dll)
 endforeach
+test_env.append('PATH', join_paths(usd_lib_path, 'lib'))
+test_env.append('PATH', join_paths(usd_lib_path, 'bin'))
+test_env.append('PATH', python_dll_path)
+test_env.append('PATH', nrc_dll_path)
 
 tests = []
 exe = executable('fastop_minmax',  files('test_fastop_minmax.cpp'),  dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
@@ -52,6 +56,11 @@ tests += exe
 
 exe = executable('test_pnext',  files('test_pnext.cpp'), include_directories : remix_api_include_path,  dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_pnext', exe, env: test_env)
+tests += exe
+
+exe = executable('test_translucent_material', files('test_translucent_material.cpp'),
+  include_directories : test_include_path, dependencies : [ d3d9_dep, test_unit_deps ], link_with: [ d3d9_dll, dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_translucent_material', exe, env: test_env)
 tests += exe
 
 exe = executable('test_spatial_map',  files('test_spatial_map.cpp'), include_directories : remix_api_include_path,  dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])

@@ -763,20 +763,36 @@ bool RAB_TraceLightSampleVisibility(RAB_Surface surface, RAB_LightSample lightSa
 #endif
 
   uint8_t rayMask = OBJECT_MASK_OPAQUE | (surface.objectMask & OBJECT_MASK_ALL_DYNAMIC);
-  rayMask |= (cb.enableDirectTranslucentShadows) ? OBJECT_MASK_TRANSLUCENT : 0;
+  rayMask |= (cb.enableDirectTranslucentShadows && includeTranslucentGeometry) ? OBJECT_MASK_TRANSLUCENT : 0;
   rayMask |= (cb.enableDirectAlphaBlendShadows) ? OBJECT_MASK_ALPHA_BLEND : 0;
 
   const bool isThinOpaqueSubsurface = isThinOpaqueSubsurfaceMaterial(surface.opaqueSurfaceMaterialInteraction);
 
-  const VisibilityResult visibility = traceVisibilityRay<visibilityModeEnableSubsurfaceMaterials>(
-    surface.minimalSurfaceInteraction, samplePos,
-    rayMask, visibilityExpectedRayPortalIndex, visibilityPortalSpace, false,
-    0, 0, 1.0,
-    surface.isViewModel,
-    cb.enablePreviousTLAS && usePreviousTLAS,
-    BINDING_INDEX_INVALID, vec2(0.0f),
-    isThinOpaqueSubsurface,
-    surface.opaqueSurfaceMaterialInteraction.shadingNormal);
+  VisibilityResult visibility;
+  if (includeTranslucentGeometry)
+  {
+    visibility = traceVisibilityRay<visibilityModeEnableTranslucentMaterials | visibilityModeEnableSubsurfaceMaterials>(
+      surface.minimalSurfaceInteraction, samplePos,
+      rayMask, visibilityExpectedRayPortalIndex, visibilityPortalSpace, false,
+      0, 0, 1.0,
+      surface.isViewModel,
+      cb.enablePreviousTLAS && usePreviousTLAS,
+      BINDING_INDEX_INVALID, vec2(0.0f),
+      isThinOpaqueSubsurface,
+      surface.opaqueSurfaceMaterialInteraction.shadingNormal);
+  }
+  else
+  {
+    visibility = traceVisibilityRay<visibilityModeEnableSubsurfaceMaterials>(
+      surface.minimalSurfaceInteraction, samplePos,
+      rayMask, visibilityExpectedRayPortalIndex, visibilityPortalSpace, false,
+      0, 0, 1.0,
+      surface.isViewModel,
+      cb.enablePreviousTLAS && usePreviousTLAS,
+      BINDING_INDEX_INVALID, vec2(0.0f),
+      isThinOpaqueSubsurface,
+      surface.opaqueSurfaceMaterialInteraction.shadingNormal);
+  }
 
   attenuation = visibility.attenuation;
 
