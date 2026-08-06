@@ -477,6 +477,7 @@ namespace {
           src.getEnableThinWalled(),
           src.getThinWallThickness(),
           src.getEnableDiffuseLayer(),
+          src.getEnableTransmissionMask(),
           src.getFilterMode(),
           src.getWrapModeU(),
           src.getWrapModeV()
@@ -576,6 +577,7 @@ namespace {
           tobool(extTranslucent->thinWallThickness_hasvalue),
           extTranslucent->thinWallThickness_hasvalue ? extTranslucent->thinWallThickness_value : 0.001f, // default TranslucentMaterial::ThinWallThickness
           tobool(extTranslucent->useDiffuseLayer),
+          false, // enableTransmissionMask is currently authored through USD/MDL only
           info.filterMode,
           info.wrapModeU,
           info.wrapModeV,
