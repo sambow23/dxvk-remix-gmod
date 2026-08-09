@@ -2,29 +2,17 @@ name: Build
 
 on:
   push:
-    branches: [ gmod-numos3, 'release/**' ]
+    branches: [ gmod-numos3 ]
   pull_request:
-    branches: [ gmod-numos3, 'release/**' ]
-  # Manual build trigger: publishing a GitHub Release (typically from
-  # modern-games-sdk-api) fires the workflow. Also enables
-  # workflow_dispatch so the Actions UI "Run workflow" button works.
-  release:
-    types: [published]
-  workflow_dispatch:
+    branches: [ gmod-numos3 ]
 
 jobs:
   build-windows:
     runs-on: windows-2022
-    env:
-      BUILD_SENTRY_ENVIRONMENT: ${{ github.event_name == 'pull_request' && 'github-testing' || 'github-production' }}
 
     strategy:
       matrix:
         include:
-          - build-flavour: debug
-            output-subdir: _Comp64Debug
-          - build-flavour: debugoptimized
-            output-subdir: _Comp64DebugOptimized
           - build-flavour: release
             output-subdir: _Comp64Release
 
@@ -41,13 +29,6 @@ jobs:
 
     - name: Setup Meson
       run: pip install meson==1.1.0
-
-    - name: Install Pillow for FAST-noise embedder
-      run: pip install pillow
-
-    - name: Fetch pinned DLSS / NGX DLL bundle
-      shell: pwsh
-      run: .\scripts\update-dlss-dlls.ps1
 
     - name: Build
       shell: pwsh
@@ -122,7 +103,7 @@ jobs:
             - type: section
               text:
                 type: mrkdwn
-                text: "<!here> :rotating-light-red: *Build workflow failed* for `${{ github.repository }}`"
+                text: ":rotating-light-red: *Build workflow failed* for `${{ github.repository }}`"
             - type: section
               fields:
                 - type: mrkdwn
@@ -138,3 +119,93 @@ jobs:
                     type: plain_text
                     text: View workflow run
                   url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  create-nightly-release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/gmod-numos3'
+    permissions:
+      contents: write
+
+    steps:
+    - name: Setup variables
+      uses: actions/github-script@v7
+      with:
+        script: core.exportVariable('GITHUB_SHA_SHORT', context.sha.substring(0, 7))
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Package nightly release
+      run: |
+        mkdir -p nightly-release/.trex
+
+        # Copy release build DLLs and USD folder to .trex folder.
+        # The launcher looks for .trex or bin folders and copies their contents to bin/win64.
+        if [ -d "artifacts/rtx-remix-for-x64-games-${{github.run_number}}-${{env.GITHUB_SHA_SHORT}}-release" ]; then
+          cp artifacts/rtx-remix-for-x64-games-${{github.run_number}}-${{env.GITHUB_SHA_SHORT}}-release/*.dll nightly-release/.trex/ || true
+          cp artifacts/rtx-remix-for-x64-games-${{github.run_number}}-${{env.GITHUB_SHA_SHORT}}-release/*.txt nightly-release/ || true
+          if [ -d "artifacts/rtx-remix-for-x64-games-${{github.run_number}}-${{env.GITHUB_SHA_SHORT}}-release/usd" ]; then
+            cp -r artifacts/rtx-remix-for-x64-games-${{github.run_number}}-${{env.GITHUB_SHA_SHORT}}-release/usd nightly-release/.trex/
+          fi
+        fi
+
+        cd nightly-release
+        zip -r ../dxvk-remix-gmod-nightly.zip .
+        cd ..
+
+    - name: Delete existing nightly release and tag
+      uses: actions/github-script@v7
+      continue-on-error: true
+      with:
+        script: |
+          const { owner, repo } = context.repo;
+
+          try {
+            const release = await github.rest.repos.getReleaseByTag({
+              owner,
+              repo,
+              tag: 'nightly'
+            });
+            await github.rest.repos.deleteRelease({
+              owner,
+              repo,
+              release_id: release.data.id
+            });
+            console.log('Deleted existing nightly release');
+          } catch (error) {
+            console.log('No existing nightly release to delete:', error.message);
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          try {
+            await github.rest.git.deleteRef({
+              owner,
+              repo,
+              ref: 'tags/nightly'
+            });
+            console.log('Deleted existing nightly tag');
+          } catch (error) {
+            console.log('No existing nightly tag to delete:', error.message);
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+    - name: Create nightly release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: nightly
+        name: "${{env.GITHUB_SHA_SHORT}} - Nightly"
+        body: |
+          Automated nightly build from commit ${{ github.sha }}
+
+          **Commit:** ${{ github.event.head_commit.message }}
+          **Branch:** gmod-numos3
+          **Build Date:** ${{ github.event.head_commit.timestamp }}
+
+          ⚠️ This is an automated pre-release build and may be unstable.
+        prerelease: true
+        files: dxvk-remix-gmod-nightly.zip
