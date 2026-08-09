@@ -73,7 +73,7 @@ namespace dxvk {
 
     std::atomic_uint8_t m_requestedMips      = 0;
     std::atomic<State>  m_state              = State::kUnknown;
-    uint64_t            m_completionSyncpt   = 0; // completion syncpoint value for RTX IO
+    std::atomic_bool    m_needsReloadAfterPurge = false;
 
     // Texture streaming
     uint16_t            m_samplerFeedbackStamp = 0; // unique linear index of this asset; required to keep 
@@ -265,9 +265,9 @@ namespace dxvk {
     static Rc<ManagedTexture> createTexture(const Rc<AssetData>& assetData, ColorSpace colorSpace);
   };
 
-  void loadTextureRtxIo(const Rc<ManagedTexture>& texture,
-                        const Rc<DxvkImageView>& dstImage,
-                        const uint32_t mipLevels_begin,
-                        const uint32_t mipLevels_end /* non-inclusive */ );
+  uint64_t loadTextureRtxIo(const Rc<ManagedTexture>& texture,
+                            const Rc<DxvkImageView>& dstImage,
+                            const uint32_t mipLevels_begin,
+                            const uint32_t mipLevels_end /* non-inclusive */ );
 
 } // namespace dxvk

@@ -57,6 +57,10 @@ exe = executable('test_pnext',  files('test_pnext.cpp'), include_directories : r
 test('test_pnext', exe, env: test_env)
 tests += exe
 
+exe = executable('test_texture_upload_generation', files('test_texture_upload_generation.cpp'), dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_texture_upload_generation', exe, env: test_env)
+tests += exe
+
 exe = executable('test_translucent_material', files('test_translucent_material.cpp'),
   include_directories : test_include_path, dependencies : [ d3d9_dep, test_unit_deps ], link_with: [ d3d9_dll, dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_translucent_material', exe, env: test_env)

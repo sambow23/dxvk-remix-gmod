@@ -274,7 +274,7 @@ public:
 
   void requestTextureVramFree();
   void requestVramCompaction();
-  void manageTextureVram();
+  void manageTextureVram(Rc<DxvkContext> ctx);
 
   bool isThinOpaqueMaterialExist() const { return m_thinOpaqueMaterialExist; }
   bool isSssMaterialExist() const { return m_sssMaterialExist; }

@@ -31,6 +31,7 @@
 #include "../../util/sync/sync_signal.h"
 #include "rtx_sparse_unique_cache.h"
 #include "rtx_common_object.h"
+#include "rtx_texture_upload_generation.h"
 
 namespace dxvk {
   class DxvkContext;
@@ -106,6 +107,14 @@ namespace dxvk {
       */
     void clear();
 
+    /**
+      * \brief Drops every resident replacement texture image while preserving
+      * asset metadata so textures can be streamed again in the next scene.
+      * Invalidates asynchronous uploads from earlier generations.
+      * \return Number of resident images released.
+      */
+    size_t purgeResidentTextures();
+
     // Incremented whenever clear() empties m_textureCache. SceneManager compares this
     // against m_textureCacheGenerationValidForPreserve to gate the preserve draw path.
     uint32_t getTextureCacheGeneration() const {
@@ -174,6 +183,7 @@ namespace dxvk {
     };
     SparseUniqueCache<TextureRef, TextureHashFn, TextureEquality> m_textureCache;
     uint32_t m_textureCacheGeneration = 0;
+    TextureUploadGeneration m_uploadGeneration;
 
     AsyncRunner*       m_asyncThread;
     AsyncRunner_RTXIO* m_asyncThread_rtxio;
