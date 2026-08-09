@@ -93,6 +93,7 @@ namespace dxvk {
       uint16_t                    mip_begin;
       uint16_t                    mip_end;
       RtxStagingRing*             stagingbuf;
+      uint64_t                    generation;
     };
 
     // A range of mips to copy to the 'dstTexture'.
@@ -102,6 +103,23 @@ namespace dxvk {
       Rc<DxvkImageView>   rtxioDst;
       uint16_t            mip_begin;
       uint16_t            mip_end;
+      uint64_t            completionSyncpt;
+      uint64_t            generation;
+    };
+
+    struct PendingTextureUpload {
+      Rc<ManagedTexture> texture;
+      uint64_t generation;
+
+      bool operator==(const PendingTextureUpload& other) const {
+        return texture == other.texture && generation == other.generation;
+      }
+    };
+
+    struct PendingTextureUploadHasher {
+      size_t operator()(const PendingTextureUpload& upload) const {
+        return std::hash<void*>{}(upload.texture.ptr()) ^ std::hash<uint64_t>{}(upload.generation);
+      }
     };
 
 
@@ -204,7 +222,7 @@ namespace dxvk {
       std::enable_if_t<std::is_same_v<Allocator, RtxStagingRing> || 
                        std::is_same_v<Allocator, DxvkStagingBuffer>, int> = 0
     >
-    ReadyToCopy makeStagingForTextureAsset(Allocator& allocator, const Rc<ManagedTexture>& tex) {
+    ReadyToCopy makeStagingForTextureAsset(Allocator& allocator, const Rc<ManagedTexture>& tex, uint64_t generation) {
       ScopedCpuProfileZone();
 
       const auto [mip_begin, mip_end] = tex->calcRequiredMips_BeginEnd();
@@ -226,6 +244,7 @@ namespace dxvk {
         /* .mip_begin  = */ mip_begin,
         /* .mip_end    = */ mip_end,
         /* .stagingbuf = */ (RtxStagingRing*)(std::is_same_v<Allocator, RtxStagingRing> ? (void*)&allocator : nullptr),
+        /* .generation = */ generation,
       };
 
       // Release asset source to keep the number of open file low
@@ -417,8 +436,12 @@ namespace dxvk {
       target.erase(it, target.end());
     }
 
-    
-    struct RcHasher { size_t operator()(const Rc<ManagedTexture>& s) const { return (size_t)s.ptr(); } };
+    void releaseStagingReservation(const ReadyToCopy& ready) {
+      if (ready.stagingbuf) {
+        ready.stagingbuf->onSliceSubmitToCmd();
+      }
+    }
+
 
   } // unnamed namespace
 
@@ -445,7 +468,8 @@ namespace dxvk {
       if (!m_requiresShutdown.load()) {
         auto l = std::unique_lock{ m_texturesToProcess_mutex };
         m_requiresShutdown.store(true);
-        m_texturesToProcess_cond.notify_one();
+        m_texturesToProcess_cond.notify_all();
+        m_readyTextures_cond.notify_all();
       }
       if (m_thread.joinable()) {
         m_thread.join();
@@ -457,8 +481,9 @@ namespace dxvk {
     AsyncRunner& operator=(const AsyncRunner&) = delete;
     AsyncRunner& operator=(AsyncRunner&&) noexcept = delete;
 
-    void queueAdd(const Rc<ManagedTexture>& tex, bool allowAsync);
+    void queueAdd(const Rc<ManagedTexture>& tex, bool allowAsync, uint64_t generation);
     std::vector<ReadyToCopy> retrieveReadyToUploadTextures();
+    void invalidateBeforeGeneration(uint64_t generation);
 
     dxvk::mutex m_assetInfoMutex{};
 
@@ -472,12 +497,13 @@ namespace dxvk {
     // assumed to have an unlimited budget, never fails
     DxvkStagingBuffer         m_synchronousAlloc;
 
-    std::atomic<bool>         m_requiresShutdown;
+    std::atomic<bool>         m_requiresShutdown { false };
+    std::atomic<uint64_t>     m_minValidGeneration { 1 };
     dxvk::thread              m_thread;
 
     dxvk::mutex               m_texturesToProcess_mutex;
     dxvk::condition_variable  m_texturesToProcess_cond;
-    std::unordered_set<Rc<ManagedTexture>, RcHasher> m_texturesToProcess; // TODO: remove set?
+    std::unordered_set<PendingTextureUpload, PendingTextureUploadHasher> m_texturesToProcess;
 
     dxvk::mutex               m_readyTextures_mutex;
     dxvk::condition_variable  m_readyTextures_cond;
@@ -485,22 +511,55 @@ namespace dxvk {
   };
 
 
-  void AsyncRunner::queueAdd(const Rc<ManagedTexture>& tex, bool async) {
+  void AsyncRunner::queueAdd(const Rc<ManagedTexture>& tex, bool async, uint64_t generation) {
     assert(tex->m_state == ManagedTexture::State::kQueuedForUpload);
+    const PendingTextureUpload upload { tex, generation };
     if (async) {
       assert(!m_requiresShutdown.load());
       auto l = std::unique_lock{ m_texturesToProcess_mutex };
-      m_texturesToProcess.emplace(tex);
+      m_texturesToProcess.emplace(upload);
       m_texturesToProcess_cond.notify_one();
     } else {
+      auto assetLock = std::unique_lock{ m_assetInfoMutex };
       auto l = std::unique_lock{ m_readyTextures_mutex };
       // In CI, we need to overwrite existing ready requests, never wait even a frame for textures that are kQueuedForUpload
       if (!RtxOptions::asyncAssetLoading() && tex->m_state == ManagedTexture::State::kQueuedForUpload) {
-        erase_ifv(m_readyTextures, [&tex](const ReadyToCopy& r) { return r.dstTexture == tex; });
+        erase_ifv(m_readyTextures, [&tex](const ReadyToCopy& r) {
+          const bool replacesExistingUpload = r.dstTexture == tex;
+          if (replacesExistingUpload) {
+            releaseStagingReservation(r);
+          }
+          return replacesExistingUpload;
+        });
         tex->m_state = ManagedTexture::State::kVidMem;
       }
-      m_readyTextures.push_back(makeStagingForTextureAsset(m_synchronousAlloc, tex));
+      m_readyTextures.push_back(makeStagingForTextureAsset(m_synchronousAlloc, tex, generation));
       assert(m_readyTextures.back().dstTexture.ptr());
+    }
+  }
+
+  void AsyncRunner::invalidateBeforeGeneration(uint64_t generation) {
+    m_minValidGeneration.store(generation);
+
+    {
+      auto l = std::unique_lock{ m_assetInfoMutex };
+    }
+    {
+      auto l = std::unique_lock{ m_texturesToProcess_mutex };
+      erase_if(m_texturesToProcess, [generation](const PendingTextureUpload& upload) {
+        return upload.generation < generation;
+      });
+    }
+    {
+      auto l = std::unique_lock{ m_readyTextures_mutex };
+      erase_ifv(m_readyTextures, [generation](const ReadyToCopy& ready) {
+        const bool isStale = ready.generation < generation;
+        if (isStale) {
+          releaseStagingReservation(ready);
+        }
+        return isStale;
+      });
+      m_readyTextures_cond.notify_all();
     }
   }
 
@@ -522,12 +581,12 @@ namespace dxvk {
           break;
         }
 
-        Rc<ManagedTexture> itemToProcess{};
+        PendingTextureUpload itemToProcess{};
         {
           auto l = std::unique_lock{ m_texturesToProcess_mutex };
 
           m_texturesToProcess_cond.wait(l, [this]() {
-            return !m_texturesToProcess.empty(); // proceed if non-empty
+            return m_requiresShutdown.load() || !m_texturesToProcess.empty();
           });
 
           if (m_requiresShutdown.load()) {
@@ -540,27 +599,36 @@ namespace dxvk {
           }
         }
 
-        if (!itemToProcess.ptr()) {
+        if (!itemToProcess.texture.ptr() || itemToProcess.generation < m_minValidGeneration.load()) {
           continue;
         }
 
         // wait a bit, to not over-commit texture uploads in a single frame
         {
           auto l = std::unique_lock{ m_readyTextures_mutex };
-          m_readyTextures_cond.wait(l, [this]() { return m_readyTextures.size() < MAX_TEXTURE_UPLOADS_PER_FRAME; });
+          m_readyTextures_cond.wait(l, [this]() {
+            return m_requiresShutdown.load() || m_readyTextures.size() < MAX_TEXTURE_UPLOADS_PER_FRAME;
+          });
+          if (m_requiresShutdown.load()) {
+            break;
+          }
         }
 
-        ReadyToCopy ready;
+        ReadyToCopy ready{};
         {
           {
             // we need to lock, as 'makeStagingForTextureAsset' need to access 'ManagedTexture::m_assetData'
             // which may be modified by other threads (e.g. file hot reload)
             auto lockAssetInfo = std::unique_lock{ m_assetInfoMutex };
 
+            if (itemToProcess.generation < m_minValidGeneration.load()) {
+              continue;
+            }
+
             // NOTE: using a ring buffer to alloc staging memory;
             //       it has a high chance of alloc fail -- until other threads return
             //       memory back to the ring buffer (i.e. after finishing staging->vidmem copy)
-            ready = makeStagingForTextureAsset(m_ringbuf, itemToProcess);
+            ready = makeStagingForTextureAsset(m_ringbuf, itemToProcess.texture, itemToProcess.generation);
           }
 
           while (!ready.dstTexture.ptr()) {
@@ -569,13 +637,27 @@ namespace dxvk {
 
             // repeat
             auto lockAssetInfo = std::unique_lock{ m_assetInfoMutex };
-            ready = makeStagingForTextureAsset(m_ringbuf, itemToProcess);
+            if (itemToProcess.generation < m_minValidGeneration.load()) {
+              break;
+            }
+            ready = makeStagingForTextureAsset(m_ringbuf, itemToProcess.texture, itemToProcess.generation);
           }
+        }
+
+        if (!ready.dstTexture.ptr() || ready.generation < m_minValidGeneration.load()) {
+          releaseStagingReservation(ready);
+          continue;
         }
 
         {
           auto l = std::unique_lock{ m_readyTextures_mutex };
-          m_readyTextures.push_back(std::move(ready));
+          // Recheck while holding the destination queue lock. An invalidation can
+          // happen after staging completes but before this thread reaches the queue.
+          if (ready.generation < m_minValidGeneration.load()) {
+            releaseStagingReservation(ready);
+          } else {
+            m_readyTextures.push_back(std::move(ready));
+          }
         }
       }
     } catch (const DxvkError& e) {
@@ -615,7 +697,7 @@ namespace dxvk {
       if (!m_requiresShutdown.load()) {
         auto l = std::unique_lock{ m_texturesToProcess_mutex };
         m_requiresShutdown.store(true);
-        m_texturesToProcess_cond.notify_one();
+        m_texturesToProcess_cond.notify_all();
       }
       if (m_thread.joinable()) {
         m_thread.join();
@@ -639,16 +721,30 @@ namespace dxvk {
     }
 
 
-    void queueAdd(const Rc<ManagedTexture>& tex, bool async) {
+    void queueAdd(const Rc<ManagedTexture>& tex, bool async, uint64_t generation) {
       assert(!m_requiresShutdown.load());
       assert(tex->m_state == ManagedTexture::State::kQueuedForUpload);
       if (!async) {
         m_requiresSyncFlush = true;
       }
       auto l = std::unique_lock{ m_texturesToProcess_mutex };
-      m_texturesToProcess.emplace(tex);
+      m_texturesToProcess.emplace(PendingTextureUpload { tex, generation });
       m_texturesToProcess_count = uint32_t(m_texturesToProcess.size());
       m_texturesToProcess_cond.notify_one();
+    }
+
+    void invalidateBeforeGeneration(uint64_t generation) {
+      m_minValidGeneration.store(generation);
+      {
+        auto l = std::unique_lock{ m_generationMutex };
+      }
+      {
+        auto l = std::unique_lock{ m_texturesToProcess_mutex };
+        erase_if(m_texturesToProcess, [generation](const PendingTextureUpload& upload) {
+          return upload.generation < generation;
+        });
+        m_texturesToProcess_count = uint32_t(m_texturesToProcess.size());
+      }
     }
 
 
@@ -663,11 +759,11 @@ namespace dxvk {
             break;
           }
 
-          Rc<ManagedTexture> itemToProcess{};
+          PendingTextureUpload itemToProcess{};
           {
             auto l = std::unique_lock{ m_texturesToProcess_mutex };
 
-            while (m_texturesToProcess.empty()) {
+            while (!m_requiresShutdown.load() && m_texturesToProcess.empty()) {
               m_texturesToProcess_cond.wait(l);
 
               l.unlock();
@@ -686,21 +782,32 @@ namespace dxvk {
             }
           }
 
-          const auto [mip_begin, mip_end] = itemToProcess->calcRequiredMips_BeginEnd();
+          if (!itemToProcess.texture.ptr() || itemToProcess.generation < m_minValidGeneration.load()) {
+            continue;
+          }
+
+          auto generationLock = std::unique_lock{ m_generationMutex };
+          if (itemToProcess.generation < m_minValidGeneration.load()) {
+            continue;
+          }
+
+          const auto [mip_begin, mip_end] = itemToProcess.texture->calcRequiredMips_BeginEnd();
           auto rtxioDst = allocDeviceImage(m_device.ptr(),
-                                           itemToProcess->m_assetData,
-                                           itemToProcess->imageCreateInfo(),
+                                           itemToProcess.texture->m_assetData,
+                                           itemToProcess.texture->imageCreateInfo(),
                                            mip_begin,
                                            mip_end);
-          loadTextureRtxIo(itemToProcess, rtxioDst, mip_begin, mip_end);
+          const uint64_t completionSyncpt = loadTextureRtxIo(itemToProcess.texture, rtxioDst, mip_begin, mip_end);
 
           {
             auto l = std::unique_lock{ m_waitingList_mutex };
             m_waitingList.push_back(ReadyToCopy_RTXIO{
-              /* .dstTexture = */ itemToProcess,
+              /* .dstTexture = */ itemToProcess.texture,
               /* .rtxioDst   = */ rtxioDst,
               /* .mip_begin  = */ mip_begin,
               /* .mip_end    = */ mip_end,
+              /* .completionSyncpt = */ completionSyncpt,
+              /* .generation = */ itemToProcess.generation,
             });
           }
         }
@@ -711,14 +818,14 @@ namespace dxvk {
     }
 
 
-    bool finalizeReadyRtxioTextures(DxvkContext* ctx) {
-      auto l_canBeRemovedFromWaiting = [ctx](ReadyToCopy_RTXIO& ready) -> bool {
+    bool finalizeReadyRtxioTextures(DxvkContext* ctx, uint64_t currentGeneration) {
+      auto l_canBeRemovedFromWaiting = [ctx, currentGeneration](ReadyToCopy_RTXIO& ready) -> bool {
         Rc<ManagedTexture>& tex = ready.dstTexture;
-        if (tex->m_state != ManagedTexture::State::kQueuedForUpload) {
-          return true;
-        }
-        if (!RtxIo::get().isComplete(tex->m_completionSyncpt)) {
+        if (!RtxIo::get().isComplete(ready.completionSyncpt)) {
           return false;
+        }
+        if (ready.generation != currentGeneration || tex->m_state != ManagedTexture::State::kQueuedForUpload) {
+          return true;
         }
         if (ctx) {
           if (ready.rtxioDst->image()->info().layout == VK_IMAGE_LAYOUT_UNDEFINED) {
@@ -756,12 +863,15 @@ namespace dxvk {
 
   private:
     Rc<DxvkDevice>                  m_device;
-    std::atomic<bool>               m_requiresShutdown;
+    std::atomic<bool>               m_requiresShutdown { false };
+    std::atomic<uint64_t>           m_minValidGeneration { 1 };
     dxvk::thread                    m_thread;
+
+    dxvk::mutex                     m_generationMutex;
 
     dxvk::mutex                     m_texturesToProcess_mutex;
     dxvk::condition_variable        m_texturesToProcess_cond;
-    std::unordered_set<Rc<ManagedTexture>, RcHasher> m_texturesToProcess; // TODO: remove set?
+    std::unordered_set<PendingTextureUpload, PendingTextureUploadHasher> m_texturesToProcess;
     std::atomic<uint32_t>           m_texturesToProcess_count;
 
     dxvk::mutex                     m_waitingList_mutex;
@@ -881,10 +991,11 @@ namespace dxvk {
     }
 
     texture->m_state = ManagedTexture::State::kQueuedForUpload;
+    const uint64_t generation = m_uploadGeneration.current();
     if (m_asyncThread) {
-      m_asyncThread->queueAdd(texture, async);
+      m_asyncThread->queueAdd(texture, async, generation);
     } else if (m_asyncThread_rtxio) {
-      m_asyncThread_rtxio->queueAdd(texture, async);
+      m_asyncThread_rtxio->queueAdd(texture, async, generation);
     } else {
       assert(0);
     }
@@ -898,6 +1009,12 @@ namespace dxvk {
     if (m_asyncThread) {
       for (const ReadyToCopy& ready : m_asyncThread->retrieveReadyToUploadTextures()) {
         const Rc<ManagedTexture>& tex = ready.dstTexture;
+
+        if (!m_uploadGeneration.isCurrent(ready.generation)
+         || tex->m_state != ManagedTexture::State::kQueuedForUpload) {
+          releaseStagingReservation(ready);
+          continue;
+        }
 
         tex->m_currentMipView = allocDeviceImage(m_device,
                                                  tex->m_assetData,
@@ -916,7 +1033,7 @@ namespace dxvk {
       }
     } else if (m_asyncThread_rtxio) {
       m_asyncThread_rtxio->syncPoint(RtxOptions::alwaysWaitForAsyncTextures());
-      m_asyncThread_rtxio->finalizeReadyRtxioTextures(ctx);
+      m_asyncThread_rtxio->finalizeReadyRtxioTextures(ctx, m_uploadGeneration.current());
     }
   }
 
@@ -941,11 +1058,22 @@ namespace dxvk {
     }
 
     if (!async || RtxOptions::TextureManager::neverDowngradeTextures()) {
+      tex->m_needsReloadAfterPurge.store(false);
       tex->m_canDemote = false;
       tex->requestMips(MAX_MIPS);
       scheduleTextureLoad(tex, false);
       return;
     }
+
+    // Scene purges deliberately retain ManagedTexture objects because cached
+    // replacement materials keep TextureRefs to them across map loads. Those
+    // materials do not pass through preloadTextureAsset() again, so re-arm the
+    // initial mip upload when the cached texture is first rebound in a new scene.
+    if (tex->m_needsReloadAfterPurge.exchange(false)) {
+      tex->requestMips(1);
+      scheduleTextureLoad(tex, false);
+    }
+
     updateSamplerFeedback(tex, associatedFeedbackStamp);
   }
 
@@ -1046,6 +1174,67 @@ namespace dxvk {
 
     m_textureCache.clear();
     ++m_textureCacheGeneration;
+  }
+
+  size_t RtxTextureManager::purgeResidentTextures() {
+    ScopedCpuProfileZone();
+
+    const uint64_t generation = m_uploadGeneration.invalidate();
+    if (m_asyncThread) {
+      m_asyncThread->invalidateBeforeGeneration(generation);
+    }
+    if (m_asyncThread_rtxio) {
+      m_asyncThread_rtxio->invalidateBeforeGeneration(generation);
+    }
+
+    size_t purgedTextureCount = 0;
+    {
+      // The asset map also contains textures that could not receive a sampler
+      // feedback slot, so use it as the authoritative residency list.
+      auto l = std::unique_lock{ m_assetHashToTextures_mutex };
+      for (const auto& [assetHash, texture] : m_assetHashToTextures) {
+        if (!texture.ptr()) {
+          continue;
+        }
+
+        purgedTextureCount += texture->m_currentMipView.ptr() != nullptr;
+        texture->m_currentMipView = nullptr;
+        texture->m_currentMip_begin = 0;
+        texture->m_currentMip_end = 0;
+        texture->m_requestedMips.store(0);
+        texture->m_state.store(ManagedTexture::State::kInitialized);
+        texture->m_needsReloadAfterPurge.store(true);
+      }
+    }
+
+    {
+      auto ls = std::unique_lock{ m_sf.m_idToTexture_mutex };
+      static_assert(SAMPLER_FEEDBACK_INVALID == UINT16_MAX,
+        "SAMPLER_FEEDBACK_INVALID must be 0xFFFF for memset fill to be correct");
+      memset(m_sf.m_related, 0xFF,
+        SAMPLER_FEEDBACK_MAX_TEXTURE_COUNT * SAMPLER_FEEDBACK_RELATED_PER_TEX * sizeof(m_sf.m_related[0]));
+      memset(m_sf.m_noisyMipcount, 0,
+        SAMPLER_FEEDBACK_MAX_TEXTURE_COUNT * sizeof(m_sf.m_noisyMipcount[0]));
+      memset(m_sf.m_accumulatedMipcount, 0,
+        SAMPLER_FEEDBACK_MAX_TEXTURE_COUNT * sizeof(m_sf.m_accumulatedMipcount[0]));
+      memset(m_sf.m_cachedAssetMipcount, 0,
+        SAMPLER_FEEDBACK_MAX_TEXTURE_COUNT * sizeof(m_sf.m_cachedAssetMipcount[0]));
+      memset(m_sf.m_cachedGpubuf, 0,
+        SAMPLER_FEEDBACK_MAX_TEXTURE_COUNT * sizeof(m_sf.m_cachedGpubuf[0]));
+      m_sf.m_cachedAssetMipcount_length = 0;
+    }
+
+    {
+      auto lockRequestsList = std::unique_lock{ m_hotreloadMutex };
+      m_hotreloadRequests.clear();
+    }
+
+    m_wasTextureBudgetPressure = false;
+    g_streamedTextures_usedBytes = 0;
+    m_textureCache.clear();
+    ++m_textureCacheGeneration;
+
+    return purgedTextureCount;
   }
 
   void RtxTextureManager::requestHotReload(const Rc<ManagedTexture>& tex) {

@@ -99,10 +99,10 @@ namespace dxvk {
   }
 #endif
 
-  void loadTextureRtxIo(const Rc<ManagedTexture>& texture,
-                        const Rc<DxvkImageView>& dstImage,
-                        const uint32_t mipLevels_begin,
-                        const uint32_t mipLevels_end /* non-inclusive */ ) {
+  uint64_t loadTextureRtxIo(const Rc<ManagedTexture>& texture,
+                            const Rc<DxvkImageView>& dstImage,
+                            const uint32_t mipLevels_begin,
+                            const uint32_t mipLevels_end /* non-inclusive */ ) {
 #ifdef WITH_RTXIO
     auto& rtxio = RtxIo::get();
     
@@ -119,12 +119,10 @@ namespace dxvk {
                                                          file);
       }
 
-      if (completionSyncpt) {
-        assert(texture->m_state == ManagedTexture::State::kQueuedForUpload);
-        texture->m_completionSyncpt = completionSyncpt;
-      }
+      return completionSyncpt;
     }
 #endif
+    return 0;
   }
 
   Rc<ManagedTexture> TextureUtils::createTexture(const Rc<AssetData>& assetData, ColorSpace colorSpace)
