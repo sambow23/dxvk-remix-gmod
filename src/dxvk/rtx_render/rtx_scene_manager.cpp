@@ -538,7 +538,7 @@ namespace dxvk {
     m_textureCacheGenerationValidForPreserve =
         m_device->getCommon()->getTextureManager().getTextureCacheGeneration();
 
-    manageTextureVram();
+    manageTextureVram(ctx);
 
     if (m_enqueueDelayedClear) {
       clear(ctx, true);
@@ -2624,7 +2624,30 @@ namespace dxvk {
     m_forceFreeUnusedDxvkAllocatorChunks.store(true);
   }
 
-  void SceneManager::manageTextureVram() {
+  void SceneManager::manageTextureVram(Rc<DxvkContext> ctx) {
+    struct D3D9AppMemoryUsage {
+      uint64_t textureBytes = 0;
+      uint64_t bufferBytes = 0;
+    };
+
+    const auto getD3D9AppMemoryUsage = [this]() {
+      D3D9AppMemoryUsage result;
+      const VkPhysicalDeviceMemoryProperties memoryProperties =
+        m_device->adapter()->memoryProperties();
+
+      for (uint32_t i = 0; i < memoryProperties.memoryHeapCount; i++) {
+        if ((memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0) {
+          continue;
+        }
+
+        const DxvkMemoryStats stats = m_device->getMemoryStats(i);
+        result.textureBytes += stats.usedByCategory(DxvkMemoryStats::Category::AppTexture);
+        result.bufferBytes += stats.usedByCategory(DxvkMemoryStats::Category::AppBuffer);
+      }
+
+      return result;
+    };
+
     bool freeUnused = false;
     bool freeTextures = false;
     {
@@ -2637,17 +2660,43 @@ namespace dxvk {
       }
     }
 
+    D3D9AppMemoryUsage appMemoryBefore;
     if (freeTextures) {
-      m_device->getCommon()->getTextureManager().clear();
+      appMemoryBefore = getD3D9AppMemoryUsage();
+    }
 
-      if (m_opacityMicromapManager) {
-        m_opacityMicromapManager->clear();
-      }
+    if (freeTextures) {
+      // The explicit texture-free request is stronger than the passive scene clear:
+      // wait for the GPU, destroy scene references, then release every resident
+      // replacement image. Asset definitions remain cached and will stream again.
+      clear(ctx, true);
+      m_enqueueDelayedClear = false;
+
+      const size_t purgedTextureCount =
+        m_device->getCommon()->getTextureManager().purgeResidentTextures();
+      Logger::info(str::format("[RTX] Explicit texture VRAM purge released ",
+        purgedTextureCount, " resident replacement texture image(s)."));
     }
 
     if (freeUnused) {
       // DXVK doesnt free chunks for us by default (its high water mark) so force release some memory back to the system here.
       m_device->getCommon()->memoryManager().freeUnusedChunks();
+    }
+
+    if (freeTextures) {
+      const D3D9AppMemoryUsage appMemoryAfter = getD3D9AppMemoryUsage();
+      const uint64_t releasedTextureBytes = appMemoryBefore.textureBytes > appMemoryAfter.textureBytes
+        ? appMemoryBefore.textureBytes - appMemoryAfter.textureBytes
+        : 0;
+      const uint64_t releasedBufferBytes = appMemoryBefore.bufferBytes > appMemoryAfter.bufferBytes
+        ? appMemoryBefore.bufferBytes - appMemoryAfter.bufferBytes
+        : 0;
+
+      Logger::info(str::format(
+        "[RTX] D3D9 app VRAM purge: textures ", appMemoryBefore.textureBytes,
+        " -> ", appMemoryAfter.textureBytes, " bytes (released ", releasedTextureBytes,
+        "), buffers ", appMemoryBefore.bufferBytes, " -> ", appMemoryAfter.bufferBytes,
+        " bytes (released ", releasedBufferBytes, ")."));
     }
   }
 

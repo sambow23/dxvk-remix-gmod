@@ -856,6 +856,8 @@ namespace fork_hooks {
       out_stats->usedOpacityMicromapBytes          += stats.usedByCategory(DxvkMemoryStats::Category::RTXOpacityMicromap);
       out_stats->usedMaterialTextureBytes          += stats.usedByCategory(DxvkMemoryStats::Category::RTXMaterialTexture);
       out_stats->usedRenderTargetBytes             += stats.usedByCategory(DxvkMemoryStats::Category::RTXRenderTarget);
+      out_stats->usedAppTextureBytes               += stats.usedByCategory(DxvkMemoryStats::Category::AppTexture);
+      out_stats->usedAppBufferBytes                += stats.usedByCategory(DxvkMemoryStats::Category::AppBuffer);
     }
     out_stats->poolRetainedBytes =
       (out_stats->totalAllocatedBytes > out_stats->totalUsedBytes)
