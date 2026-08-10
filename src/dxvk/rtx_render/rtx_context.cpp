@@ -645,6 +645,17 @@ namespace dxvk {
 
       m_execBarriers.recordCommands(m_cmd);
 
+      // Skinning is recorded on a dedicated context. Submit the current main
+      // command list first so vertex uploads/copies are visible to skinning;
+      // RtxContext::flushCommandList then submits the skinning list before the
+      // fresh main command list records BLAS updates and ray tracing. Without
+      // this boundary, late skinned draws (notably dynamic facial flexes) can be
+      // consumed one frame behind rigid eyes or geometry submitted by an
+      // earlier incidental flush.
+      if (common->metaGeometryUtils().hasPendingSkinningCommands()) {
+        flushCommandList();
+      }
+
       ScopedGpuProfileZone(this, "InjectRTX");
 
       // Signal Reflex rendering start

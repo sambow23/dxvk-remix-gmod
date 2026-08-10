@@ -3211,6 +3211,12 @@ namespace dxvk {
         ImGui::Unindent();
       }
 
+      if (RemixGui::CollapsingHeader("GMod Diagnostics", collapsingHeaderClosedFlags)) {
+        ImGui::Indent();
+        RemixGui::Checkbox("Enable Instrumentation", &RtxOptions::enableInstrumentationObject());
+        ImGui::Unindent();
+      }
+
       if (RemixGui::CollapsingHeader("Texture Parameters", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         RemixGui::DragFloat("Force Cutout Alpha", &RtxOptions::forceCutoutAlphaObject(), 0.01f, 0.0f, 1.0f, "%.3f", sliderFlags);

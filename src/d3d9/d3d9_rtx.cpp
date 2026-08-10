@@ -885,8 +885,9 @@ namespace dxvk {
     const Matrix4* const boneMatrices = m_stagedBones.stageBones(
         d3d9State().transforms.data() + startBoneTransform, nMat);
 
-    const bool collectSkinningDebug = m_parent->GetDXVKDevice()->getCommon()->getResources()
-      .getRaytracingOutput().m_primaryObjectPicking.isValid();
+    const bool collectSkinningDebug = RtxOptions::enableInstrumentation()
+      && m_parent->GetDXVKDevice()->getCommon()->getResources()
+        .getRaytracingOutput().m_primaryObjectPicking.isValid();
 
     return m_pGeometryWorkers->Schedule([boneMatrices, blendIndices, numBonesPerVertex, vertexCount, collectSkinningDebug]()->SkinningData {
       ScopedCpuProfileZone();
@@ -1158,6 +1159,37 @@ namespace dxvk {
     // Update the drawcall state with texture stage info
     setTextureStageState(d3d9State(), firstStage, useStageTextureFactorBlending, useMultipleStageTextureFactorBlending,
                          m_activeDrawCallState.materialData, m_activeDrawCallState.transformData);
+
+    if constexpr (FixedFunction) {
+      // GMod's combined Source eye pass correctly keeps the sclera on UV0 and
+      // projects only the secondary iris stage. Remix normally derives TexGen
+      // from the first texture, so recognize the tagged iris transform on any
+      // active fixed-function stage and expose it as the draw's eye projection.
+      // This preserves correct raster UVs while retaining the single-draw
+      // sclera + iris inputs required by Remix's eye material.
+      constexpr float kSourceEyeMetadataTag = 54321.0f;
+      for (uint32_t stage = 0; stage < caps::TextureStageCount; stage++) {
+        const DWORD transformFlags =
+          d3d9State().textureStages[stage][DXVK_TSS_TEXTURETRANSFORMFLAGS];
+        const DWORD texcoordIndex =
+          d3d9State().textureStages[stage][DXVK_TSS_TEXCOORDINDEX];
+        if ((transformFlags & 0x3) == D3DTTFF_DISABLE ||
+            texcoordIndex != D3DTSS_TCI_CAMERASPACEPOSITION) {
+          continue;
+        }
+
+        const Matrix4& candidate = d3d9State().transforms[
+          GetTransformIndex(D3DTS_TEXTURE0) + stage];
+        const float tagDifference =
+          candidate.data[3].z - kSourceEyeMetadataTag;
+        if (tagDifference > -0.5f && tagDifference < 0.5f) {
+          m_activeDrawCallState.transformData.textureTransform = candidate;
+          m_activeDrawCallState.transformData.texgenMode =
+            TexGenMode::ViewPositions;
+          break;
+        }
+      }
+    }
 
     if (d3d9State().textures[firstStage]) {
       m_activeDrawCallState.setupCategoriesForTexture();
