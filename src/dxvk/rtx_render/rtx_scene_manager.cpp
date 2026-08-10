@@ -19,8 +19,11 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
+#include <cstring>
+#include <iomanip>
 #include <limits>
 #include <mutex>
+#include <sstream>
 #include <vector>
 
 #include "rtx_asset_replacer.h"
@@ -1513,19 +1516,54 @@ namespace dxvk {
       ObjectPickingValue objectPickingValue) {
     const bool objectPickingActive = m_device->getCommon()->getResources().getRaytracingOutput()
       .m_primaryObjectPicking.isValid();
-    if (!objectPickingActive || !g_allowMappingLegacyHashToObjectPickingValue) {
+    if (!objectPickingActive) {
       return;
     }
 
     auto meta = DrawCallMetaInfo {};
-    XXH64_hash_t h = drawCallState.getMaterialData().getColorTexture().getImageHash();
-    if (h != kEmptyHash) {
-      meta.legacyTextureHash = h;
+    if (g_allowMappingLegacyHashToObjectPickingValue) {
+      XXH64_hash_t h = drawCallState.getMaterialData().getColorTexture().getImageHash();
+      if (h != kEmptyHash) {
+        meta.legacyTextureHash = h;
+      }
+      h = drawCallState.getMaterialData().getColorTexture2().getImageHash();
+      if (h != kEmptyHash) {
+        meta.legacyTextureHash2 = h;
+      }
     }
-    h = drawCallState.getMaterialData().getColorTexture2().getImageHash();
-    if (h != kEmptyHash) {
-      meta.legacyTextureHash2 = h;
+
+    const RasterGeometry& geometry = drawCallState.getGeometryData();
+    meta.externalMesh = geometry.externalMesh != nullptr;
+    if (meta.externalMesh) {
+      meta.meshHash = reinterpret_cast<XXH64_hash_t>(geometry.externalMesh);
+    } else {
+      meta.meshHash = drawCallState.getHash(RtxOptions::geometryAssetHashRule());
+      meta.geometryHashes = geometry.hashes;
+      meta.vertexCount = geometry.vertexCount;
+      meta.indexCount = geometry.indexCount;
+      meta.positionStride = geometry.positionBuffer.stride();
+      meta.topology = geometry.topology;
+      meta.indexType = geometry.indexBuffer.defined()
+        ? geometry.indexBuffer.indexType()
+        : VkIndexType(0);
+      meta.positionFormat = geometry.positionBuffer.vertexFormat();
     }
+
+    const SkinningData& skinning = drawCallState.getSkinningState();
+    meta.numBones = skinning.numBones;
+    meta.numBonesPerVertex = skinning.numBonesPerVertex;
+    meta.minBoneIndex = skinning.minBoneIndex;
+    meta.boneHash = skinning.boneHash;
+    meta.boneMatrixDebugSampleCount = static_cast<uint32_t>(skinning.pBoneMatrices.size());
+    if (meta.boneMatrixDebugSampleCount > DrawCallMetaInfo::MaxBoneMatrixDebugSamples) {
+      meta.boneMatrixDebugSampleCount = DrawCallMetaInfo::MaxBoneMatrixDebugSamples;
+    }
+    for (uint32_t bone = 0; bone < meta.boneMatrixDebugSampleCount; bone++) {
+      meta.boneMatrixDebugSamples[bone] = skinning.pBoneMatrices[bone];
+    }
+    meta.blendIndicesHash = skinning.blendIndicesHash;
+    meta.blendIndexDebugSamples = skinning.blendIndexDebugSamples;
+    meta.blendIndexDebugSampleCount = skinning.blendIndexDebugSampleCount;
 
     std::lock_guard lock { m_drawCallMeta.mutex };
     auto [iter, isNew] = m_drawCallMeta.infos[m_drawCallMeta.ticker].emplace(objectPickingValue, meta);
@@ -1937,6 +1975,198 @@ namespace dxvk {
       }
     }
     return std::nullopt;
+  }
+
+  std::optional<XXH64_hash_t> SceneManager::findMeshHashByObjectPickingValue(uint32_t objectPickingValue) {
+    std::lock_guard lock { m_drawCallMeta.mutex };
+
+    auto tryFindIn = [](const std::unordered_map<ObjectPickingValue, DrawCallMetaInfo>& table, ObjectPickingValue toFind)
+      -> std::optional<XXH64_hash_t> {
+      auto found = table.find(toFind);
+      if (found != table.end()) {
+        const DrawCallMetaInfo& meta = found->second;
+        if (meta.meshHash != kEmptyHash) {
+          return meta.meshHash;
+        }
+      }
+      return std::nullopt;
+    };
+
+    const int ticksToCheck[] = {
+      m_drawCallMeta.ticker, // current tick
+      (m_drawCallMeta.ticker + m_drawCallMeta.MaxTicks - 1) % m_drawCallMeta.MaxTicks, // prev tick
+    };
+    for (int tick : ticksToCheck) {
+      if (m_drawCallMeta.ready[tick]) {
+        if (auto h = tryFindIn(m_drawCallMeta.infos[tick], objectPickingValue)) {
+          return h;
+        }
+      }
+    }
+    return std::nullopt;
+  }
+
+  void SceneManager::logMeshHashByObjectPickingValue(uint32_t objectPickingValue) {
+    std::lock_guard lock { m_drawCallMeta.mutex };
+
+    auto tryFindIn = [](const std::unordered_map<ObjectPickingValue, DrawCallMetaInfo>& table, ObjectPickingValue toFind)
+      -> const DrawCallMetaInfo* {
+      auto found = table.find(toFind);
+      return found != table.end() ? &found->second : nullptr;
+    };
+
+    const DrawCallMetaInfo* pMeta = nullptr;
+    const int ticksToCheck[] = {
+      m_drawCallMeta.ticker,
+      (m_drawCallMeta.ticker + m_drawCallMeta.MaxTicks - 1) % m_drawCallMeta.MaxTicks,
+    };
+    for (int tick : ticksToCheck) {
+      if (m_drawCallMeta.ready[tick]) {
+        pMeta = tryFindIn(m_drawCallMeta.infos[tick], objectPickingValue);
+        if (pMeta != nullptr) {
+          break;
+        }
+      }
+    }
+
+    if (pMeta == nullptr || pMeta->meshHash == kEmptyHash) {
+      Logger::warn(str::format(
+        "[Mesh-Hash-Debug] No retained mesh metadata for object picking value 0x",
+        std::hex, objectPickingValue));
+      return;
+    }
+
+    if (pMeta->externalMesh) {
+      Logger::info(str::format(
+        "[Mesh-Hash-Debug]\n",
+        "  objectPickingValue: 0x", std::hex, objectPickingValue, "\n",
+        "  assetHash: 0x", pMeta->meshHash, "\n",
+        "  source: Remix API external mesh handle (no D3D9 geometry components)"));
+      return;
+    }
+
+    const GeometryHashes& hashes = pMeta->geometryHashes;
+    const bool hasLegacy0 = hashes[HashComponents::LegacyPositions0] != kEmptyHash
+      && hashes[HashComponents::LegacyIndices] != kEmptyHash;
+    const bool hasLegacy1 = hashes[HashComponents::LegacyPositions1] != kEmptyHash
+      && hashes[HashComponents::LegacyIndices] != kEmptyHash;
+
+    std::ostringstream blendIndexSamples;
+    const uint32_t blendIndexTupleSize = pMeta->numBonesPerVertex > 0
+      ? pMeta->numBonesPerVertex
+      : 1;
+    for (uint32_t sample = 0; sample < pMeta->blendIndexDebugSampleCount; sample++) {
+      if (sample != 0) {
+        blendIndexSamples << ((sample % blendIndexTupleSize) == 0 ? "; " : ", ");
+      }
+      blendIndexSamples << static_cast<uint32_t>(pMeta->blendIndexDebugSamples[sample]);
+    }
+
+    std::ostringstream boneMatrixSamples;
+    boneMatrixSamples << std::setprecision(9);
+    for (uint32_t bone = 0; bone < pMeta->boneMatrixDebugSampleCount; bone++) {
+      const Matrix4& matrix = pMeta->boneMatrixDebugSamples[bone];
+      boneMatrixSamples
+        << "\n      [" << std::dec << bone << "]: "
+        << "[(" << matrix[0][0] << ", " << matrix[0][1] << ", " << matrix[0][2] << ", " << matrix[0][3] << "), "
+        << "(" << matrix[1][0] << ", " << matrix[1][1] << ", " << matrix[1][2] << ", " << matrix[1][3] << "), "
+        << "(" << matrix[2][0] << ", " << matrix[2][1] << ", " << matrix[2][2] << ", " << matrix[2][3] << "), "
+        << "(" << matrix[3][0] << ", " << matrix[3][1] << ", " << matrix[3][2] << ", " << matrix[3][3] << ")]";
+    }
+
+    std::string canonicalDiagnostics;
+    if (hashes.debugData != nullptr) {
+      const GeometryHashDebugData& debug = *hashes.debugData;
+
+      std::ostringstream positionSamples;
+      positionSamples << std::setprecision(9);
+      for (uint32_t i = 0; i < debug.positionSampleCount; i++) {
+        std::array<float, 3> position {};
+        std::memcpy(position.data(), debug.positionSampleBits[i].data(), sizeof(position));
+        positionSamples
+          << "\n      [" << std::dec << i << "]: ("
+          << position[0] << ", " << position[1] << ", " << position[2] << ")"
+          << " bits=(0x" << std::hex << std::setfill('0') << std::setw(8) << debug.positionSampleBits[i][0]
+          << ", 0x" << std::setw(8) << debug.positionSampleBits[i][1]
+          << ", 0x" << std::setw(8) << debug.positionSampleBits[i][2] << ")"
+          << std::setfill(' ');
+      }
+
+      std::ostringstream indexSamples;
+      for (uint32_t i = 0; i < debug.indexSampleCount; i++) {
+        if (i != 0) {
+          indexSamples << ", ";
+        }
+        indexSamples << debug.indexSamples[i];
+      }
+
+      canonicalDiagnostics = str::format(
+        "\n  canonicalDiagnostics:\n",
+        "    quantizationStep: ", std::setprecision(9), GeometryHashDebugData::QuantizationStep, " source units\n",
+        "    positionFormatSupported: ", debug.positionFormatSupported, "\n",
+        "    positionCanonicalizationValid: ", debug.positionCanonicalizationValid, "\n",
+        "    triangleCanonicalizationValid: ", debug.triangleCanonicalizationValid, "\n",
+        "    quantizedCanonicalizationValid: ", debug.quantizedCanonicalizationValid, "\n",
+        "    streamVertexCount: ", debug.streamVertexCount, "\n",
+        "    referencedVertexCount: ", debug.referencedVertexCount, "\n",
+        "    triangleCount: ", debug.triangleCount, "\n",
+        "    invalidIndexCount: ", debug.invalidIndexCount, "\n",
+        "    nonFinitePositionCount: ", debug.nonFinitePositionCount, "\n",
+        std::hex,
+        "    canonicalPositionExact: 0x", debug.canonicalPositionHashExact, "\n",
+        "    canonicalPositionQuantized: 0x", debug.canonicalPositionHashQuantized, "\n",
+        "    canonicalTrianglesExact: 0x", debug.canonicalTriangleHashExact, "\n",
+        "    canonicalTrianglesQuantized: 0x", debug.canonicalTriangleHashQuantized, "\n",
+        std::dec,
+        "    boundsMin: (", debug.boundsMin[0], ", ", debug.boundsMin[1], ", ", debug.boundsMin[2], ")\n",
+        "    boundsMax: (", debug.boundsMax[0], ", ", debug.boundsMax[1], ", ", debug.boundsMax[2], ")\n",
+        "    positionStreamSamples:", positionSamples.str(), "\n",
+        "    indexStreamSamples: [", indexSamples.str(), "]");
+    } else {
+      canonicalDiagnostics = "\n  canonicalDiagnostics: not captured while geometry buffers were available";
+    }
+
+    Logger::info(str::format(
+      "[Mesh-Hash-Debug]\n",
+      "  objectPickingValue: 0x", std::hex, objectPickingValue, "\n",
+      "  assetHash: 0x", pMeta->meshHash, "\n",
+      "  assetRuleMask: 0x", RtxOptions::geometryAssetHashRule().raw(), "\n",
+      "  generationRuleMask: 0x", RtxOptions::geometryHashGenerationRule().raw(), "\n",
+      "  components:\n",
+      "    positions: 0x", hashes[HashComponents::VertexPosition], "\n",
+      "    legacyPositions0: 0x", hashes[HashComponents::LegacyPositions0], "\n",
+      "    legacyPositions1: 0x", hashes[HashComponents::LegacyPositions1], "\n",
+      "    texcoords: 0x", hashes[HashComponents::VertexTexcoord], "\n",
+      "    indices: 0x", hashes[HashComponents::Indices], "\n",
+      "    legacyIndices: 0x", hashes[HashComponents::LegacyIndices], "\n",
+      "    geometryDescriptor: 0x", hashes[HashComponents::GeometryDescriptor], "\n",
+      "    vertexLayout: 0x", hashes[HashComponents::VertexLayout], "\n",
+      "    vertexShader: 0x", hashes[HashComponents::VertexShader], "\n",
+      "  combined:\n",
+      "    topological: 0x", hashes.getHashForRule<rules::TopologicalHash>(), "\n",
+      "    vertexData: 0x", hashes.getHashForRule<rules::VertexDataHash>(), "\n",
+      "    fullGeometry: 0x", hashes.getHashForRule<rules::FullGeometryHash>(), "\n",
+      "    legacyAsset0: ", hasLegacy0 ? str::format("0x", hashes.getHashForRule<rules::LegacyAssetHash0>()) : std::string("not generated"), "\n",
+      "    legacyAsset1: ", hasLegacy1 ? str::format("0x", hashes.getHashForRule<rules::LegacyAssetHash1>()) : std::string("not generated"), "\n",
+      "  descriptorInputs:\n",
+      std::dec,
+      "    vertexCount: ", pMeta->vertexCount, "\n",
+      "    indexCount: ", pMeta->indexCount, "\n",
+      "    topology: ", static_cast<uint32_t>(pMeta->topology), "\n",
+      "    indexType: ", static_cast<uint32_t>(pMeta->indexType), "\n",
+      "    positionStride: ", pMeta->positionStride, "\n",
+      "    positionFormat: ", static_cast<uint32_t>(pMeta->positionFormat),
+      "\n  skinningInputs:\n",
+      "    numBones: ", pMeta->numBones, "\n",
+      "    numBonesPerVertex: ", pMeta->numBonesPerVertex, "\n",
+      "    minBoneIndex: ", pMeta->minBoneIndex, "\n",
+      std::hex,
+      "    boneHash: 0x", pMeta->boneHash, "\n",
+      "    blendIndicesHash: 0x", pMeta->blendIndicesHash, "\n",
+      std::dec,
+      "    blendIndexSamples: [", blendIndexSamples.str(), "]\n",
+      "    boneMatrixSamples:", boneMatrixSamples.str(),
+      canonicalDiagnostics));
   }
 
   std::vector<ObjectPickingValue> SceneManager::gatherObjectPickingValuesByTextureHash(XXH64_hash_t texHash) {

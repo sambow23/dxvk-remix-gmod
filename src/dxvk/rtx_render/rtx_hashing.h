@@ -21,6 +21,8 @@
 */
 #pragma once
 
+#include <array>
+#include <memory>
 #include <vector>
 
 #include "rtx_constants.h"
@@ -30,6 +32,35 @@
 #include "../util/util_flags.h"
 
 namespace dxvk {
+  struct GeometryHashDebugData {
+    static constexpr float QuantizationStep = 0.01f;
+    static constexpr uint32_t MaxPositionSamples = 8;
+    static constexpr uint32_t MaxIndexSamples = 18;
+
+    XXH64_hash_t canonicalPositionHashExact { kEmptyHash };
+    XXH64_hash_t canonicalPositionHashQuantized { kEmptyHash };
+    XXH64_hash_t canonicalTriangleHashExact { kEmptyHash };
+    XXH64_hash_t canonicalTriangleHashQuantized { kEmptyHash };
+
+    uint32_t streamVertexCount {};
+    uint32_t referencedVertexCount {};
+    uint32_t triangleCount {};
+    uint32_t invalidIndexCount {};
+    uint32_t nonFinitePositionCount {};
+
+    std::array<float, 3> boundsMin {};
+    std::array<float, 3> boundsMax {};
+    std::array<std::array<uint32_t, 3>, MaxPositionSamples> positionSampleBits {};
+    std::array<uint32_t, MaxIndexSamples> indexSamples {};
+    uint32_t positionSampleCount {};
+    uint32_t indexSampleCount {};
+
+    bool positionFormatSupported {};
+    bool positionCanonicalizationValid {};
+    bool triangleCanonicalizationValid {};
+    bool quantizedCanonicalizationValid {};
+  };
+
   enum class HashComponents : uint32_t {
     VertexPosition = 0,
     LegacyPositions0,
@@ -96,6 +127,8 @@ namespace dxvk {
         precombined[4] = getHashForRuleImpl<rules::LegacyAssetHash1>();
       }
     }
+
+    std::shared_ptr<const GeometryHashDebugData> debugData;
 
     template<uint32_t rule>
     XXH64_hash_t getHashForRule() const {
