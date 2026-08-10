@@ -128,7 +128,7 @@ namespace dxvk {
       DrawCallState& drawCall,
       XXH64_hash_t& textureHash);
 
-    // Stores per-draw texture hash metadata in SceneManager::m_drawCallMeta
+    // Stores per-draw mesh and texture hash metadata in SceneManager::m_drawCallMeta
     // when object picking is active, mirroring the D3D9 draw path.
     // NOTE: requires SceneManager to declare fork_hooks::externalDrawObjectPicking
     // as a friend (or m_drawCallMeta to be made public) for the implementation

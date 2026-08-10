@@ -885,7 +885,10 @@ namespace dxvk {
     const Matrix4* const boneMatrices = m_stagedBones.stageBones(
         d3d9State().transforms.data() + startBoneTransform, nMat);
 
-    return m_pGeometryWorkers->Schedule([boneMatrices, blendIndices, numBonesPerVertex, vertexCount]()->SkinningData {
+    const bool collectSkinningDebug = m_parent->GetDXVKDevice()->getCommon()->getResources()
+      .getRaytracingOutput().m_primaryObjectPicking.isValid();
+
+    return m_pGeometryWorkers->Schedule([boneMatrices, blendIndices, numBonesPerVertex, vertexCount, collectSkinningDebug]()->SkinningData {
       ScopedCpuProfileZone();
       uint32_t numBones = numBonesPerVertex;
 
@@ -901,15 +904,37 @@ namespace dxvk {
         }
         numBones = maxBoneIndex + 1;
 
-        // Release this memory back to the staging allocator
-        blendIndices.ref->release(DxvkAccess::Read);
-        blendIndices.ref->decRef();
       }
 
       // Pass bone data to RT back-end
 
       SkinningData skinningData;
       skinningData.pBoneMatrices.reserve(numBones);
+
+      if (collectSkinningDebug && blendIndices.pBase != nullptr) {
+        const uint8_t* pBlendIndices = blendIndices.pBase;
+        XXH64_hash_t blendIndicesHash = 0;
+        for (uint32_t vertex = 0; vertex < vertexCount; vertex++) {
+          blendIndicesHash = XXH3_64bits_withSeed(
+            pBlendIndices, numBonesPerVertex, blendIndicesHash);
+
+          for (uint32_t component = 0;
+               component < numBonesPerVertex &&
+               skinningData.blendIndexDebugSampleCount < SkinningData::MaxBlendIndexDebugSamples;
+               component++) {
+            skinningData.blendIndexDebugSamples[skinningData.blendIndexDebugSampleCount++] =
+              pBlendIndices[component];
+          }
+          pBlendIndices += blendIndices.stride;
+        }
+        skinningData.blendIndicesHash = blendIndicesHash;
+      }
+
+      if (blendIndices.ref) {
+        // Release only after optional diagnostics finish reading the stream.
+        blendIndices.ref->release(DxvkAccess::Read);
+        blendIndices.ref->decRef();
+      }
 
       for (uint32_t n = 0; n < numBones; n++) {
         skinningData.pBoneMatrices.push_back(boneMatrices[n]);

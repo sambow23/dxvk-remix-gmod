@@ -102,7 +102,7 @@ namespace fork_hooks {
   // ---------------------------------------------------------------------------
   // externalDrawObjectPicking
   //
-  // Stores per-draw texture hash metadata in SceneManager::m_drawCallMeta when
+  // Stores per-draw mesh and texture hash metadata in SceneManager::m_drawCallMeta when
   // object picking is active, mirroring the D3D9 draw path which populates
   // m_drawCallMeta in processDrawCallState. API draws supply their own
   // drawCallID via remixapi_InstanceInfoObjectPickingEXT, so we store it here.
@@ -117,16 +117,33 @@ namespace fork_hooks {
       DrawCallState& drawCall,
       XXH64_hash_t textureHash,
       SceneManager& scene) {
-    // Store texture hash metadata for object picking (mirrors the D3D9 draw
+    // Store mesh and texture hash metadata for object picking (mirrors the D3D9 draw
     // path which populates m_drawCallMeta in processDrawCallState). API draws
     // supply their own drawCallID via remixapi_InstanceInfoObjectPickingEXT,
     // so we hash it in directly here.
     const bool objectPickingActive = device.getCommon()->getResources().getRaytracingOutput()
       .m_primaryObjectPicking.isValid();
-    if (objectPickingActive && drawCall.drawCallID != 0 &&
-        textureHash != 0 && textureHash != kEmptyHash) {
+    if (objectPickingActive && drawCall.drawCallID != 0) {
       auto meta = SceneManager::DrawCallMetaInfo {};
-      meta.legacyTextureHash = textureHash;
+      if (textureHash != 0 && textureHash != kEmptyHash) {
+        meta.legacyTextureHash = textureHash;
+      }
+      const RasterGeometry& geometry = drawCall.getGeometryData();
+      meta.externalMesh = geometry.externalMesh != nullptr;
+      if (meta.externalMesh) {
+        meta.meshHash = reinterpret_cast<XXH64_hash_t>(geometry.externalMesh);
+      } else {
+        meta.meshHash = drawCall.getHash(RtxOptions::geometryAssetHashRule());
+        meta.geometryHashes = geometry.hashes;
+        meta.vertexCount = geometry.vertexCount;
+        meta.indexCount = geometry.indexCount;
+        meta.positionStride = geometry.positionBuffer.stride();
+        meta.topology = geometry.topology;
+        meta.indexType = geometry.indexBuffer.defined()
+          ? geometry.indexBuffer.indexType()
+          : VkIndexType(0);
+        meta.positionFormat = geometry.positionBuffer.vertexFormat();
+      }
 
       std::lock_guard lock { scene.m_drawCallMeta.mutex };
       auto [iter, isNew] = scene.m_drawCallMeta.infos[scene.m_drawCallMeta.ticker].emplace(drawCall.drawCallID, meta);

@@ -293,11 +293,16 @@ private:
 // circular includes.  This probably requires a 
 // general cleanup.
 struct SkinningData {
+  static constexpr uint32_t MaxBlendIndexDebugSamples = 24;
+
   std::vector<Matrix4> pBoneMatrices;
   uint32_t numBones = 0;
   uint32_t numBonesPerVertex = 0;
   XXH64_hash_t boneHash = 0;
   uint32_t minBoneIndex = 0; // This is the smallest index of all bones actually used by vertex data
+  XXH64_hash_t blendIndicesHash = 0;
+  std::array<uint8_t, MaxBlendIndexDebugSamples> blendIndexDebugSamples {};
+  uint32_t blendIndexDebugSampleCount = 0;
 
   void computeHash() {
     if (numBones > 0) {
