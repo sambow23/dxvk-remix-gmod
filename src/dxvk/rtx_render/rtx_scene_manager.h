@@ -252,6 +252,8 @@ public:
   [[nodiscard]] SamplerIndex trackSampler(Rc<DxvkSampler> sampler);
 
   std::optional<XXH64_hash_t> findLegacyTextureHashByObjectPickingValue(uint32_t objectPickingValue);
+  std::optional<XXH64_hash_t> findMeshHashByObjectPickingValue(uint32_t objectPickingValue);
+  void logMeshHashByObjectPickingValue(uint32_t objectPickingValue);
   std::vector<ObjectPickingValue> gatherObjectPickingValuesByTextureHash(XXH64_hash_t texHash);
 
   // Replacement material hash tracking
@@ -424,8 +426,28 @@ private:
   float m_uniqueObjectSearchDistance = 1.f;
 
   struct DrawCallMetaInfo {
+    static constexpr uint32_t MaxBoneMatrixDebugSamples = 64;
+
     XXH64_hash_t legacyTextureHash { kEmptyHash };
     XXH64_hash_t legacyTextureHash2 { kEmptyHash };
+    XXH64_hash_t meshHash { kEmptyHash };
+    GeometryHashes geometryHashes {};
+    uint32_t vertexCount {};
+    uint32_t indexCount {};
+    uint32_t positionStride {};
+    VkPrimitiveTopology topology { VkPrimitiveTopology(0) };
+    VkIndexType indexType { VkIndexType(0) };
+    VkFormat positionFormat { VkFormat(0) };
+    uint32_t numBones {};
+    uint32_t numBonesPerVertex {};
+    uint32_t minBoneIndex {};
+    XXH64_hash_t boneHash {};
+    std::array<Matrix4, MaxBoneMatrixDebugSamples> boneMatrixDebugSamples {};
+    uint32_t boneMatrixDebugSampleCount {};
+    XXH64_hash_t blendIndicesHash {};
+    std::array<uint8_t, SkinningData::MaxBlendIndexDebugSamples> blendIndexDebugSamples {};
+    uint32_t blendIndexDebugSampleCount {};
+    bool externalMesh {};
   };
   struct DrawCallMeta {
     constexpr static inline uint8_t MaxTicks = 2;

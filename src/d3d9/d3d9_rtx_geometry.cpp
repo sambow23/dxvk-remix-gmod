@@ -1,10 +1,21 @@
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <type_traits>
 #include <vector>
+
 #include "d3d9_device.h"
 #include "d3d9_rtx.h"
 #include "d3d9_rtx_utils.h"
 #include "d3d9_state.h"
 #include "../dxvk/dxvk_buffer.h"
+#include "../dxvk/dxvk_objects.h"
 #include "../dxvk/rtx_render/rtx_hashing.h"
+#include "../dxvk/rtx_render/rtx_resources.h"
 #include "../util/util_fastops.h"
 
 namespace dxvk {
@@ -24,6 +35,251 @@ namespace dxvk {
     { HashComponents::VertexPosition,   VertexRegions::Position },
     { HashComponents::VertexTexcoord,   VertexRegions::Texcoord },
   };
+
+  namespace {
+    using ExactPosition = std::array<uint32_t, 3>;
+    using QuantizedPosition = std::array<int64_t, 3>;
+    using ExactTriangle = std::array<uint32_t, 9>;
+    using QuantizedTriangle = std::array<int64_t, 9>;
+
+    ExactPosition readPositionBits(const HashQuery& positions, uint32_t vertexIndex) {
+      ExactPosition result {};
+      std::memcpy(result.data(), positions.pBase + vertexIndex * positions.stride, sizeof(result));
+      return result;
+    }
+
+    std::array<float, 3> positionBitsToFloats(const ExactPosition& bits) {
+      std::array<float, 3> result {};
+      std::memcpy(result.data(), bits.data(), sizeof(result));
+      return result;
+    }
+
+    bool quantizePosition(const std::array<float, 3>& position, QuantizedPosition& result) {
+      for (uint32_t component = 0; component < result.size(); component++) {
+        if (!std::isfinite(position[component])) {
+          return false;
+        }
+
+        const double scaled = static_cast<double>(position[component]) / GeometryHashDebugData::QuantizationStep;
+        if (scaled < static_cast<double>(std::numeric_limits<int64_t>::min())
+            || scaled > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+          return false;
+        }
+        result[component] = static_cast<int64_t>(std::llround(scaled));
+      }
+      return true;
+    }
+
+    template<typename T>
+    std::shared_ptr<const GeometryHashDebugData> buildGeometryHashDebugData(
+        size_t indexCount,
+        const void* pIndexData,
+        const HashQuery& positions,
+        const std::vector<T>& uniqueIndices,
+        VkPrimitiveTopology topology) {
+      constexpr bool hasIndices = !std::is_same_v<T, NoIndices>;
+
+      auto result = std::make_shared<GeometryHashDebugData>();
+      result->streamVertexCount = positions.stride != 0
+        ? static_cast<uint32_t>(positions.size / positions.stride)
+        : 0;
+      result->positionFormatSupported = positions.pBase != nullptr
+        && positions.elementSize >= sizeof(float) * 3
+        && positions.stride >= sizeof(float) * 3;
+
+      if (!result->positionFormatSupported) {
+        return result;
+      }
+
+      result->positionSampleCount = std::min(
+        result->streamVertexCount,
+        GeometryHashDebugData::MaxPositionSamples);
+      for (uint32_t i = 0; i < result->positionSampleCount; i++) {
+        result->positionSampleBits[i] = readPositionBits(positions, i);
+      }
+
+      if constexpr (hasIndices) {
+        if (pIndexData == nullptr) {
+          return result;
+        }
+        result->indexSampleCount = std::min(
+          static_cast<uint32_t>(indexCount),
+          GeometryHashDebugData::MaxIndexSamples);
+        const T* pIndices = static_cast<const T*>(pIndexData);
+        for (uint32_t i = 0; i < result->indexSampleCount; i++) {
+          result->indexSamples[i] = static_cast<uint32_t>(pIndices[i]);
+        }
+        for (size_t i = 0; i < indexCount; i++) {
+          if (static_cast<uint32_t>(pIndices[i]) >= result->streamVertexCount) {
+            result->invalidIndexCount++;
+          }
+        }
+      }
+
+      std::vector<uint32_t> referencedIndices;
+      if constexpr (hasIndices) {
+        referencedIndices.reserve(uniqueIndices.size());
+        for (T index : uniqueIndices) {
+          referencedIndices.push_back(static_cast<uint32_t>(index));
+        }
+      } else {
+        referencedIndices.resize(result->streamVertexCount);
+        for (uint32_t i = 0; i < result->streamVertexCount; i++) {
+          referencedIndices[i] = i;
+        }
+      }
+      result->referencedVertexCount = static_cast<uint32_t>(referencedIndices.size());
+
+      std::vector<ExactPosition> exactPositions;
+      std::vector<QuantizedPosition> quantizedPositions;
+      exactPositions.reserve(referencedIndices.size());
+      quantizedPositions.reserve(referencedIndices.size());
+
+      std::array<float, 3> boundsMin {
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max(),
+      };
+      std::array<float, 3> boundsMax {
+        std::numeric_limits<float>::lowest(),
+        std::numeric_limits<float>::lowest(),
+        std::numeric_limits<float>::lowest(),
+      };
+
+      for (uint32_t index : referencedIndices) {
+        if (index >= result->streamVertexCount) {
+          continue;
+        }
+
+        const ExactPosition exact = readPositionBits(positions, index);
+        const std::array<float, 3> position = positionBitsToFloats(exact);
+        exactPositions.push_back(exact);
+
+        QuantizedPosition quantized {};
+        if (quantizePosition(position, quantized)) {
+          quantizedPositions.push_back(quantized);
+          for (uint32_t component = 0; component < position.size(); component++) {
+            boundsMin[component] = std::min(boundsMin[component], position[component]);
+            boundsMax[component] = std::max(boundsMax[component], position[component]);
+          }
+        } else {
+          result->nonFinitePositionCount++;
+        }
+      }
+
+      result->positionCanonicalizationValid = result->invalidIndexCount == 0
+        && !exactPositions.empty();
+      result->quantizedCanonicalizationValid = result->positionCanonicalizationValid
+        && result->nonFinitePositionCount == 0
+        && quantizedPositions.size() == exactPositions.size();
+
+      if (result->positionCanonicalizationValid) {
+        std::sort(exactPositions.begin(), exactPositions.end());
+        result->canonicalPositionHashExact = XXH3_64bits(
+          exactPositions.data(),
+          exactPositions.size() * sizeof(exactPositions[0]));
+      }
+      if (result->quantizedCanonicalizationValid) {
+        std::sort(quantizedPositions.begin(), quantizedPositions.end());
+        result->canonicalPositionHashQuantized = XXH3_64bits(
+          quantizedPositions.data(),
+          quantizedPositions.size() * sizeof(quantizedPositions[0]));
+        result->boundsMin = boundsMin;
+        result->boundsMax = boundsMax;
+      }
+
+      if (topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST) {
+        return result;
+      }
+
+      const uint32_t elementCount = hasIndices
+        ? static_cast<uint32_t>(indexCount)
+        : result->streamVertexCount;
+      result->triangleCount = elementCount / 3;
+
+      std::vector<ExactTriangle> exactTriangles;
+      std::vector<QuantizedTriangle> quantizedTriangles;
+      exactTriangles.reserve(result->triangleCount);
+      quantizedTriangles.reserve(result->triangleCount);
+
+      auto getIndex = [pIndexData](uint32_t element) {
+        if constexpr (!std::is_same_v<T, NoIndices>) {
+          return static_cast<uint32_t>(static_cast<const T*>(pIndexData)[element]);
+        } else {
+          return element;
+        }
+      };
+
+      bool allTrianglePositionsQuantized = true;
+      for (uint32_t triangle = 0; triangle < result->triangleCount; triangle++) {
+        std::array<ExactPosition, 3> exactVertices {};
+        std::array<QuantizedPosition, 3> quantizedVertices {};
+        bool triangleValid = true;
+        bool triangleQuantized = true;
+
+        for (uint32_t vertex = 0; vertex < 3; vertex++) {
+          const uint32_t index = getIndex(triangle * 3 + vertex);
+          if (index >= result->streamVertexCount) {
+            triangleValid = false;
+            triangleQuantized = false;
+            break;
+          }
+
+          exactVertices[vertex] = readPositionBits(positions, index);
+          triangleQuantized &= quantizePosition(
+            positionBitsToFloats(exactVertices[vertex]),
+            quantizedVertices[vertex]);
+        }
+
+        if (!triangleValid) {
+          continue;
+        }
+
+        std::sort(exactVertices.begin(), exactVertices.end());
+        ExactTriangle exactTriangle {};
+        for (uint32_t vertex = 0; vertex < 3; vertex++) {
+          std::copy(
+            exactVertices[vertex].begin(),
+            exactVertices[vertex].end(),
+            exactTriangle.begin() + vertex * 3);
+        }
+        exactTriangles.push_back(exactTriangle);
+
+        if (triangleQuantized) {
+          std::sort(quantizedVertices.begin(), quantizedVertices.end());
+          QuantizedTriangle quantizedTriangle {};
+          for (uint32_t vertex = 0; vertex < 3; vertex++) {
+            std::copy(
+              quantizedVertices[vertex].begin(),
+              quantizedVertices[vertex].end(),
+              quantizedTriangle.begin() + vertex * 3);
+          }
+          quantizedTriangles.push_back(quantizedTriangle);
+        } else {
+          allTrianglePositionsQuantized = false;
+        }
+      }
+
+      result->triangleCanonicalizationValid = result->invalidIndexCount == 0
+        && exactTriangles.size() == result->triangleCount
+        && !exactTriangles.empty();
+      if (result->triangleCanonicalizationValid) {
+        std::sort(exactTriangles.begin(), exactTriangles.end());
+        result->canonicalTriangleHashExact = XXH3_64bits(
+          exactTriangles.data(),
+          exactTriangles.size() * sizeof(exactTriangles[0]));
+      }
+      if (result->triangleCanonicalizationValid && allTrianglePositionsQuantized
+          && quantizedTriangles.size() == exactTriangles.size()) {
+        std::sort(quantizedTriangles.begin(), quantizedTriangles.end());
+        result->canonicalTriangleHashQuantized = XXH3_64bits(
+          quantizedTriangles.data(),
+          quantizedTriangles.size() * sizeof(quantizedTriangles[0]));
+      }
+
+      return result;
+    }
+  }
 
   bool getVertexRegion(const RasterBuffer& buffer, const size_t vertexCount, HashQuery& outResult) {
     ScopedCpuProfileZone();
@@ -71,7 +327,8 @@ namespace dxvk {
 
   template<typename T>
   void hashGeometryData(const size_t indexCount, const uint32_t maxIndexValue, const void* pIndexData,
-                        DxvkBuffer* indexBufferRef, const HashQuery vertexRegions[VertexRegions::Count], GeometryHashes& hashesOut) {
+                        DxvkBuffer* indexBufferRef, const HashQuery vertexRegions[VertexRegions::Count],
+                        VkPrimitiveTopology topology, bool collectDebugData, GeometryHashes& hashesOut) {
     ScopedCpuProfileZone();
 
     const HashRule& globalHashRule = RtxOptions::geometryHashGenerationRule();
@@ -91,9 +348,6 @@ namespace dxvk {
         hashesOut[HashComponents::LegacyIndices] = hashIndicesLegacy<T>(pIndexData, indexCount);
       }
 
-      // Release this memory back to the staging allocator
-      indexBufferRef->release(DxvkAccess::Read);
-      indexBufferRef->decRef();
     }
 
     // Do vertex based rules
@@ -109,6 +363,22 @@ namespace dxvk {
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     if (globalHashRule.test(HashComponents::LegacyPositions0) || globalHashRule.test(HashComponents::LegacyPositions1)) {
       hashRegionLegacy(vertexRegions[VertexRegions::Position], hashesOut[HashComponents::LegacyPositions0], hashesOut[HashComponents::LegacyPositions1]);
+    }
+
+    if (collectDebugData) {
+      hashesOut.debugData = buildGeometryHashDebugData(
+        indexCount,
+        pIndexData,
+        vertexRegions[VertexRegions::Position],
+        uniqueIndices,
+        topology);
+    }
+
+    if constexpr (!std::is_same<T, NoIndices>::value) {
+      // Release this memory back to the staging allocator only after optional
+      // canonical diagnostics have consumed the raw index stream.
+      indexBufferRef->release(DxvkAccess::Read);
+      indexBufferRef->decRef();
     }
 
     // Release this memory back to the staging allocator
@@ -183,10 +453,14 @@ namespace dxvk {
       vertexLayoutHash = hashVertexLayout(geoData);
     }
 
+    const bool collectDebugData = m_parent->GetDXVKDevice()->getCommon()->getResources()
+      .getRaytracingOutput().m_primaryObjectPicking.isValid();
+
     return m_pGeometryWorkers->Schedule([vertexRegions, indexBufferRef = indexBufferRef.ptr(),
                                  pIndexData, indexStride, indexDataSize, indexCount,
                                  maxIndexValue, vertexShaderHash, geometryDescriptorHash,
-                                 vertexLayoutHash]() -> GeometryHashes {
+                                 vertexLayoutHash, topology = geoData.topology,
+                                 collectDebugData]() -> GeometryHashes {
       ScopedCpuProfileZone();
 
       GeometryHashes hashes;
@@ -199,13 +473,13 @@ namespace dxvk {
       // Index hash
       switch (indexStride) {
       case 2:
-        hashGeometryData<uint16_t>(indexCount, maxIndexValue, pIndexData, indexBufferRef, vertexRegions, hashes);
+        hashGeometryData<uint16_t>(indexCount, maxIndexValue, pIndexData, indexBufferRef, vertexRegions, topology, collectDebugData, hashes);
         break;
       case 4:
-        hashGeometryData<uint32_t>(indexCount, maxIndexValue, pIndexData, indexBufferRef, vertexRegions, hashes);
+        hashGeometryData<uint32_t>(indexCount, maxIndexValue, pIndexData, indexBufferRef, vertexRegions, topology, collectDebugData, hashes);
         break;
       default:
-        hashGeometryData<NoIndices>(indexCount, maxIndexValue, pIndexData, indexBufferRef, vertexRegions, hashes);
+        hashGeometryData<NoIndices>(indexCount, maxIndexValue, pIndexData, indexBufferRef, vertexRegions, topology, collectDebugData, hashes);
         break;
       }
 

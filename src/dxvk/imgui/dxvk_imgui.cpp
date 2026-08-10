@@ -2164,9 +2164,10 @@ namespace dxvk {
 
       bool g_wasLeftClick { false };
 
-      // need to keep a reference to a texture that was passed to 'open()',
-      // as 'open()' is called only once, but popup needs to reference that texture throughout open-close
+      // need to keep references to selected resources that were passed to 'open()',
+      // as 'open()' is called only once, but the popup needs them throughout open-close
       std::atomic<XXH64_hash_t> g_holdingTexture {};
+      std::atomic<XXH64_hash_t> g_holdingMeshHash {};
       bool g_openWhenAvailable {};
 
       void openImguiPopupOrToggle() {
@@ -2174,7 +2175,8 @@ namespace dxvk {
         // if was a left mouse click in the splitted lists
         bool toggleWithoutPopup = ImGUI::showLegacyTextureGui() &&
                                   g_wasLeftClick &&
-                                  !lastOpenCategoryId.empty();
+                                  !lastOpenCategoryId.empty() &&
+                                  g_holdingTexture.load() != kEmptyHash;
         g_wasLeftClick = false;
 
         if (toggleWithoutPopup) {
@@ -2190,6 +2192,7 @@ namespace dxvk {
 
       void open(std::optional<XXH64_hash_t> texHash) {
         g_holdingTexture.exchange(texHash.value_or(kEmptyHash));
+        g_holdingMeshHash.exchange(kEmptyHash);
         g_openWhenAvailable = false;
         // no need to wait, open immediately
         openImguiPopupOrToggle();
@@ -2197,6 +2200,7 @@ namespace dxvk {
 
       void openAsync() {
         g_holdingTexture.exchange(kEmptyHash);
+        g_holdingMeshHash.exchange(kEmptyHash);
         g_openWhenAvailable = true;
       }
 
@@ -2209,7 +2213,7 @@ namespace dxvk {
       std::optional<XXH64_hash_t> produce(SceneManager& sceneMgr) {
         // delayed open, if waiting async to set g_holdingTexture
         if (g_openWhenAvailable) {
-          if (g_holdingTexture.load() != kEmptyHash) {
+          if (g_holdingTexture.load() != kEmptyHash || g_holdingMeshHash.load() != kEmptyHash) {
             openImguiPopupOrToggle();
             g_openWhenAvailable = false;
           }
@@ -2234,6 +2238,7 @@ namespace dxvk {
 
         if (ImGui::BeginPopup(POPUP_NAME)) {
           const XXH64_hash_t texHash = g_holdingTexture.load();
+          const XXH64_hash_t meshHash = g_holdingMeshHash.load();
           if (texHash != kEmptyHash) {
             ImGui::Text("Texture Info:\n%s", makeTextureInfo(texHash, isMaterialReplacement(sceneMgr, texHash), false).c_str());
             if (ImGui::Button("Copy Texture hash##texture_popup")) {
@@ -2430,15 +2435,21 @@ namespace dxvk {
               }
             }
             RemixGui::PopLabelColumnFixedWidth();
-
-            ImGui::EndPopup();
-            return texHash;
           }
+
+          if (meshHash != kEmptyHash) {
+            ImGui::Text("Mesh Hash: %s", hashToString(meshHash).c_str());
+            if (ImGui::Button("Copy Mesh hash##texture_popup")) {
+              ImGui::SetClipboardText(hashToString(meshHash).c_str());
+            }
+          }
+
           ImGui::EndPopup();
-          return {};
+          return texHash != kEmptyHash ? std::optional<XXH64_hash_t> { texHash } : std::nullopt;
         } else {
           // popup is closed, forget texture
           g_holdingTexture.exchange(kEmptyHash);
+          g_holdingMeshHash.exchange(kEmptyHash);
           return {};
         }
       }
@@ -2670,10 +2681,17 @@ namespace dxvk {
           tovec2i(ImGui::GetMousePos()) + Vector2i { 1, 1 },
 
           // and callback on result:
-          [](std::vector<ObjectPickingValue>&& objectPickingValues, std::optional<XXH64_hash_t> legacyTextureHash) {
+          [sceneManager = &common->getSceneManager()](std::vector<ObjectPickingValue>&& objectPickingValues, std::optional<XXH64_hash_t> legacyTextureHash) {
             // assert(legacyTextureHash);
             // found asynchronously the legacy texture hash, place it into texture_popup; so we would highlight it
             texture_popup::g_holdingTexture.exchange(legacyTextureHash.value_or(kEmptyHash));
+            XXH64_hash_t meshHash = kEmptyHash;
+            if (!objectPickingValues.empty()) {
+              const ObjectPickingValue objectPickingValue = objectPickingValues.front();
+              meshHash = sceneManager->findMeshHashByObjectPickingValue(objectPickingValue).value_or(kEmptyHash);
+              sceneManager->logMeshHashByObjectPickingValue(objectPickingValue);
+            }
+            texture_popup::g_holdingMeshHash.exchange(meshHash);
             // move UI menu focus
             g_jumpto.exchange(legacyTextureHash.value_or(kEmptyHash));
           });
