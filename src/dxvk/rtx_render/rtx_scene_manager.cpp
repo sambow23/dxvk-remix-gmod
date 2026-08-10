@@ -1519,16 +1519,26 @@ namespace dxvk {
     }
 
     auto meta = DrawCallMetaInfo {};
+    meta.materialHash = drawCallState.getMaterialData().getHash();
+    meta.colorTextureHash = drawCallState.getMaterialData().getColorTexture().getImageHash();
+    meta.colorTexture2Hash = drawCallState.getMaterialData().getColorTexture2().getImageHash();
     if (g_allowMappingLegacyHashToObjectPickingValue) {
-      XXH64_hash_t h = drawCallState.getMaterialData().getColorTexture().getImageHash();
+      XXH64_hash_t h = meta.colorTextureHash;
       if (h != kEmptyHash) {
         meta.legacyTextureHash = h;
       }
-      h = drawCallState.getMaterialData().getColorTexture2().getImageHash();
+      h = meta.colorTexture2Hash;
       if (h != kEmptyHash) {
         meta.legacyTextureHash2 = h;
       }
     }
+
+    const DrawCallTransforms& transforms = drawCallState.getTransformData();
+    meta.textureTransform = transforms.textureTransform;
+    meta.objectToWorld = transforms.objectToWorld;
+    meta.worldToView = transforms.worldToView;
+    meta.texgenMode = transforms.texgenMode;
+    meta.isEye = drawCallState.isEye();
 
     const RasterGeometry& geometry = drawCallState.getGeometryData();
     meta.externalMesh = geometry.externalMesh != nullptr;
@@ -2072,6 +2082,15 @@ namespace dxvk {
         << "(" << matrix[3][0] << ", " << matrix[3][1] << ", " << matrix[3][2] << ", " << matrix[3][3] << ")]";
     }
 
+    const auto formatMatrix = [](const Matrix4& matrix) {
+      return str::format(
+        "[(", std::setprecision(9), matrix[0][0], ", ", matrix[0][1], ", ", matrix[0][2], ", ", matrix[0][3], "), "
+        "(", matrix[1][0], ", ", matrix[1][1], ", ", matrix[1][2], ", ", matrix[1][3], "), "
+        "(", matrix[2][0], ", ", matrix[2][1], ", ", matrix[2][2], ", ", matrix[2][3], "), "
+        "(", matrix[3][0], ", ", matrix[3][1], ", ", matrix[3][2], ", ", matrix[3][3], ")]"
+      );
+    };
+
     std::string canonicalDiagnostics;
     if (hashes.debugData != nullptr) {
       const GeometryHashDebugData& debug = *hashes.debugData;
@@ -2128,6 +2147,17 @@ namespace dxvk {
       "[Mesh-Hash-Debug]\n",
       "  objectPickingValue: 0x", std::hex, objectPickingValue, "\n",
       "  assetHash: 0x", pMeta->meshHash, "\n",
+      "  eyeInputs:\n",
+      "    isEye: ", pMeta->isEye, "\n",
+      "    texgenMode: ", static_cast<uint32_t>(pMeta->texgenMode), "\n",
+      std::hex,
+      "    materialHash: 0x", pMeta->materialHash, "\n",
+      "    colorTextureHash: 0x", pMeta->colorTextureHash, "\n",
+      "    colorTexture2Hash: 0x", pMeta->colorTexture2Hash, "\n",
+      std::dec,
+      "    textureTransform: ", formatMatrix(pMeta->textureTransform), "\n",
+      "    objectToWorld: ", formatMatrix(pMeta->objectToWorld), "\n",
+      "    worldToView: ", formatMatrix(pMeta->worldToView), "\n",
       "  assetRuleMask: 0x", RtxOptions::geometryAssetHashRule().raw(), "\n",
       "  generationRuleMask: 0x", RtxOptions::geometryHashGenerationRule().raw(), "\n",
       "  components:\n",

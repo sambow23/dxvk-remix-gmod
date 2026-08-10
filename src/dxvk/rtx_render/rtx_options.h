@@ -2406,6 +2406,9 @@ namespace dxvk {
       RTX_OPTION("rtx.eye", float, irisDepth, 0.06F,
                  "How deep should the iris (colored part of an eye) be placed behind the cornea (eye lens). "
                  "The larger the value the more distortion there is, because of the lens.");
+      RTX_OPTION("rtx.eye", float, sourceIrisSizeAdjustment, 0.5F,
+                 "Source Engine r_eyesize equivalent for tagged Source eye draws. "
+                 "Positive values enlarge the projected iris without changing eyeball geometry.");
     };
 
     // Automation Options

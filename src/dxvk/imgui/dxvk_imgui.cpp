@@ -3285,6 +3285,7 @@ namespace dxvk {
         RemixGui::DragFloat("Normals: Cornea Offset", &RtxOptions::Eye::corneaSphereOffsetObject(), 0.001F);
         RemixGui::DragFloat("Iris Radius", &RtxOptions::Eye::irisRadiusObject(), 0.001F);
         RemixGui::DragFloat("Iris Depth", &RtxOptions::Eye::irisDepthObject(), 0.001F);
+        RemixGui::DragFloat("Source Iris Size Adjustment", &RtxOptions::Eye::sourceIrisSizeAdjustmentObject(), 0.01F);
         ImGui::EndDisabled();
         ImGui::Unindent();
       }
