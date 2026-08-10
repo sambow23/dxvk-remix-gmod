@@ -430,6 +430,9 @@ private:
 
     XXH64_hash_t legacyTextureHash { kEmptyHash };
     XXH64_hash_t legacyTextureHash2 { kEmptyHash };
+    XXH64_hash_t colorTextureHash { kEmptyHash };
+    XXH64_hash_t colorTexture2Hash { kEmptyHash };
+    XXH64_hash_t materialHash { kEmptyHash };
     XXH64_hash_t meshHash { kEmptyHash };
     GeometryHashes geometryHashes {};
     uint32_t vertexCount {};
@@ -447,6 +450,11 @@ private:
     XXH64_hash_t blendIndicesHash {};
     std::array<uint8_t, SkinningData::MaxBlendIndexDebugSamples> blendIndexDebugSamples {};
     uint32_t blendIndexDebugSampleCount {};
+    Matrix4 textureTransform {};
+    Matrix4 objectToWorld {};
+    Matrix4 worldToView {};
+    TexGenMode texgenMode { TexGenMode::None };
+    bool isEye {};
     bool externalMesh {};
   };
   struct DrawCallMeta {

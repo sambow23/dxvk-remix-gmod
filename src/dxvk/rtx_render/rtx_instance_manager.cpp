@@ -1101,9 +1101,52 @@ namespace dxvk {
           // assume that the texture transform has eye parameters encoded
           const Matrix4& texTransform = drawCall.getTransformData().textureTransform;
           RtEyeParams eyeParams{};
-          eyeParams.eyeballOrigin = Vector3{ texTransform.data[0].w, texTransform.data[1].w, texTransform.data[2].w };
-          eyeParams.eyeRightU = Vector3{ texTransform.data[0].x, texTransform.data[1].x, texTransform.data[2].x };
-          eyeParams.eyeUpV = Vector3{ texTransform.data[0].y, texTransform.data[1].y, texTransform.data[2].y };
+
+          // GMod's Source fixed-function eye shader generates texture coordinates
+          // from camera-space positions.  Its tagged layout preserves those raster
+          // projection planes while carrying the exact world-space eye origin in
+          // otherwise-unused COUNT2 matrix components.  Compose with worldToView
+          // to recover the world-space projection planes expected by Remix's eye
+          // shader.  Source's projection produces [0, 1] directly, while Remix
+          // expects [-1, 1] and remaps it, hence the factor of two.
+          constexpr float kSourceEyeMetadataTag = 54321.0f;
+          if (std::abs(texTransform.data[3].z - kSourceEyeMetadataTag) < 0.5f) {
+            const Matrix4 worldToEyeUv = texTransform * drawCall.getTransformData().worldToView;
+            const Vector3 sourceBasisU{
+              worldToEyeUv.data[0].x,
+              worldToEyeUv.data[1].x,
+              worldToEyeUv.data[2].x
+            };
+            const Vector3 sourceBasisV{
+              worldToEyeUv.data[0].y,
+              worldToEyeUv.data[1].y,
+              worldToEyeUv.data[2].y
+            };
+
+            // Match Source's r_eyesize calculation without modifying the
+            // engine setting:
+            //   adjustedScale = 1 / (1 / sourceScale + adjustment)
+            // Both projection axes use the same scale, so average their
+            // lengths to avoid introducing anisotropy from float noise.
+            const float sourceScale = 0.5f * (length(sourceBasisU) + length(sourceBasisV));
+            const float scaleDenominator = 1.0f
+              + RtxOptions::Eye::sourceIrisSizeAdjustment() * sourceScale;
+            const float sourceIrisScale = scaleDenominator > 0.0001f
+              ? 1.0f / scaleDenominator
+              : 1.0f;
+
+            eyeParams.eyeballOrigin = Vector3{
+              texTransform.data[0].w,
+              texTransform.data[1].w,
+              texTransform.data[2].w
+            };
+            eyeParams.eyeRightU = sourceBasisU * (2.0f * sourceIrisScale);
+            eyeParams.eyeUpV = sourceBasisV * (2.0f * sourceIrisScale);
+          } else {
+            eyeParams.eyeballOrigin = Vector3{ texTransform.data[0].w, texTransform.data[1].w, texTransform.data[2].w };
+            eyeParams.eyeRightU = Vector3{ texTransform.data[0].x, texTransform.data[1].x, texTransform.data[2].x };
+            eyeParams.eyeUpV = Vector3{ texTransform.data[0].y, texTransform.data[1].y, texTransform.data[2].y };
+          }
           currentInstance.surface.eyeParams = eyeParams;
         }
 

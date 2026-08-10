@@ -2078,6 +2078,10 @@ struct MaterialData {
       if constexpr (std::is_same_v<T, OpaqueMaterialData>) {
         OpaqueMaterialData tmp;
         tmp.getAlbedoOpacityTexture() = input.getColorTexture();
+        // Preserve a legacy draw's second color texture when an opaque
+        // replacement is present.  The Remix eye shader uses this slot for
+        // the projected iris while the primary texture contains the sclera.
+        tmp.getSecondaryTexture() = input.getColorTexture2();
         if (auto s = input.getSampler().ptr()) {
           tmp.getFilterMode() = lss::Mdl::Filter::vkToMdl(s->info().magFilter);
           tmp.getWrapModeU() = lss::Mdl::WrapMode::vkToMdl(s->info().addressModeU);
