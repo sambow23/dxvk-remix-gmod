@@ -198,9 +198,14 @@ namespace dxvk {
       const RasterGeometry& input,
       RaytraceGeometry& geo);
 
+    inline bool hasPendingSkinningCommands() const {
+      return m_skinningContext->getCommandList() != nullptr && m_skinningCommands > 0;
+    }
+
     inline void flushCommandList() {
-      if (m_skinningContext->getCommandList() != nullptr && m_skinningCommands > 0) {
+      if (hasPendingSkinningCommands()) {
         m_skinningContext->flushCommandList();
+        m_skinningCommands = 0;
       }
     }
 

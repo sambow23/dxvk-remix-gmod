@@ -2371,6 +2371,9 @@ namespace dxvk {
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");
 
+    RTX_OPTION("rtx.gmod", bool, enableInstrumentation, false,
+               "Enable GMod-specific mesh-hash, skinning, and animated-geometry diagnostic capture and logging.");
+
     RTX_OPTION("rtx", FusedWorldViewMode, fusedWorldViewMode, FusedWorldViewMode::None, "Set if game uses a fused World-View transform matrix.");
 
     RTX_OPTION("rtx", bool, useBuffersDirectly, true, "When enabled Remix will use the incoming vertex buffers directly where possible instead of copying data. Note: setting the d3d9.allowDiscard to False will disable this option.");

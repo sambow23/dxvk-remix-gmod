@@ -129,20 +129,29 @@ namespace fork_hooks {
         meta.legacyTextureHash = textureHash;
       }
       const RasterGeometry& geometry = drawCall.getGeometryData();
-      meta.externalMesh = geometry.externalMesh != nullptr;
-      if (meta.externalMesh) {
+      const bool externalMesh = geometry.externalMesh != nullptr;
+      if (externalMesh) {
         meta.meshHash = reinterpret_cast<XXH64_hash_t>(geometry.externalMesh);
       } else {
         meta.meshHash = drawCall.getHash(RtxOptions::geometryAssetHashRule());
-        meta.geometryHashes = geometry.hashes;
-        meta.vertexCount = geometry.vertexCount;
-        meta.indexCount = geometry.indexCount;
-        meta.positionStride = geometry.positionBuffer.stride();
-        meta.topology = geometry.topology;
-        meta.indexType = geometry.indexBuffer.defined()
-          ? geometry.indexBuffer.indexType()
-          : VkIndexType(0);
-        meta.positionFormat = geometry.positionBuffer.vertexFormat();
+      }
+
+      if (RtxOptions::enableInstrumentation()) {
+        meta.instrumentation =
+          std::make_shared<SceneManager::DrawCallInstrumentation>();
+        auto& instrumentation = *meta.instrumentation;
+        instrumentation.externalMesh = externalMesh;
+        if (!externalMesh) {
+          instrumentation.geometryHashes = geometry.hashes;
+          instrumentation.vertexCount = geometry.vertexCount;
+          instrumentation.indexCount = geometry.indexCount;
+          instrumentation.positionStride = geometry.positionBuffer.stride();
+          instrumentation.topology = geometry.topology;
+          instrumentation.indexType = geometry.indexBuffer.defined()
+            ? geometry.indexBuffer.indexType()
+            : VkIndexType(0);
+          instrumentation.positionFormat = geometry.positionBuffer.vertexFormat();
+        }
       }
 
       std::lock_guard lock { scene.m_drawCallMeta.mutex };

@@ -559,8 +559,20 @@ namespace dxvk {
     m_bufferCache.clear();
     if (raytracedThisFrame) {
       std::lock_guard lock { m_drawCallMeta.mutex };
+      const uint8_t desiredTicks = RtxOptions::enableInstrumentation()
+        ? m_drawCallMeta.MaxTicks
+        : m_drawCallMeta.BaseTicks;
+      if (m_drawCallMeta.activeTicks != desiredTicks) {
+        for (uint8_t tick = 0; tick < m_drawCallMeta.MaxTicks; tick++) {
+          m_drawCallMeta.infos[tick].clear();
+          m_drawCallMeta.ready[tick] = false;
+        }
+        m_drawCallMeta.ticker = 0;
+        m_drawCallMeta.activeTicks = desiredTicks;
+      }
+
       const uint8_t curTick = m_drawCallMeta.ticker;
-      const uint8_t nextTick = (m_drawCallMeta.ticker + 1) % m_drawCallMeta.MaxTicks;
+      const uint8_t nextTick = (m_drawCallMeta.ticker + 1) % m_drawCallMeta.activeTicks;
 
       m_drawCallMeta.ready[curTick] = true;
 
@@ -1222,7 +1234,16 @@ namespace dxvk {
         m_instanceManager.preserveInstance(instance, input, nullptr);
       },
       [&] {
-        trackObjectPickingMeta(input, input.drawCallID);
+        const RtInstance* trackedInstance = nullptr;
+        if (RtxOptions::enableInstrumentation()) {
+          for (const PrimInstance& prim : replacementInstance->prims) {
+            if (prim.getInstance() != nullptr) {
+              trackedInstance = prim.getInstance();
+              break;
+            }
+          }
+        }
+        trackObjectPickingMeta(input, input.drawCallID, trackedInstance, replacementInstance);
       });
 
     replacementInstance->recalculateBoundingBox(
@@ -1481,7 +1502,11 @@ namespace dxvk {
     }
 
     if (instance) {
-      trackObjectPickingMeta(drawCallState, instance->surface.objectPickingValue);
+      trackObjectPickingMeta(
+        drawCallState,
+        instance->surface.objectPickingValue,
+        instance,
+        &replacementInstance);
     }
 
     // Priority ordering for particle system descriptors is: Mesh, Material, Texture.  This matches the implementation in toolkit.
@@ -1511,7 +1536,9 @@ namespace dxvk {
 
   void SceneManager::trackObjectPickingMeta(
       const DrawCallState& drawCallState,
-      ObjectPickingValue objectPickingValue) {
+      ObjectPickingValue objectPickingValue,
+      const RtInstance* instance,
+      const ReplacementInstance* replacementInstance) {
     const bool objectPickingActive = m_device->getCommon()->getResources().getRaytracingOutput()
       .m_primaryObjectPicking.isValid();
     if (!objectPickingActive) {
@@ -1519,59 +1546,118 @@ namespace dxvk {
     }
 
     auto meta = DrawCallMetaInfo {};
-    meta.materialHash = drawCallState.getMaterialData().getHash();
-    meta.colorTextureHash = drawCallState.getMaterialData().getColorTexture().getImageHash();
-    meta.colorTexture2Hash = drawCallState.getMaterialData().getColorTexture2().getImageHash();
+    const XXH64_hash_t colorTextureHash =
+      drawCallState.getMaterialData().getColorTexture().getImageHash();
+    const XXH64_hash_t colorTexture2Hash =
+      drawCallState.getMaterialData().getColorTexture2().getImageHash();
     if (g_allowMappingLegacyHashToObjectPickingValue) {
-      XXH64_hash_t h = meta.colorTextureHash;
+      XXH64_hash_t h = colorTextureHash;
       if (h != kEmptyHash) {
         meta.legacyTextureHash = h;
       }
-      h = meta.colorTexture2Hash;
+      h = colorTexture2Hash;
       if (h != kEmptyHash) {
         meta.legacyTextureHash2 = h;
       }
     }
 
-    const DrawCallTransforms& transforms = drawCallState.getTransformData();
-    meta.textureTransform = transforms.textureTransform;
-    meta.objectToWorld = transforms.objectToWorld;
-    meta.worldToView = transforms.worldToView;
-    meta.texgenMode = transforms.texgenMode;
-    meta.isEye = drawCallState.isEye();
-
     const RasterGeometry& geometry = drawCallState.getGeometryData();
-    meta.externalMesh = geometry.externalMesh != nullptr;
-    if (meta.externalMesh) {
+    const bool externalMesh = geometry.externalMesh != nullptr;
+    if (externalMesh) {
       meta.meshHash = reinterpret_cast<XXH64_hash_t>(geometry.externalMesh);
     } else {
       meta.meshHash = drawCallState.getHash(RtxOptions::geometryAssetHashRule());
-      meta.geometryHashes = geometry.hashes;
-      meta.vertexCount = geometry.vertexCount;
-      meta.indexCount = geometry.indexCount;
-      meta.positionStride = geometry.positionBuffer.stride();
-      meta.topology = geometry.topology;
-      meta.indexType = geometry.indexBuffer.defined()
-        ? geometry.indexBuffer.indexType()
-        : VkIndexType(0);
-      meta.positionFormat = geometry.positionBuffer.vertexFormat();
     }
 
-    const SkinningData& skinning = drawCallState.getSkinningState();
-    meta.numBones = skinning.numBones;
-    meta.numBonesPerVertex = skinning.numBonesPerVertex;
-    meta.minBoneIndex = skinning.minBoneIndex;
-    meta.boneHash = skinning.boneHash;
-    meta.boneMatrixDebugSampleCount = static_cast<uint32_t>(skinning.pBoneMatrices.size());
-    if (meta.boneMatrixDebugSampleCount > DrawCallMetaInfo::MaxBoneMatrixDebugSamples) {
-      meta.boneMatrixDebugSampleCount = DrawCallMetaInfo::MaxBoneMatrixDebugSamples;
+    if (RtxOptions::enableInstrumentation()) {
+      meta.instrumentation = std::make_shared<DrawCallInstrumentation>();
+      DrawCallInstrumentation& instrumentation = *meta.instrumentation;
+      instrumentation.materialHash = drawCallState.getMaterialData().getHash();
+      instrumentation.colorTextureHash = colorTextureHash;
+      instrumentation.colorTexture2Hash = colorTexture2Hash;
+      instrumentation.externalMesh = externalMesh;
+
+      const DrawCallTransforms& transforms = drawCallState.getTransformData();
+      instrumentation.textureTransform = transforms.textureTransform;
+      instrumentation.objectToWorld = transforms.objectToWorld;
+      instrumentation.worldToView = transforms.worldToView;
+      instrumentation.texgenMode = transforms.texgenMode;
+      instrumentation.isEye = drawCallState.isEye();
+
+      if (!externalMesh) {
+        instrumentation.geometryHashes = geometry.hashes;
+        instrumentation.vertexCount = geometry.vertexCount;
+        instrumentation.indexCount = geometry.indexCount;
+        instrumentation.positionStride = geometry.positionBuffer.stride();
+        instrumentation.topology = geometry.topology;
+        instrumentation.indexType = geometry.indexBuffer.defined()
+          ? geometry.indexBuffer.indexType()
+          : VkIndexType(0);
+        instrumentation.positionFormat = geometry.positionBuffer.vertexFormat();
+      }
+
+      const SkinningData& skinning = drawCallState.getSkinningState();
+      instrumentation.numBones = skinning.numBones;
+      instrumentation.numBonesPerVertex = skinning.numBonesPerVertex;
+      instrumentation.minBoneIndex = skinning.minBoneIndex;
+      instrumentation.boneHash = skinning.boneHash;
+      instrumentation.boneMatrixDebugSampleCount =
+        static_cast<uint32_t>(skinning.pBoneMatrices.size());
+      if (instrumentation.boneMatrixDebugSampleCount >
+          DrawCallInstrumentation::MaxBoneMatrixDebugSamples) {
+        instrumentation.boneMatrixDebugSampleCount =
+          DrawCallInstrumentation::MaxBoneMatrixDebugSamples;
+      }
+      for (uint32_t bone = 0;
+           bone < instrumentation.boneMatrixDebugSampleCount; bone++) {
+        instrumentation.boneMatrixDebugSamples[bone] =
+          skinning.pBoneMatrices[bone];
+      }
+      instrumentation.blendIndicesHash = skinning.blendIndicesHash;
+      instrumentation.blendIndexDebugSamples = skinning.blendIndexDebugSamples;
+      instrumentation.blendIndexDebugSampleCount =
+        skinning.blendIndexDebugSampleCount;
+
+      instrumentation.frameId = m_device->getCurrentFrameId();
+      if (replacementInstance != nullptr) {
+        instrumentation.replacementInstanceId = replacementInstance->id;
+        instrumentation.replacementFrameCreated = replacementInstance->frameCreated;
+        instrumentation.replacementFrameLastSeen = replacementInstance->frameLastSeen;
+        instrumentation.replacementDirtyFlags = replacementInstance->dirtyFlags.raw();
+      }
+
+      if (instance != nullptr) {
+        instrumentation.instanceId = instance->getId();
+        instrumentation.instanceFrameLastUpdated = instance->getFrameLastUpdated();
+        instrumentation.positionBufferIndex = instance->surface.positionBufferIndex;
+        instrumentation.previousPositionBufferIndex =
+          instance->surface.previousPositionBufferIndex;
+        instrumentation.positionOffset = instance->surface.positionOffset;
+        instrumentation.surfaceObjectToWorld = instance->surface.objectToWorld;
+        instrumentation.surfacePrevObjectToWorld = instance->surface.prevObjectToWorld;
+        instrumentation.surfaceIsStatic = instance->surface.isStatic;
+        instrumentation.surfaceIsPreservePath = instance->surface.isPreservePath;
+
+        const BlasEntry* blas = instance->getBlas();
+        if (blas != nullptr) {
+          const RaytraceGeometry& blasGeometry = blas->modifiedGeometryData;
+          instrumentation.blasAddress = reinterpret_cast<uint64_t>(blas);
+          instrumentation.blasFrameCreated = blas->frameCreated;
+          instrumentation.blasFrameLastTouched = blas->frameLastTouched;
+          instrumentation.blasFrameLastUpdated = blas->frameLastUpdated;
+          instrumentation.historyBuffer0Address =
+            reinterpret_cast<uint64_t>(blasGeometry.historyBuffer[0].ptr());
+          instrumentation.historyBuffer1Address =
+            reinterpret_cast<uint64_t>(blasGeometry.historyBuffer[1].ptr());
+          instrumentation.previousPositionBufferDefined =
+            blasGeometry.previousPositionBuffer.defined();
+          if (instrumentation.previousPositionBufferDefined) {
+            instrumentation.previousPositionOffset =
+              blasGeometry.previousPositionBuffer.offsetFromSlice();
+          }
+        }
+      }
     }
-    for (uint32_t bone = 0; bone < meta.boneMatrixDebugSampleCount; bone++) {
-      meta.boneMatrixDebugSamples[bone] = skinning.pBoneMatrices[bone];
-    }
-    meta.blendIndicesHash = skinning.blendIndicesHash;
-    meta.blendIndexDebugSamples = skinning.blendIndexDebugSamples;
-    meta.blendIndexDebugSampleCount = skinning.blendIndexDebugSampleCount;
 
     std::lock_guard lock { m_drawCallMeta.mutex };
     auto [iter, isNew] = m_drawCallMeta.infos[m_drawCallMeta.ticker].emplace(objectPickingValue, meta);
@@ -1973,7 +2059,7 @@ namespace dxvk {
 
     const int ticksToCheck[] = {
       m_drawCallMeta.ticker, // current tick
-      (m_drawCallMeta.ticker + m_drawCallMeta.MaxTicks - 1) % m_drawCallMeta.MaxTicks, // prev tick
+      (m_drawCallMeta.ticker + m_drawCallMeta.activeTicks - 1) % m_drawCallMeta.activeTicks, // prev tick
     };
     for (int tick : ticksToCheck) {
       if (m_drawCallMeta.ready[tick]) {
@@ -2002,7 +2088,7 @@ namespace dxvk {
 
     const int ticksToCheck[] = {
       m_drawCallMeta.ticker, // current tick
-      (m_drawCallMeta.ticker + m_drawCallMeta.MaxTicks - 1) % m_drawCallMeta.MaxTicks, // prev tick
+      (m_drawCallMeta.ticker + m_drawCallMeta.activeTicks - 1) % m_drawCallMeta.activeTicks, // prev tick
     };
     for (int tick : ticksToCheck) {
       if (m_drawCallMeta.ready[tick]) {
@@ -2015,6 +2101,10 @@ namespace dxvk {
   }
 
   void SceneManager::logMeshHashByObjectPickingValue(uint32_t objectPickingValue) {
+    if (!RtxOptions::enableInstrumentation()) {
+      return;
+    }
+
     std::lock_guard lock { m_drawCallMeta.mutex };
 
     auto tryFindIn = [](const std::unordered_map<ObjectPickingValue, DrawCallMetaInfo>& table, ObjectPickingValue toFind)
@@ -2026,7 +2116,7 @@ namespace dxvk {
     const DrawCallMetaInfo* pMeta = nullptr;
     const int ticksToCheck[] = {
       m_drawCallMeta.ticker,
-      (m_drawCallMeta.ticker + m_drawCallMeta.MaxTicks - 1) % m_drawCallMeta.MaxTicks,
+      (m_drawCallMeta.ticker + m_drawCallMeta.activeTicks - 1) % m_drawCallMeta.activeTicks,
     };
     for (int tick : ticksToCheck) {
       if (m_drawCallMeta.ready[tick]) {
@@ -2044,7 +2134,67 @@ namespace dxvk {
       return;
     }
 
-    if (pMeta->externalMesh) {
+    if (pMeta->instrumentation == nullptr) {
+      Logger::warn(str::format(
+        "[Mesh-Hash-Debug] Instrumentation was enabled after metadata capture for object picking value 0x",
+        std::hex, objectPickingValue));
+      return;
+    }
+    const DrawCallInstrumentation& instrumentation = *pMeta->instrumentation;
+
+    const auto formatTranslation = [](const Matrix4& matrix) {
+      return str::format(
+        "(", std::setprecision(9), matrix[3][0], ", ", matrix[3][1], ", ", matrix[3][2], ")");
+    };
+
+    std::ostringstream trackingHistory;
+    trackingHistory << std::setprecision(9);
+    for (uint8_t age = 0; age < m_drawCallMeta.activeTicks; age++) {
+      const uint8_t tick = (m_drawCallMeta.ticker + m_drawCallMeta.activeTicks - age) % m_drawCallMeta.activeTicks;
+      if (!m_drawCallMeta.ready[tick]) {
+        continue;
+      }
+
+      const DrawCallMetaInfo* historyMeta = tryFindIn(m_drawCallMeta.infos[tick], objectPickingValue);
+      if (historyMeta == nullptr || historyMeta->instrumentation == nullptr) {
+        continue;
+      }
+      const DrawCallInstrumentation& historyInstrumentation =
+        *historyMeta->instrumentation;
+
+      trackingHistory
+        << "\n    frame=" << std::dec << historyInstrumentation.frameId
+        << " mesh=0x" << std::hex << historyMeta->meshHash
+        << " positions=0x" << historyInstrumentation.geometryHashes[HashComponents::VertexPosition]
+        << " bone=0x" << historyInstrumentation.boneHash
+        << std::dec
+        << " ri=" << historyInstrumentation.replacementInstanceId
+        << " riCreated=" << historyInstrumentation.replacementFrameCreated
+        << " riLastSeen=" << historyInstrumentation.replacementFrameLastSeen
+        << " dirty=0x" << std::hex << historyInstrumentation.replacementDirtyFlags
+        << std::dec
+        << " instance=" << historyInstrumentation.instanceId
+        << " instanceUpdated=" << historyInstrumentation.instanceFrameLastUpdated
+        << " blas=0x" << std::hex << historyInstrumentation.blasAddress
+        << std::dec
+        << " blasCreated=" << historyInstrumentation.blasFrameCreated
+        << " blasTouched=" << historyInstrumentation.blasFrameLastTouched
+        << " blasUpdated=" << historyInstrumentation.blasFrameLastUpdated
+        << " positionBuffer=" << historyInstrumentation.positionBufferIndex
+        << " previousPositionBuffer=" << historyInstrumentation.previousPositionBufferIndex
+        << " positionOffset=" << historyInstrumentation.positionOffset
+        << " previousPositionOffset=" << historyInstrumentation.previousPositionOffset
+        << " historyBuffers=[0x" << std::hex << historyInstrumentation.historyBuffer0Address
+        << ",0x" << historyInstrumentation.historyBuffer1Address << "]"
+        << std::dec
+        << " previousDefined=" << historyInstrumentation.previousPositionBufferDefined
+        << " static=" << historyInstrumentation.surfaceIsStatic
+        << " preserve=" << historyInstrumentation.surfaceIsPreservePath
+        << " objectT=" << formatTranslation(historyInstrumentation.surfaceObjectToWorld)
+        << " prevObjectT=" << formatTranslation(historyInstrumentation.surfacePrevObjectToWorld);
+    }
+
+    if (instrumentation.externalMesh) {
       Logger::info(str::format(
         "[Mesh-Hash-Debug]\n",
         "  objectPickingValue: 0x", std::hex, objectPickingValue, "\n",
@@ -2053,27 +2203,27 @@ namespace dxvk {
       return;
     }
 
-    const GeometryHashes& hashes = pMeta->geometryHashes;
+    const GeometryHashes& hashes = instrumentation.geometryHashes;
     const bool hasLegacy0 = hashes[HashComponents::LegacyPositions0] != kEmptyHash
       && hashes[HashComponents::LegacyIndices] != kEmptyHash;
     const bool hasLegacy1 = hashes[HashComponents::LegacyPositions1] != kEmptyHash
       && hashes[HashComponents::LegacyIndices] != kEmptyHash;
 
     std::ostringstream blendIndexSamples;
-    const uint32_t blendIndexTupleSize = pMeta->numBonesPerVertex > 0
-      ? pMeta->numBonesPerVertex
+    const uint32_t blendIndexTupleSize = instrumentation.numBonesPerVertex > 0
+      ? instrumentation.numBonesPerVertex
       : 1;
-    for (uint32_t sample = 0; sample < pMeta->blendIndexDebugSampleCount; sample++) {
+    for (uint32_t sample = 0; sample < instrumentation.blendIndexDebugSampleCount; sample++) {
       if (sample != 0) {
         blendIndexSamples << ((sample % blendIndexTupleSize) == 0 ? "; " : ", ");
       }
-      blendIndexSamples << static_cast<uint32_t>(pMeta->blendIndexDebugSamples[sample]);
+      blendIndexSamples << static_cast<uint32_t>(instrumentation.blendIndexDebugSamples[sample]);
     }
 
     std::ostringstream boneMatrixSamples;
     boneMatrixSamples << std::setprecision(9);
-    for (uint32_t bone = 0; bone < pMeta->boneMatrixDebugSampleCount; bone++) {
-      const Matrix4& matrix = pMeta->boneMatrixDebugSamples[bone];
+    for (uint32_t bone = 0; bone < instrumentation.boneMatrixDebugSampleCount; bone++) {
+      const Matrix4& matrix = instrumentation.boneMatrixDebugSamples[bone];
       boneMatrixSamples
         << "\n      [" << std::dec << bone << "]: "
         << "[(" << matrix[0][0] << ", " << matrix[0][1] << ", " << matrix[0][2] << ", " << matrix[0][3] << "), "
@@ -2148,16 +2298,16 @@ namespace dxvk {
       "  objectPickingValue: 0x", std::hex, objectPickingValue, "\n",
       "  assetHash: 0x", pMeta->meshHash, "\n",
       "  eyeInputs:\n",
-      "    isEye: ", pMeta->isEye, "\n",
-      "    texgenMode: ", static_cast<uint32_t>(pMeta->texgenMode), "\n",
+      "    isEye: ", instrumentation.isEye, "\n",
+      "    texgenMode: ", static_cast<uint32_t>(instrumentation.texgenMode), "\n",
       std::hex,
-      "    materialHash: 0x", pMeta->materialHash, "\n",
-      "    colorTextureHash: 0x", pMeta->colorTextureHash, "\n",
-      "    colorTexture2Hash: 0x", pMeta->colorTexture2Hash, "\n",
+      "    materialHash: 0x", instrumentation.materialHash, "\n",
+      "    colorTextureHash: 0x", instrumentation.colorTextureHash, "\n",
+      "    colorTexture2Hash: 0x", instrumentation.colorTexture2Hash, "\n",
       std::dec,
-      "    textureTransform: ", formatMatrix(pMeta->textureTransform), "\n",
-      "    objectToWorld: ", formatMatrix(pMeta->objectToWorld), "\n",
-      "    worldToView: ", formatMatrix(pMeta->worldToView), "\n",
+      "    textureTransform: ", formatMatrix(instrumentation.textureTransform), "\n",
+      "    objectToWorld: ", formatMatrix(instrumentation.objectToWorld), "\n",
+      "    worldToView: ", formatMatrix(instrumentation.worldToView), "\n",
       "  assetRuleMask: 0x", RtxOptions::geometryAssetHashRule().raw(), "\n",
       "  generationRuleMask: 0x", RtxOptions::geometryHashGenerationRule().raw(), "\n",
       "  components:\n",
@@ -2178,23 +2328,24 @@ namespace dxvk {
       "    legacyAsset1: ", hasLegacy1 ? str::format("0x", hashes.getHashForRule<rules::LegacyAssetHash1>()) : std::string("not generated"), "\n",
       "  descriptorInputs:\n",
       std::dec,
-      "    vertexCount: ", pMeta->vertexCount, "\n",
-      "    indexCount: ", pMeta->indexCount, "\n",
-      "    topology: ", static_cast<uint32_t>(pMeta->topology), "\n",
-      "    indexType: ", static_cast<uint32_t>(pMeta->indexType), "\n",
-      "    positionStride: ", pMeta->positionStride, "\n",
-      "    positionFormat: ", static_cast<uint32_t>(pMeta->positionFormat),
+      "    vertexCount: ", instrumentation.vertexCount, "\n",
+      "    indexCount: ", instrumentation.indexCount, "\n",
+      "    topology: ", static_cast<uint32_t>(instrumentation.topology), "\n",
+      "    indexType: ", static_cast<uint32_t>(instrumentation.indexType), "\n",
+      "    positionStride: ", instrumentation.positionStride, "\n",
+      "    positionFormat: ", static_cast<uint32_t>(instrumentation.positionFormat),
       "\n  skinningInputs:\n",
-      "    numBones: ", pMeta->numBones, "\n",
-      "    numBonesPerVertex: ", pMeta->numBonesPerVertex, "\n",
-      "    minBoneIndex: ", pMeta->minBoneIndex, "\n",
+      "    numBones: ", instrumentation.numBones, "\n",
+      "    numBonesPerVertex: ", instrumentation.numBonesPerVertex, "\n",
+      "    minBoneIndex: ", instrumentation.minBoneIndex, "\n",
       std::hex,
-      "    boneHash: 0x", pMeta->boneHash, "\n",
-      "    blendIndicesHash: 0x", pMeta->blendIndicesHash, "\n",
+      "    boneHash: 0x", instrumentation.boneHash, "\n",
+      "    blendIndicesHash: 0x", instrumentation.blendIndicesHash, "\n",
       std::dec,
       "    blendIndexSamples: [", blendIndexSamples.str(), "]\n",
       "    boneMatrixSamples:", boneMatrixSamples.str(),
-      canonicalDiagnostics));
+      canonicalDiagnostics,
+      "\n  trackingHistory (newest first):", trackingHistory.str()));
   }
 
   std::vector<ObjectPickingValue> SceneManager::gatherObjectPickingValuesByTextureHash(XXH64_hash_t texHash) {
@@ -2203,7 +2354,7 @@ namespace dxvk {
 
     const int ticksToCheck[] = {
       m_drawCallMeta.ticker, // current tick
-      (m_drawCallMeta.ticker + m_drawCallMeta.MaxTicks - 1) % m_drawCallMeta.MaxTicks, // prev tick
+      (m_drawCallMeta.ticker + m_drawCallMeta.activeTicks - 1) % m_drawCallMeta.activeTicks, // prev tick
     };
 
     auto correspondingValues = std::vector<ObjectPickingValue> {};

@@ -22,6 +22,7 @@
 #pragma once
 
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <vector>
 #include <set>
@@ -359,7 +360,11 @@ private:
       const std::vector<AssetReplacement>* pReplacements,
       ReplacementInstance* replacementInstance);
 
-  void trackObjectPickingMeta(const DrawCallState& drawCallState, ObjectPickingValue objectPickingValue);
+  void trackObjectPickingMeta(
+      const DrawCallState& drawCallState,
+      ObjectPickingValue objectPickingValue,
+      const RtInstance* instance = nullptr,
+      const ReplacementInstance* replacementInstance = nullptr);
 
   // Refreshes BlasEntry::input and per-instance draw state on the preserve path (matches drawReplacements'
   // DrawCallState wiring).
@@ -421,15 +426,12 @@ private:
   
   float m_uniqueObjectSearchDistance = 1.f;
 
-  struct DrawCallMetaInfo {
+  struct DrawCallInstrumentation {
     static constexpr uint32_t MaxBoneMatrixDebugSamples = 64;
 
-    XXH64_hash_t legacyTextureHash { kEmptyHash };
-    XXH64_hash_t legacyTextureHash2 { kEmptyHash };
     XXH64_hash_t colorTextureHash { kEmptyHash };
     XXH64_hash_t colorTexture2Hash { kEmptyHash };
     XXH64_hash_t materialHash { kEmptyHash };
-    XXH64_hash_t meshHash { kEmptyHash };
     GeometryHashes geometryHashes {};
     uint32_t vertexCount {};
     uint32_t indexCount {};
@@ -452,12 +454,47 @@ private:
     TexGenMode texgenMode { TexGenMode::None };
     bool isEye {};
     bool externalMesh {};
+
+    // Short-lived frame history used to diagnose animated-geometry tracking and
+    // previous-position-buffer continuity from object-picking captures.
+    uint32_t frameId { kInvalidFrameIndex };
+    uint64_t instanceId { kInvalidInstanceId };
+    uint32_t instanceFrameLastUpdated { kInvalidFrameIndex };
+    uint32_t replacementInstanceId { UINT32_MAX };
+    uint32_t replacementFrameCreated { kInvalidFrameIndex };
+    uint32_t replacementFrameLastSeen { kInvalidFrameIndex };
+    uint32_t replacementDirtyFlags {};
+    uint64_t blasAddress {};
+    uint32_t blasFrameCreated { kInvalidFrameIndex };
+    uint32_t blasFrameLastTouched { kInvalidFrameIndex };
+    uint32_t blasFrameLastUpdated { kInvalidFrameIndex };
+    uint64_t historyBuffer0Address {};
+    uint64_t historyBuffer1Address {};
+    uint32_t positionBufferIndex { kSurfaceInvalidBufferIndex };
+    uint32_t previousPositionBufferIndex { kSurfaceInvalidBufferIndex };
+    uint32_t positionOffset {};
+    uint32_t previousPositionOffset {};
+    Matrix4 surfaceObjectToWorld {};
+    Matrix4 surfacePrevObjectToWorld {};
+    bool previousPositionBufferDefined {};
+    bool surfaceIsStatic {};
+    bool surfaceIsPreservePath {};
   };
+
+  struct DrawCallMetaInfo {
+    XXH64_hash_t legacyTextureHash { kEmptyHash };
+    XXH64_hash_t legacyTextureHash2 { kEmptyHash };
+    XXH64_hash_t meshHash { kEmptyHash };
+    std::shared_ptr<DrawCallInstrumentation> instrumentation {};
+  };
+
   struct DrawCallMeta {
-    constexpr static inline uint8_t MaxTicks = 2;
+    constexpr static inline uint8_t BaseTicks = 2;
+    constexpr static inline uint8_t MaxTicks = 16;
     std::unordered_map<ObjectPickingValue, DrawCallMetaInfo> infos[MaxTicks] {};
     bool ready[MaxTicks] {};
     uint8_t ticker {};
+    uint8_t activeTicks { BaseTicks };
     dxvk::mutex mutex {};
   } m_drawCallMeta {};
 

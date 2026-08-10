@@ -453,8 +453,9 @@ namespace dxvk {
       vertexLayoutHash = hashVertexLayout(geoData);
     }
 
-    const bool collectDebugData = m_parent->GetDXVKDevice()->getCommon()->getResources()
-      .getRaytracingOutput().m_primaryObjectPicking.isValid();
+    const bool collectDebugData = RtxOptions::enableInstrumentation()
+      && m_parent->GetDXVKDevice()->getCommon()->getResources()
+        .getRaytracingOutput().m_primaryObjectPicking.isValid();
 
     return m_pGeometryWorkers->Schedule([vertexRegions, indexBufferRef = indexBufferRef.ptr(),
                                  pIndexData, indexStride, indexDataSize, indexCount,
