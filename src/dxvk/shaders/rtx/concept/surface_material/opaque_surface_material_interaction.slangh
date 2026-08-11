@@ -487,6 +487,15 @@ void overrideMaterialInteractionForEye(
     cb.eyeArgs.irisDepth
   );
 
+  // The stock EyeRefract shader samples its iris from the center half of the
+  // projected eye UVs (uv * 0.5 + 0.25). The tagged Source projection already
+  // carries that crop. eyeCalcIrisUvParallaxed applies the ordinary Eyes
+  // texture's 2x remap, so undo it only for EyeRefract; otherwise the crop is
+  // cancelled and the authored iris appears roughly half-sized.
+  if (surface.eyeUseRadialIrisMask) {
+    uvIris = (uvIris - 0.5) * 0.5 + 0.5;
+  }
+
   bool    irisLoaded;
   vec4 irisSample;
   {
@@ -514,11 +523,18 @@ void overrideMaterialInteractionForEye(
   // Todo: Disable this for when a sRGB texture is the source of the albedo.
   irisSample.rgb = gammaToLinear(irisSample.rgb);
 
+  // EyeRefract stores cornea noise in iris alpha. Its tagged Source draw uses
+  // the analytic iris boundary instead; ordinary Eyes materials retain their
+  // authored alpha mask.
+  float irisBlend = surface.eyeUseRadialIrisMask
+    ? eyeIsIris(surfaceInteraction.textureCoordinates, cb.eyeArgs.irisRadius, 0.02)
+    : irisSample.a;
+
   // blend between whites and iris
   vec3 eyeAlbedo = mix(
     saturate(whitesAlbedo * cb.eyeArgs.whitesAlbedoScale),
     irisSample.rgb,
-    irisSample.a // 0 (transparent) - whites, 1 (opaque) - iris
+    irisBlend // 0 (transparent) - whites, 1 (opaque) - iris
   );
   // NOTE: eye redness can be added here, if a game can provide such data
 
@@ -537,7 +553,7 @@ void overrideMaterialInteractionForEye(
   opaqueSurfaceMaterialInteraction.opacity          = eyeOpacity;
 
   opaqueSurfaceMaterialInteraction.emissiveRadiance =
-    irisSample.rgb * irisSample.a *
+    irisSample.rgb * irisBlend *
     opaqueSurfaceMaterial.emissiveIntensity;
 }
 

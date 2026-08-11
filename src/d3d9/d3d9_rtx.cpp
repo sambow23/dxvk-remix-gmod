@@ -1168,6 +1168,7 @@ namespace dxvk {
       // This preserves correct raster UVs while retaining the single-draw
       // sclera + iris inputs required by Remix's eye material.
       constexpr float kSourceEyeMetadataTag = 54321.0f;
+      constexpr float kSourceEyeRefractMetadataTag = 54322.0f;
       for (uint32_t stage = 0; stage < caps::TextureStageCount; stage++) {
         const DWORD transformFlags =
           d3d9State().textureStages[stage][DXVK_TSS_TEXTURETRANSFORMFLAGS];
@@ -1180,12 +1181,39 @@ namespace dxvk {
 
         const Matrix4& candidate = d3d9State().transforms[
           GetTransformIndex(D3DTS_TEXTURE0) + stage];
-        const float tagDifference =
-          candidate.data[3].z - kSourceEyeMetadataTag;
-        if (tagDifference > -0.5f && tagDifference < 0.5f) {
+        const float tag = candidate.data[3].z;
+        const bool isTaggedSourceEye =
+          (tag > kSourceEyeMetadataTag - 0.5f &&
+           tag < kSourceEyeMetadataTag + 0.5f) ||
+          (tag > kSourceEyeRefractMetadataTag - 0.5f &&
+           tag < kSourceEyeRefractMetadataTag + 0.5f);
+        if (isTaggedSourceEye) {
           m_activeDrawCallState.transformData.textureTransform = candidate;
           m_activeDrawCallState.transformData.texgenMode =
             TexGenMode::ViewPositions;
+
+          // Bounded handoff diagnostics for Source's fixed-function eye
+          // bridge. This confirms that both textures survived material
+          // extraction and that the tagged projection reached Remix. Keep it
+          // behind the shared GMod instrumentation option to avoid per-frame
+          // log traffic in normal play.
+          if (RtxOptions::enableInstrumentation()) {
+            static uint32_t s_sourceEyeHandoffLogCount = 0;
+            if (s_sourceEyeHandoffLogCount++ < 32) {
+              Logger::info(str::format(
+                "[GMod Eye] Handoff: tag=", tag,
+                " stage=", stage,
+                " transformFlags=0x", std::hex, transformFlags,
+                " texcoordIndex=0x", texcoordIndex,
+                " color0=0x", m_activeDrawCallState.materialData.getColorTexture().getImageHash(),
+                " color1=0x", m_activeDrawCallState.materialData.getColorTexture2().getImageHash(),
+                std::dec,
+                " vertices=", m_activeDrawCallState.geometryData.vertexCount,
+                " indices=", m_activeDrawCallState.geometryData.indexCount,
+                " origin=", candidate.data[0].w, ",",
+                  candidate.data[1].w, ",", candidate.data[2].w));
+            }
+          }
           break;
         }
       }
