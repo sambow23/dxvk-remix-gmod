@@ -373,7 +373,11 @@ namespace dxvk {
       cudaDepsDirectorySource = "default DLL search path (NRC_Vulkan.dll path unavailable)";
     }
 
-    globalSettings.depsDirectoryPath = !cudaDepsDirectory.empty() ? cudaDepsDirectory.c_str() : nullptr;
+    std::wstring wCudaDepsDirectory;
+    if (!cudaDepsDirectory.empty()) {
+      wCudaDepsDirectory = std::filesystem::path(cudaDepsDirectory).wstring();
+    }
+    globalSettings.depsDirectoryPath = !wCudaDepsDirectory.empty() ? wCudaDepsDirectory.c_str() : nullptr;
 
     const VkPhysicalDeviceProperties& deviceProperties = m_device->adapter()->deviceProperties();
     Logger::info(str::format(

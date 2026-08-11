@@ -29,6 +29,7 @@
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx_texture_manager.h"
 #include "rtx/pass/common_binding_indices.h"
+#include "rtx_fork_game_state.h"
 #include <rtx_shaders/transmittance_lut.h>
 #include <rtx_shaders/multiscattering_lut.h>
 #include <rtx_shaders/sky_view_lut.h>
@@ -53,6 +54,34 @@
 namespace dxvk {
   // Shader definitions for atmosphere LUT generation
   namespace {
+    std::string trimGameStateValue(const std::string& raw) {
+      constexpr char kWhitespace[] = " \t\r\n";
+      const size_t begin = raw.find_first_not_of(kWhitespace);
+      if (begin == std::string::npos) {
+        return {};
+      }
+      const size_t end = raw.find_last_not_of(kWhitespace);
+      return raw.substr(begin, end - begin + 1);
+    }
+
+    bool tryReadGameStateFloat(const std::string& key, float& outValue) {
+      std::string raw;
+      if (!fork_game_state::GameStateStore::get().tryGet(key, raw)) {
+        return false;
+      }
+      const std::string trimmed = trimGameStateValue(raw);
+      if (trimmed.empty()) {
+        return false;
+      }
+      char* parseEnd = nullptr;
+      const float parsedValue = std::strtof(trimmed.c_str(), &parseEnd);
+      if (parseEnd == trimmed.c_str() || *parseEnd != '\0') {
+        return false;
+      }
+      outValue = parsedValue;
+      return true;
+    }
+
     class TransmittanceLutShader : public ManagedShader {
       SHADER_SOURCE(TransmittanceLutShader, VK_SHADER_STAGE_COMPUTE_BIT, transmittance_lut)
       
@@ -455,7 +484,6 @@ namespace {
     args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
     // Applied post-LUT-sample per ray, never feeds a LUT bake — exclude from the key.
     args.skyIndirectRadianceScale    = 0.0f;
-<<<<<<< HEAD
     // Lightning flash (fork — 2026-07-14): per-frame animated, feeds only the
     // view-path cloud march + the scene light sync — never a LUT bake. Without
     // this every flash frame would invalidate the sky-LUT cache key.
@@ -491,11 +519,9 @@ namespace {
     args.milkyWayDustAmount          = 0.0f;
     args.milkyWayCoreColor           = vec3(0.0f, 0.0f, 0.0f);
     args.milkyWayDustColor           = vec3(0.0f, 0.0f, 0.0f);
-=======
     args.celestialTextureFlags       = 0u;
     args.celestialTextureAngularRadius = 0.0f;
     args.celestialTextureBrightness  = 0.0f;
->>>>>>> e502c32b (atmos: celestial texture support)
   }
 
   // Quantize one direction-vector component to the granularity step.
@@ -652,8 +678,18 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
 
   // Convert sun angles to direction vector (in Y-up space, for LUT generation)
   constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
-  float azimuthRad = RtxOptions::sunRotation() * kDegToRad; // Mapped to Rotation
-  float elevationRad = RtxOptions::sunElevation() * kDegToRad;
+  float azimuthRad = 0.0f; // Mapped to Rotation
+  float elevationRad = 15.0f * kDegToRad;
+  
+  // Override with GameState if present (Fork)
+  float gsElevation = 0.0f;
+  if (tryReadGameStateFloat("__atmosphere.sun.elevation", gsElevation)) {
+    elevationRad = gsElevation * kDegToRad;
+  }
+  float gsRotation = 0.0f;
+  if (tryReadGameStateFloat("__atmosphere.sun.rotation", gsRotation)) {
+    azimuthRad = gsRotation * kDegToRad;
+  }
   
   // Sun direction is always in Y-up space since the LUTs are generated in Y-up space
   args.sunDirection.x = std::cos(elevationRad) * std::sin(azimuthRad);
@@ -742,12 +778,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.starRotation      = RtxOptions::starRotation();
   args.starAxisElevation = RtxOptions::starAxisElevation();
   args.starAxisRotation  = RtxOptions::starAxisRotation();
-<<<<<<< HEAD
   // (nubis3SharpenStrength — the former pad3 slot — is filled in the cloud
   // block below alongside the other Nubis3 fields.)
-=======
   args.celestialTextureAngularRadius = 0.0f;
->>>>>>> e502c32b (atmos: celestial texture support)
 
   args.starPsfSharpness            = RtxOptions::starPsfSharpness();
   args.starCloudExtinctionPower    = RtxOptions::starCloudExtinctionPower();

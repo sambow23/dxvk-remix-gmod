@@ -147,7 +147,6 @@ public:
    */
   const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
 
-  /**
   void setCelestialTexturePaths(const std::string& sunPath, const std::string& moon0Path);
   DxvkImageView* getSunTextureView() const;
   DxvkImageView* getMoon0TextureView() const;

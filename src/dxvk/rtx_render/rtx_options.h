@@ -1367,10 +1367,6 @@ namespace dxvk {
                "Uses nearest filtering for vanilla sun/moon texture sprites when true, preserving pixel-art edges. "
                "Set to false to use linear filtering.");
     RTX_OPTION("rtx.atmosphere", float, sunIntensity, 1.0f, "Strength of Sun.");
-    RTX_OPTION("rtx.atmosphere", float, sunElevation, 15.0f,
-               "Sun elevation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
-    RTX_OPTION("rtx.atmosphere", float, sunRotation, 0.0f,
-               "Sun rotation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
     RTX_OPTION("rtx.atmosphere", float, altitude, 100.0f, "Height from sea level in meters.");
     RTX_OPTION("rtx.atmosphere", float, airDensity, 1.0f, "Density of air molecules multiplier (1.0 = clear sky).");
     RTX_OPTION("rtx.atmosphere", float, aerosolDensity, 1.1f, "Density of aerosols/dust multiplier (1.0 = typical).");

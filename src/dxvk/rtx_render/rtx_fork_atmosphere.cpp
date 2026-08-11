@@ -1043,12 +1043,6 @@ namespace fork_hooks {
         RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
 
-        RemixGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f deg", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
-
-        RemixGui::DragFloat("Sun Rotation", &RtxOptions::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f deg", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
-
         ImGui::TreePop();
       }
     }

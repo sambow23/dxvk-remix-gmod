@@ -820,7 +820,7 @@ namespace {
       if (flags & REMIXAPI_INSTANCE_CATEGORY_BIT_FIRST_PERSON_PLAYER_SHADOW){ result.set(InstanceCategories::FirstPersonPlayerShadow); }
       
       // Occluder is an internal category and is not exposed by the Remix API.
-      static_assert((int)InstanceCategories::Count == 28, "Instance categories changed, please update Remix SDK");
+      static_assert((int)InstanceCategories::Count == 29, "Instance categories changed, please update Remix SDK");
       return result;
     }
 

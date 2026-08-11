@@ -90,9 +90,6 @@ Texture3D<float> AtmosphereCloudDAmbient;
 layout(binding = BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
 Texture2D<float4> AtmosphereCloudSecondaryLut;
 
-layout(binding = BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
-Texture2D<float4> AtmosphereCloudPlacementMap;
-
 layout(binding = BINDING_ATMOSPHERE_SUN_TEXTURE)
 Texture2D<float4> AtmosphereSunTexture;
 
