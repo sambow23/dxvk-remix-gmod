@@ -360,6 +360,10 @@ namespace dxvk {
                   "Defines which hashes we need to include when sampling from replacements and doing USD capture.",
                   args.onChangeCallback = &geometryAssetHashRuleStringOnChange,
                   args.flags = RtxOptionFlags::InvalidatesDrawcallTranslation);
+    RTX_OPTION_ARGS("rtx.gmod", std::vector<XXH64_hash_t>, meshReplacementHashAliases, {},
+                  "Pairs of source and target mesh hashes used only for replacement lookup. "
+                  "This allows equivalent GMod geometry to consume replacements authored for another Source build.",
+                  args.flags = RtxOptionFlags::InvalidatesDrawcallTranslation);
     RTX_OPTION_ARGS("rtx", fast_unordered_set, raytracedRenderTargetTextures, {},
                     "DescriptorHashes for Render Targets. (Screens that should display the output of another camera).",
                     args.flags = RtxOptionFlags::InvalidatesDrawcallTranslation);
@@ -1413,6 +1417,17 @@ namespace dxvk {
     }
     static const HashRule& geometryAssetHashRule() {
       return s_geometryAssetHashRule;
+    }
+
+    static bool getMeshReplacementHashAlias(XXH64_hash_t sourceHash, XXH64_hash_t& targetHash) {
+      const auto& aliases = meshReplacementHashAliases();
+      for (size_t i = 0; i + 1 < aliases.size(); i += 2) {
+        if (aliases[i] == sourceHash) {
+          targetHash = aliases[i + 1];
+          return true;
+        }
+      }
+      return false;
     }
 
   private:
