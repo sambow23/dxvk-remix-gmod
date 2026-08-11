@@ -666,6 +666,23 @@ namespace dxvk {
 
     std::vector<AssetReplacement>* pReplacements = m_pReplacer->getReplacementsForMesh(activeReplacementHash);
 
+    // Equivalent Source model builds can submit identical logical meshes with
+    // different buffer layouts and therefore different asset hashes.  Keep the
+    // draw's real hash for identity/caching, but allow an explicitly configured
+    // authored hash to supply its replacement assets.
+    if (!pReplacements) {
+      XXH64_hash_t aliasedReplacementHash = 0;
+      if (RtxOptions::getMeshReplacementHashAlias(activeReplacementHash, aliasedReplacementHash)) {
+        trackMeshHash(aliasedReplacementHash);
+        pReplacements = m_pReplacer->getReplacementsForMesh(aliasedReplacementHash);
+        if (RtxOptions::enableInstrumentation() && pReplacements) {
+          ONCE(Logger::info(str::format(
+            "[Mesh-Replacement-Alias] Matched source hash 0x", std::hex,
+            activeReplacementHash, " to authored hash 0x", aliasedReplacementHash)));
+        }
+      }
+    }
+
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     if ((RtxOptions::geometryHashGenerationRule() & rules::LegacyAssetHash0) == rules::LegacyAssetHash0) {
       if (!pReplacements) {
