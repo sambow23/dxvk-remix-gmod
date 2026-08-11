@@ -61,11 +61,40 @@
 #include <cstring>
 #include <fstream>
 #include <chrono>
+#include <cstdlib>
 #include "../../util/log/log.h"
 #include "../../util/util_string.h"
 
 namespace dxvk {
   namespace {
+    std::string trimGameStateValue(const std::string& raw) {
+      constexpr char kWhitespace[] = " \t\r\n";
+      const size_t begin = raw.find_first_not_of(kWhitespace);
+      if (begin == std::string::npos) {
+        return {};
+      }
+      const size_t end = raw.find_last_not_of(kWhitespace);
+      return raw.substr(begin, end - begin + 1);
+    }
+
+    bool tryReadGameStateFloat(const std::string& key, float& outValue) {
+      std::string raw;
+      if (!fork_game_state::GameStateStore::get().tryGet(key, raw)) {
+        return false;
+      }
+      const std::string trimmed = trimGameStateValue(raw);
+      if (trimmed.empty()) {
+        return false;
+      }
+      char* parseEnd = nullptr;
+      const float parsedValue = std::strtof(trimmed.c_str(), &parseEnd);
+      if (parseEnd == trimmed.c_str() || *parseEnd != '\0') {
+        return false;
+      }
+      outValue = parsedValue;
+      return true;
+    }
+
     class TransmittanceLutShader : public ManagedShader {
       SHADER_SOURCE(TransmittanceLutShader, VK_SHADER_STAGE_COMPUTE_BIT, transmittance_lut)
       
@@ -666,6 +695,17 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   float sunAzimuthDeg   = RtxAtmosphere::sunRotation();
   if (RtxAtmosphere::timeCycleEnable()) {
     computeTimeCycleSunAngles(m_timeOfDayHours, sunElevationDeg, sunAzimuthDeg);
+  }
+
+  // Runtime game-state values take precedence when supplied. This lets a game
+  // drive the sun per frame without changing persisted atmosphere options.
+  float gameStateSunElevation = 0.0f;
+  if (tryReadGameStateFloat("__atmosphere.sun.elevation", gameStateSunElevation)) {
+    sunElevationDeg = gameStateSunElevation;
+  }
+  float gameStateSunRotation = 0.0f;
+  if (tryReadGameStateFloat("__atmosphere.sun.rotation", gameStateSunRotation)) {
+    sunAzimuthDeg = gameStateSunRotation;
   }
 
   float azimuthRad   = sunAzimuthDeg   * dxvk::kDegreesToRadians;

@@ -427,8 +427,6 @@ extern "C" {
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetupCamera)(
     const remixapi_CameraInfo* info);
 
-
-
 #define REMIXAPI_INSTANCE_INFO_MAX_BONES_COUNT 256
 
   typedef struct remixapi_InstanceInfoBoneTransformsEXT {
@@ -1194,10 +1192,6 @@ extern "C" {
 
     PFN_remixapi_Startup            Startup;
     PFN_remixapi_Present            Present;
-    // Camera-in-medium material. Kept adjacent to Present to mirror the
-    // canonical upstream layout (upstream commit 2bac8874 moved it here to
-    // fix backwards-compat); fork extension functions are appended below.
-    PFN_remixapi_SetCameraMediumMaterial SetCameraMediumMaterial;
 
     // NOTE: REMIXAPI_PTR is required so the calling convention matches the
     // actual remixapi_GetUIState / remixapi_SetUIState entry functions
