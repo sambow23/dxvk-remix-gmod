@@ -277,7 +277,8 @@ struct RtSurface {
     textureFlags |= ((static_cast<uint32_t>(textureAlphaOperation)  & 0x7) << 11);
 
     textureFlags |= eyeParams ? (1 << 14) : 0;
-    // textureFlags bits 15-16 unused
+    textureFlags |= eyeParams && eyeUseRadialIrisMask ? (1 << 15) : 0;
+    // textureFlags bit 16 unused
 
     static_assert(static_cast<uint32_t>(TexGenMode::Count) <= 4);
     textureFlags |= ((static_cast<uint32_t>(texgenMode) & 0x3) << 17);
@@ -344,6 +345,8 @@ struct RtSurface {
   bool isMotionBlurMaskOut = false;
   bool skipSurfaceInteractionSpritesheetAdjustment = false;
   bool ignoreTransparencyLayer = false;
+  // EyeRefract stores cornea noise rather than an iris mask in iris alpha.
+  bool eyeUseRadialIrisMask = false;
 
   RtTextureArgSource textureColorArg1Source = RtTextureArgSource::Texture;
   RtTextureArgSource textureColorArg2Source = RtTextureArgSource::None;

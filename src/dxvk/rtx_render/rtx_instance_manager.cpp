@@ -1097,6 +1097,7 @@ namespace dxvk {
 
         currentInstance.surface.blendModeState = drawCall.getMaterialData().blendMode;
 
+        currentInstance.surface.eyeUseRadialIrisMask = false;
         if (drawCall.isEye()) {
           // assume that the texture transform has eye parameters encoded
           const Matrix4& texTransform = drawCall.getTransformData().textureTransform;
@@ -1110,7 +1111,13 @@ namespace dxvk {
           // shader.  Source's projection produces [0, 1] directly, while Remix
           // expects [-1, 1] and remaps it, hence the factor of two.
           constexpr float kSourceEyeMetadataTag = 54321.0f;
-          if (std::abs(texTransform.data[3].z - kSourceEyeMetadataTag) < 0.5f) {
+          constexpr float kSourceEyeRefractMetadataTag = 54322.0f;
+          const float sourceEyeTag = texTransform.data[3].z;
+          const bool isSourceEye =
+            std::abs(sourceEyeTag - kSourceEyeMetadataTag) < 0.5f;
+          const bool isSourceEyeRefract =
+            std::abs(sourceEyeTag - kSourceEyeRefractMetadataTag) < 0.5f;
+          if (isSourceEye || isSourceEyeRefract) {
             const Matrix4 worldToEyeUv = texTransform * drawCall.getTransformData().worldToView;
             const Vector3 sourceBasisU{
               worldToEyeUv.data[0].x,
@@ -1142,6 +1149,27 @@ namespace dxvk {
             };
             eyeParams.eyeRightU = sourceBasisU * (2.0f * sourceIrisScale);
             eyeParams.eyeUpV = sourceBasisV * (2.0f * sourceIrisScale);
+            currentInstance.surface.eyeUseRadialIrisMask = isSourceEyeRefract;
+
+            if (RtxOptions::enableInstrumentation()) {
+              static uint32_t s_sourceEyeInstanceLogCount = 0;
+              if (s_sourceEyeInstanceLogCount++ < 32) {
+                Logger::info(str::format(
+                  "[GMod Eye] Instance: tag=", sourceEyeTag,
+                  " refract=", isSourceEyeRefract,
+                  " color0=0x", std::hex,
+                    drawCall.getMaterialData().getColorTexture().getImageHash(),
+                  " color1=0x",
+                    drawCall.getMaterialData().getColorTexture2().getImageHash(),
+                  std::dec,
+                  " origin=", eyeParams.eyeballOrigin.x, ",",
+                    eyeParams.eyeballOrigin.y, ",", eyeParams.eyeballOrigin.z,
+                  " basisLength=", length(eyeParams.eyeRightU), ",",
+                    length(eyeParams.eyeUpV),
+                  " drawHash=0x", std::hex,
+                    drawCall.getHash(RtxOptions::geometryAssetHashRule())));
+              }
+            }
           } else {
             eyeParams.eyeballOrigin = Vector3{ texTransform.data[0].w, texTransform.data[1].w, texTransform.data[2].w };
             eyeParams.eyeRightU = Vector3{ texTransform.data[0].x, texTransform.data[1].x, texTransform.data[2].x };
