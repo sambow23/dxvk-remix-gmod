@@ -396,6 +396,7 @@ struct RaytraceArgs {
   uint pomEnableReSTIRGI;
   uint pomEnablePSR;
   uint pomMaxIterations;
+  uint pomAtlasDim;
   uint enableSssTransmission;
   uint enableSssTransmissionSingleScattering;
   uint sssTransmissionBsdfSampleCount;

@@ -1292,6 +1292,7 @@ namespace dxvk {
       constants.pomEnablePSR = RtxOptions::Displacement::enablePSR();
     }
     constants.pomMaxIterations = RtxOptions::Displacement::maxIterations();
+    constants.pomAtlasDim = RtxOptions::Displacement::atlasDim();
 
     constants.totalMipBias = getSceneManager().getTotalMipBias(); 
     constants.hairCardMipBias = RtxOptions::hairCardMipBias();
