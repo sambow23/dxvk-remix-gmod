@@ -1,4 +1,4 @@
-﻿/*
+/*
 * Copyright (c) 2022-2026, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
@@ -1326,7 +1326,7 @@ void geometryResolverVertexOutputDebugView(
       const MemoryPolymorphicSurfaceMaterial memoryPolymorphicSurfaceMaterial = surfaceMaterials[uint(rayInteraction.surfaceIndex)];
       OpaqueSurfaceMaterial opaqueSurfaceMaterial = opaqueSurfaceMaterialCreate(memoryPolymorphicSurfaceMaterial);
       if (opaqueSurfaceMaterial.hasValidDisplacement()) {
-        heightMapValue = 1.f - pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction.textureCoordinates);
+        heightMapValue = 1.f - pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction.textureCoordinates, surfaceInteraction.textureCoordinates);
       }
     }
     

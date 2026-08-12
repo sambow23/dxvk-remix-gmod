@@ -521,6 +521,7 @@ namespace dxvk {
       RTX_OPTION("rtx.displacement", float, displacementFactor, 1.0f, "Scaling factor for all displacement maps");
       RTX_OPTION("rtx.displacement", float, displacementInFactor, 1.0f, "Scale factor for inwards displacement");
       RTX_OPTION("rtx.displacement", float, displacementOutFactor, 1.0f, "Scale factor for outwards displacement");
+      RTX_OPTION("rtx.displacement", uint, atlasDim, 0, "If non-zero, bounds the POM UV raymarching to a uniform N x N atlas grid layout (e.g., 16 for a 16x16 block atlas), wrapping rays seamlessly to prevent UVs from bleeding into adjacent atlas tiles.");
       RTX_OPTION("rtx.displacement", uint, maxIterations, 64, "The max number of times the POM raymarch will iterate.");
     } displacement;
 

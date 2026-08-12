@@ -57,23 +57,45 @@ float2 pomGetBoxSize(uint level, uint2 fullBoxSize)
   return 1.f / levelSize;
 }
 
-float pomGetBoxHeight(Texture2D texture, SamplerState sampler, float2 boxCenter, uint level) 
+// Wrap texcoord within the original atlas tile
+float2 pomWrapTexcoord(float2 texcoord, float2 originalTexcoord)
 {
-  return texture.SampleLevel(sampler, boxCenter, level - cb.totalMipBias).r;
+  if (cb.pomAtlasDim > 0)
+  {
+    float atlasDim = float(cb.pomAtlasDim);
+    float tileSize = 1.0f / atlasDim;
+    float2 tileIndex = floor(originalTexcoord * atlasDim);
+    float2 localUV = (texcoord * atlasDim) - tileIndex;
+    
+    if (localUV.x < 0.0f) localUV.x = -localUV.x;
+    else if (localUV.x > 1.0f) localUV.x = 2.0f - localUV.x;
+
+    if (localUV.y < 0.0f) localUV.y = -localUV.y;
+    else if (localUV.y > 1.0f) localUV.y = 2.0f - localUV.y;
+
+    return (tileIndex + localUV) * tileSize;
+  }
+  return texcoord;
 }
 
-float4 pomGetPatchCorners(Texture2D texture, SamplerState sampler, float2 boxCenter, float2 boxStep, float height, uint level)
+float pomGetBoxHeight(Texture2D texture, SamplerState sampler, float2 boxCenter, uint level, float2 originalTexcoord) 
+{
+  float2 wrappedTexcoord = pomWrapTexcoord(boxCenter, originalTexcoord);
+  return texture.SampleLevel(sampler, wrappedTexcoord, level - cb.totalMipBias).r;
+}
+
+float4 pomGetPatchCorners(Texture2D texture, SamplerState sampler, float2 boxCenter, float2 boxStep, float height, uint level, float2 originalTexcoord)
 {
   // Read the 3x3 patch around the current box
-  const float box00 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2(-1.f, -1.f), level);
-  const float box01 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2(-1.f,  0.f), level);
-  const float box02 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2(-1.f,  1.f), level);
-  const float box10 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 0.f, -1.f), level);
+  const float box00 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2(-1.f, -1.f), level, originalTexcoord);
+  const float box01 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2(-1.f,  0.f), level, originalTexcoord);
+  const float box02 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2(-1.f,  1.f), level, originalTexcoord);
+  const float box10 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 0.f, -1.f), level, originalTexcoord);
   // const float box11 = height;
-  const float box12 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 0.f,  1.f), level);
-  const float box20 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 1.f, -1.f), level);
-  const float box21 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 1.f,  0.f), level);
-  const float box22 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 1.f,  1.f), level);
+  const float box12 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 0.f,  1.f), level, originalTexcoord);
+  const float box20 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 1.f, -1.f), level, originalTexcoord);
+  const float box21 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 1.f,  0.f), level, originalTexcoord);
+  const float box22 = pomGetBoxHeight(texture, sampler, boxCenter + boxStep * float2( 1.f,  1.f), level, originalTexcoord);
 
   // Set each corner of the box to the min of the surrounding boxes.  This is needed because the mip values are maximum heights,
   // and we want each box to share corners.
@@ -126,7 +148,7 @@ float3 pomTraceRay(
     iterations++;
     const float2 boxSize = pomGetBoxSize(level, fullBoxSize);
     const float2 boxCenter = pomGetBoxCorner(curPos.xy, boxSize) + 0.5f * boxSize;
-    const float height = pomGetBoxHeight(texture, sampler, boxCenter, level);
+    const float height = pomGetBoxHeight(texture, sampler, boxCenter, level, origin.xy);
     if (level != minMipLevel && curPos.z <=  height) {
       // For mip levels above the minimum, if the curPos is below the max height of the box, just descend a level.
       level = level - 1;
@@ -169,7 +191,7 @@ float3 pomTraceRay(
         const float3 boxEntrance = origin + max(0.0f, max(boxEntranceDist.x, boxEntranceDist.y)) * direction;
 
         const float2 forwardBoxStep = boxSize * forwardStep;
-        const float4 corners = pomGetPatchCorners(texture, sampler, boxCenter, forwardBoxStep, height, minMipLevel);
+        const float4 corners = pomGetPatchCorners(texture, sampler, boxCenter, forwardBoxStep, height, minMipLevel, origin.xy);
         iterations += 8; // 8 texture lookups for the patch corners, count it as 8 iterations.
 
         // Normalize the entrance and exit coords to a 0-1 space for lerping.
@@ -235,9 +257,10 @@ float3 pomTraceRay(
 }
 
 
-float pomSampleHeight(uint16_t idx, uint16_t samplerIndex, float2 texcoord)
+float pomSampleHeight(uint16_t idx, uint16_t samplerIndex, float2 texcoord, float2 originalTexcoord)
 {
-  return 1.0f - textures[nonuniformEXT(uint(idx))].SampleLevel(samplers[nonuniformEXT(uint(samplerIndex))], texcoord, 0).r;
+  float2 wrappedTexcoord = pomWrapTexcoord(texcoord, originalTexcoord);
+  return 1.0f - textures[nonuniformEXT(uint(idx))].SampleLevel(samplers[nonuniformEXT(uint(samplerIndex))], wrappedTexcoord, 0).r;
 }
 
 float2 pomGetStep(float3 direction, float layerSize, float totalHeight)
@@ -274,7 +297,7 @@ float3 pomCalculateTexcoord(
     float2 currTexcoord = surfaceInteraction.textureCoordinates;
 
     currTexcoord = currTexcoord + (step * numLayers * (1.f - neutralHeight));
-    float currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord);
+    float currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord, surfaceInteraction.textureCoordinates);
 
     // raymarch to find intersection
     float currDepth = 0.0f, prevHeight = 0.0f;
@@ -284,7 +307,7 @@ float3 pomCalculateTexcoord(
       iterations++;
       currTexcoord -= step;
       prevHeight = currHeight;
-      currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord);
+      currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord, surfaceInteraction.textureCoordinates);
       currDepth += layerSize;
     }
 
@@ -292,10 +315,11 @@ float3 pomCalculateTexcoord(
     float depthNminus1 = prevHeight - currDepth + layerSize;
     float depthN  = currHeight - currDepth;
     float weight = saturate(depthN / (depthN - depthNminus1));
-    return float3(currTexcoord + lerp(0..xx, step, weight), currHeight);
+    float2 finalTexcoord = currTexcoord + lerp(0.0f.xx, step, weight);
+    return float3(pomWrapTexcoord(finalTexcoord, surfaceInteraction.textureCoordinates), currHeight);
   } else if (cb.pomMode == DisplacementMode::QuadtreePOM) {
 
-    return pomTraceRay(
+    float3 hit = pomTraceRay(
         textures[nonuniformEXT(uint(opaqueSurfaceMaterial.heightTextureIndex))],
         samplers[nonuniformEXT(uint(opaqueSurfaceMaterial.samplerIndex))],
         float3(surfaceInteraction.textureCoordinates, 1.0f),
@@ -303,6 +327,9 @@ float3 pomCalculateTexcoord(
         surfaceInteraction.textureGradientX,
         surfaceInteraction.textureGradientY,
         iterations, neutralHeight);
+        
+    hit.xy = pomWrapTexcoord(hit.xy, surfaceInteraction.textureCoordinates);
+    return hit;
   }
   return float3(surfaceInteraction.textureCoordinates, 1.f);
 }
@@ -318,7 +345,7 @@ float pomSampleVisibility(
   // NOTE: pomTraceRay could be used here, but testing found it was more expensive and had worse artifacts when
   // doing visibility testing.
   float2 currTexcoord = texcoord;
-  float currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord);
+  float currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord, texcoord);
   float currDepth = currHeight;
   float numLayers = pomGetNumSamples(rayDirection);
   float layerSize = rcp(numLayers);
@@ -328,7 +355,7 @@ float pomSampleVisibility(
   while (currDepth > 0.0f)
   {
     currTexcoord += step;
-    currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord);
+    currHeight = pomSampleHeight(opaqueSurfaceMaterial.heightTextureIndex, opaqueSurfaceMaterial.samplerIndex, currTexcoord, texcoord);
     currDepth -= layerSize;
 
     if (currHeight < currDepth)
