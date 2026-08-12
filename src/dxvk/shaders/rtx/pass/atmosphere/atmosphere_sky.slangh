@@ -998,7 +998,7 @@ vec3 evalSkyRadiance(
   {
     float sunCoverage = 0.0f;
     vec3 sunSprite = evalSunTextureSprite(viewDirYUp, args, sunCoverage);
-    radiance = mix(radiance, sunSprite, sunCoverage);
+    radiance += sunSprite * sunCoverage;
   }
   vec3 starLayer    = vec3(0.0f);
   vec3 airglowLayer = vec3(0.0f);
