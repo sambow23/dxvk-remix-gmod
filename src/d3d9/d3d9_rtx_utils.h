@@ -3,6 +3,7 @@
 #include <vector>
 #include <d3d9types.h>
 #include "d3d9_include.h"
+#include "d3d9_skinning_utils.h"
 
 namespace dxvk {
   struct DxvkVertexInputState;

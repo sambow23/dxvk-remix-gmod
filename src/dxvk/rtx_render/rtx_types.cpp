@@ -356,11 +356,25 @@ namespace dxvk {
         skinningData.boneHash = 0;
         skinningData.numBones = 0;
         skinningData.numBonesPerVertex = 0;
+        skinningData.rigidBoneIndex = -1;
       }
 
       // Store the numBonesPerVertex in the RasterGeometry as well to allow it to be overridden
       geometryData.numBonesPerVertex = skinningData.numBonesPerVertex;
     }
+  }
+
+  bool DrawCallState::bakeRigidSkinningIntoTransforms() {
+    if (skinningData.rigidBoneIndex < 0
+     || static_cast<size_t>(skinningData.rigidBoneIndex) >= skinningData.pBoneMatrices.size()) {
+      return false;
+    }
+
+    const Matrix4& skinningMatrix = skinningData.pBoneMatrices[skinningData.rigidBoneIndex];
+    transformData.objectToWorld = transformData.objectToWorld * skinningMatrix;
+    transformData.objectToView = transformData.objectToView * skinningMatrix;
+    skinningData = SkinningData {};
+    return true;
   }
 
   void DrawCallState::setCategory(InstanceCategories category, bool doSet) {

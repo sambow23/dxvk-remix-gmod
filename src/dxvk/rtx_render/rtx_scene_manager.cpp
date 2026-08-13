@@ -660,11 +660,20 @@ namespace dxvk {
 
 
     const XXH64_hash_t activeReplacementHash = input.getHash(RtxOptions::geometryAssetHashRule());
+    const bool collectInstrumentation = RtxOptions::enableInstrumentation();
+    MeshReplacementLookupDebug replacementLookupDebug;
+    replacementLookupDebug.valid = collectInstrumentation;
+    replacementLookupDebug.sourceHash = activeReplacementHash;
     
     // Track this mesh hash for mesh hash checking
     trackMeshHash(activeReplacementHash);
 
     std::vector<AssetReplacement>* pReplacements = m_pReplacer->getReplacementsForMesh(activeReplacementHash);
+    if (collectInstrumentation && pReplacements) {
+      replacementLookupDebug.directFound = true;
+      replacementLookupDebug.route = MeshReplacementLookupRoute::Direct;
+      replacementLookupDebug.matchedHash = activeReplacementHash;
+    }
 
     // Equivalent Source model builds can submit identical logical meshes with
     // different buffer layouts and therefore different asset hashes.  Keep the
@@ -673,8 +682,17 @@ namespace dxvk {
     if (!pReplacements) {
       XXH64_hash_t aliasedReplacementHash = 0;
       if (RtxOptions::getMeshReplacementHashAlias(activeReplacementHash, aliasedReplacementHash)) {
+        if (collectInstrumentation) {
+          replacementLookupDebug.explicitAliasConfigured = true;
+          replacementLookupDebug.explicitAliasHash = aliasedReplacementHash;
+        }
         trackMeshHash(aliasedReplacementHash);
         pReplacements = m_pReplacer->getReplacementsForMesh(aliasedReplacementHash);
+        if (collectInstrumentation && pReplacements) {
+          replacementLookupDebug.explicitAliasFound = true;
+          replacementLookupDebug.route = MeshReplacementLookupRoute::ExplicitAlias;
+          replacementLookupDebug.matchedHash = aliasedReplacementHash;
+        }
         if (RtxOptions::enableInstrumentation() && pReplacements) {
           ONCE(Logger::info(str::format(
             "[Mesh-Replacement-Alias] Matched source hash 0x", std::hex,
@@ -683,12 +701,54 @@ namespace dxvk {
       }
     }
 
+    if (!pReplacements
+     && RtxOptions::automaticMeshReplacementHashAliases()
+     && input.getSkinningState().numBones > 0) {
+      const XXH64_hash_t geometryHash =
+        input.getGeometryData().getHashForRule(RtxOptions::geometryAssetHashRule());
+      XXH64_hash_t matchedReplacementHash = kEmptyHash;
+      if (collectInstrumentation) {
+        replacementLookupDebug.automaticAttempted = true;
+        replacementLookupDebug.automaticGeometryHash = geometryHash;
+      }
+      pReplacements = m_pReplacer->getReplacementsForMeshByGeometryHash(
+        geometryHash, matchedReplacementHash);
+      if (collectInstrumentation) {
+        replacementLookupDebug.automaticMatchedHash = matchedReplacementHash;
+        replacementLookupDebug.automaticFound = pReplacements != nullptr;
+        if (pReplacements) {
+          replacementLookupDebug.route = MeshReplacementLookupRoute::AutomaticGeometry;
+          replacementLookupDebug.matchedHash = matchedReplacementHash;
+        }
+      }
+      if (pReplacements) {
+        trackMeshHash(matchedReplacementHash);
+        if (RtxOptions::enableInstrumentation()) {
+          ONCE(Logger::info(str::format(
+            "[Automatic-Mesh-Replacement-Alias] Matched source hash 0x", std::hex,
+            activeReplacementHash, " to authored hash 0x", matchedReplacementHash,
+            " using geometry hash 0x", geometryHash)));
+        }
+      }
+    }
+
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     if ((RtxOptions::geometryHashGenerationRule() & rules::LegacyAssetHash0) == rules::LegacyAssetHash0) {
       if (!pReplacements) {
         const XXH64_hash_t legacyHash = input.getHashLegacy(rules::LegacyAssetHash0);
+        if (collectInstrumentation) {
+          replacementLookupDebug.legacy0Attempted = true;
+          replacementLookupDebug.legacy0Hash = legacyHash;
+        }
         trackMeshHash(legacyHash);
         pReplacements = m_pReplacer->getReplacementsForMesh(legacyHash);
+        if (collectInstrumentation) {
+          replacementLookupDebug.legacy0Found = pReplacements != nullptr;
+          if (pReplacements) {
+            replacementLookupDebug.route = MeshReplacementLookupRoute::LegacyAsset0;
+            replacementLookupDebug.matchedHash = legacyHash;
+          }
+        }
         if (RtxOptions::logLegacyHashReplacementMatches() && pReplacements && uniqueHashes.find(legacyHash) == uniqueHashes.end()) {
           uniqueHashes.insert(legacyHash);
           Logger::info(str::format("[Legacy-Hash-Replacement] Found a mesh referenced from legacyHash0: ", std::hex, legacyHash, ", new hash: ", std::hex, activeReplacementHash));
@@ -699,8 +759,19 @@ namespace dxvk {
     if ((RtxOptions::geometryHashGenerationRule() & rules::LegacyAssetHash1) == rules::LegacyAssetHash1) {
       if (!pReplacements) {
         const XXH64_hash_t legacyHash = input.getHashLegacy(rules::LegacyAssetHash1);
+        if (collectInstrumentation) {
+          replacementLookupDebug.legacy1Attempted = true;
+          replacementLookupDebug.legacy1Hash = legacyHash;
+        }
         trackMeshHash(legacyHash);
         pReplacements = m_pReplacer->getReplacementsForMesh(legacyHash);
+        if (collectInstrumentation) {
+          replacementLookupDebug.legacy1Found = pReplacements != nullptr;
+          if (pReplacements) {
+            replacementLookupDebug.route = MeshReplacementLookupRoute::LegacyAsset1;
+            replacementLookupDebug.matchedHash = legacyHash;
+          }
+        }
         if (RtxOptions::logLegacyHashReplacementMatches() && pReplacements && uniqueHashes.find(legacyHash) == uniqueHashes.end()) {
           uniqueHashes.insert(legacyHash);
           Logger::info(str::format("[Legacy-Hash-Replacement] Found a mesh referenced from legacyHash1: ", std::hex, legacyHash, ", new hash: ", std::hex, activeReplacementHash));
@@ -710,6 +781,29 @@ namespace dxvk {
 
     ReplacementInstance* replacementInstance = m_drawCallTracker.findOrCreateReplacementInstance(
         input, m_rayPortalManager, overrideMaterialData);
+
+    if (collectInstrumentation) {
+      if (pReplacements) {
+        replacementLookupDebug.replacementCount = static_cast<uint32_t>(pReplacements->size());
+        for (const AssetReplacement& replacement : *pReplacements) {
+          switch (replacement.type) {
+          case AssetReplacement::eMesh:
+            replacementLookupDebug.meshReplacementCount++;
+            break;
+          case AssetReplacement::eLight:
+            replacementLookupDebug.lightReplacementCount++;
+            break;
+          case AssetReplacement::eGraph:
+            replacementLookupDebug.graphReplacementCount++;
+            break;
+          case AssetReplacement::eNone:
+            replacementLookupDebug.emptyReplacementCount++;
+            break;
+          }
+        }
+      }
+      replacementInstance->meshReplacementLookupDebug = replacementLookupDebug;
+    }
 
     const uint32_t currentFrameId = m_device->getCurrentFrameId();
     const bool secondSubmissionThisFrame = (replacementInstance->frameLastSeen == currentFrameId);
@@ -824,6 +918,23 @@ namespace dxvk {
     replacementInstance->frameLastSeen = currentFrameId;
     replacementInstance->categoryFlags = input.getCategoryFlags().raw();
     replacementInstance->isSkinned = input.getSkinningState().numBones > 0;
+
+    // Replacement meshes carry the source drawCallID, but their object-picking
+    // metadata would otherwise describe replacement geometry. Overwrite each
+    // replacement surface's metadata with the original game draw so a selected
+    // object reports the hash and skinning inputs that actually drove lookup.
+    if (collectInstrumentation && pReplacements != nullptr) {
+      for (const PrimInstance& prim : replacementInstance->prims) {
+        const RtInstance* replacementSurface = prim.getInstance();
+        if (replacementSurface != nullptr) {
+          trackObjectPickingMeta(
+            input,
+            replacementSurface->surface.objectPickingValue,
+            replacementSurface,
+            replacementInstance);
+        }
+      }
+    }
 
     // Cache this submission's texture-coordinate projection so that next frame's
     // computeDirtyFlags can detect drift. Writing here (after either path has run)
@@ -943,6 +1054,23 @@ namespace dxvk {
 
     if (replacement.type == AssetReplacement::eMesh) {
       auto newDrawCallState = std::make_optional<DrawCallState>(input);
+
+      // Unskinned replacement assets authored over rigid pieces of a skinned
+      // model still need the source piece's bone attachment. This commonly
+      // occurs when several original viewmodel parts are consolidated into a
+      // single static replacement mesh.
+      if (replacement.geometry->data.numBonesPerVertex == 0) {
+        newDrawCallState->bakeRigidSkinningIntoTransforms();
+      } else {
+        const uint32_t requiredBoneCount =
+          replacement.geometry->data.numBonesReferenced;
+        if (!newDrawCallState->expandSkinningBonePalette(requiredBoneCount)) {
+          ONCE(Logger::warn(str::format(
+            "Skinned replacement requires ", requiredBoneCount,
+            " bone matrices, but the source draw staged only ",
+            newDrawCallState->getSkinningState().getAvailableBoneCount(), ".")));
+        }
+      }
 
       DrawCallTransforms& transforms = newDrawCallState->modifyTransformData();
       transforms.objectToWorld = transforms.objectToWorld * replacement.replacementToObject;
@@ -1601,6 +1729,16 @@ namespace dxvk {
       instrumentation.texgenMode = transforms.texgenMode;
       instrumentation.isEye = drawCallState.isEye();
 
+      if (replacementInstance != nullptr) {
+        instrumentation.meshReplacementLookup =
+          replacementInstance->meshReplacementLookupDebug;
+        instrumentation.replacementPrimCount =
+          static_cast<uint32_t>(replacementInstance->prims.size());
+        instrumentation.replacementRootType = replacementInstance->root.getType();
+        instrumentation.activeReplacementsBound =
+          replacementInstance->activeReplacements != nullptr;
+      }
+
       if (!externalMesh) {
         instrumentation.geometryHashes = geometry.hashes;
         instrumentation.vertexCount = geometry.vertexCount;
@@ -1617,9 +1755,11 @@ namespace dxvk {
       instrumentation.numBones = skinning.numBones;
       instrumentation.numBonesPerVertex = skinning.numBonesPerVertex;
       instrumentation.minBoneIndex = skinning.minBoneIndex;
+      instrumentation.rigidBoneIndex = skinning.rigidBoneIndex;
       instrumentation.boneHash = skinning.boneHash;
-      instrumentation.boneMatrixDebugSampleCount =
-        static_cast<uint32_t>(skinning.pBoneMatrices.size());
+      instrumentation.boneMatrixDebugSampleCount = std::min(
+        skinning.numBones,
+        static_cast<uint32_t>(skinning.pBoneMatrices.size()));
       if (instrumentation.boneMatrixDebugSampleCount >
           DrawCallInstrumentation::MaxBoneMatrixDebugSamples) {
         instrumentation.boneMatrixDebugSampleCount =
@@ -1631,6 +1771,7 @@ namespace dxvk {
           skinning.pBoneMatrices[bone];
       }
       instrumentation.blendIndicesHash = skinning.blendIndicesHash;
+      instrumentation.blendWeightsHash = skinning.blendWeightsHash;
       instrumentation.blendIndexDebugSamples = skinning.blendIndexDebugSamples;
       instrumentation.blendIndexDebugSampleCount =
         skinning.blendIndexDebugSampleCount;
@@ -2159,6 +2300,24 @@ namespace dxvk {
     }
     const DrawCallInstrumentation& instrumentation = *pMeta->instrumentation;
 
+    const MeshReplacementLookupDebug& replacementLookup =
+      instrumentation.meshReplacementLookup;
+    std::string replacementFailureReason = "none";
+    if (!replacementLookup.valid) {
+      replacementFailureReason = "lookup provenance was not captured for this draw";
+    } else if (replacementLookup.route == MeshReplacementLookupRoute::None) {
+      replacementFailureReason = replacementLookup.explicitAliasConfigured
+        ? "explicit alias target was absent and no fallback matched"
+        : "no authored replacement or fallback matched";
+    } else if (replacementLookup.replacementCount == 0) {
+      replacementFailureReason = "matched replacement vector was empty";
+    } else if (!instrumentation.activeReplacementsBound) {
+      replacementFailureReason = "matched replacement vector was not bound to the draw instance";
+    } else if (replacementLookup.meshReplacementCount > 0
+            && instrumentation.replacementPrimCount == 0) {
+      replacementFailureReason = "mesh replacement produced no live prim instances";
+    }
+
     const auto formatTranslation = [](const Matrix4& matrix) {
       return str::format(
         "(", std::setprecision(9), matrix[3][0], ", ", matrix[3][1], ", ", matrix[3][2], ")");
@@ -2314,6 +2473,46 @@ namespace dxvk {
       "[Mesh-Hash-Debug]\n",
       "  objectPickingValue: 0x", std::hex, objectPickingValue, "\n",
       "  assetHash: 0x", pMeta->meshHash, "\n",
+      "  replacementLookup:\n",
+      "    valid: ", replacementLookup.valid, "\n",
+      std::hex,
+      "    sourceHash: 0x", replacementLookup.sourceHash, "\n",
+      std::dec,
+      "    directFound: ", replacementLookup.directFound, "\n",
+      "    explicitAliasConfigured: ", replacementLookup.explicitAliasConfigured, "\n",
+      std::hex,
+      "    explicitAliasHash: 0x", replacementLookup.explicitAliasHash, "\n",
+      std::dec,
+      "    explicitAliasFound: ", replacementLookup.explicitAliasFound, "\n",
+      "    automaticAttempted: ", replacementLookup.automaticAttempted, "\n",
+      std::hex,
+      "    automaticGeometryHash: 0x", replacementLookup.automaticGeometryHash, "\n",
+      "    automaticMatchedHash: 0x", replacementLookup.automaticMatchedHash, "\n",
+      std::dec,
+      "    automaticFound: ", replacementLookup.automaticFound, "\n",
+      "    legacy0Attempted: ", replacementLookup.legacy0Attempted, "\n",
+      std::hex,
+      "    legacy0Hash: 0x", replacementLookup.legacy0Hash, "\n",
+      std::dec,
+      "    legacy0Found: ", replacementLookup.legacy0Found, "\n",
+      "    legacy1Attempted: ", replacementLookup.legacy1Attempted, "\n",
+      std::hex,
+      "    legacy1Hash: 0x", replacementLookup.legacy1Hash, "\n",
+      std::dec,
+      "    legacy1Found: ", replacementLookup.legacy1Found, "\n",
+      "    route: ", getMeshReplacementLookupRouteName(replacementLookup.route), "\n",
+      std::hex,
+      "    matchedHash: 0x", replacementLookup.matchedHash, "\n",
+      std::dec,
+      "    replacementCount: ", replacementLookup.replacementCount, "\n",
+      "    replacementTypes: mesh=", replacementLookup.meshReplacementCount,
+      " light=", replacementLookup.lightReplacementCount,
+      " graph=", replacementLookup.graphReplacementCount,
+      " empty=", replacementLookup.emptyReplacementCount, "\n",
+      "    activeReplacementsBound: ", instrumentation.activeReplacementsBound, "\n",
+      "    replacementPrimCount: ", instrumentation.replacementPrimCount, "\n",
+      "    replacementRootType: ", instrumentation.replacementRootType, "\n",
+      "    failureReason: ", replacementFailureReason, "\n",
       "  eyeInputs:\n",
       "    isEye: ", instrumentation.isEye, "\n",
       "    texgenMode: ", static_cast<uint32_t>(instrumentation.texgenMode), "\n",
@@ -2355,9 +2554,11 @@ namespace dxvk {
       "    numBones: ", instrumentation.numBones, "\n",
       "    numBonesPerVertex: ", instrumentation.numBonesPerVertex, "\n",
       "    minBoneIndex: ", instrumentation.minBoneIndex, "\n",
+      "    rigidBoneIndex: ", instrumentation.rigidBoneIndex, "\n",
       std::hex,
       "    boneHash: 0x", instrumentation.boneHash, "\n",
       "    blendIndicesHash: 0x", instrumentation.blendIndicesHash, "\n",
+      "    blendWeightsHash: 0x", instrumentation.blendWeightsHash, "\n",
       std::dec,
       "    blendIndexSamples: [", blendIndexSamples.str(), "]\n",
       "    boneMatrixSamples:", boneMatrixSamples.str(),

@@ -243,6 +243,22 @@ namespace dxvk {
       return m_secretReplacements;
     }
 
+    // Appends mesh hashes whose authored source material completes the given
+    // geometry-only hash.  This allows callers to recognize the same geometry
+    // when another game build binds a differently hashed source material.
+    void appendMeshReplacementHashesForGeometryHash(
+      XXH64_hash_t geometryHash,
+      std::vector<XXH64_hash_t>& hashes) const {
+      std::lock_guard<sync::Spinlock> lock(m_spinlock);
+      for (const auto& [materialHash, material] : m_materials) {
+        const XXH64_hash_t candidateHash = geometryHash ^ materialHash;
+        if (m_meshReplacers.find(candidateHash) != m_meshReplacers.end()
+         && std::find(hashes.begin(), hashes.end(), candidateHash) == hashes.end()) {
+          hashes.push_back(candidateHash);
+        }
+      }
+    }
+
   private:
     mutable sync::Spinlock m_spinlock;
 
@@ -265,6 +281,9 @@ namespace dxvk {
 
   struct AssetReplacer {
     std::vector<AssetReplacement>* getReplacementsForMesh(XXH64_hash_t hash);
+    std::vector<AssetReplacement>* getReplacementsForMeshByGeometryHash(
+      XXH64_hash_t geometryHash,
+      XXH64_hash_t& resolvedMeshHash);
     std::vector<AssetReplacement>* getReplacementsForLight(XXH64_hash_t hash);
     MaterialData* getReplacementMaterial(XXH64_hash_t hash);
 
@@ -330,6 +349,7 @@ namespace dxvk {
 
     fast_unordered_cache<VariantInfo> m_variantInfos;
     SecretReplacements m_secretReplacements;
+    fast_unordered_cache<XXH64_hash_t> m_geometryHashReplacementCache;
 
     ModManager m_modManager;
 
@@ -337,4 +357,3 @@ namespace dxvk {
     std::unordered_map<remixapi_MeshHandle, std::unique_ptr<std::vector<RasterGeometry>>> m_extMeshes {};
   };
 } // namespace dxvk
-

@@ -94,6 +94,10 @@ namespace lss {
       return m_limitedNumBonesPerVertex;
     }
 
+    uint32_t GetNumBonesReferenced() const {
+      return m_numBonesReferenced;
+    }
+
     bool IsRightHanded() const {
       return m_isRightHanded;
     }
@@ -144,6 +148,7 @@ namespace lss {
     uint32_t m_numVertices = 0;
     uint32_t m_actualNumBonesPerVertex = 0;
     uint32_t m_limitedNumBonesPerVertex = 0;
+    uint32_t m_numBonesReferenced = 0;
 
     DoubleSidedState m_doubleSided = Inherit;
     bool m_isRightHanded = true; // By default USD is right handed

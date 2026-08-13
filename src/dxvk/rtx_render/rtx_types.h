@@ -26,6 +26,7 @@
 #include "rtx_materials.h"
 #include "rtx_hashing.h"
 #include "rtx_camera.h"
+#include "rtx_mesh_replacement_lookup_route.h"
 #include "vulkan/vulkan_core.h"
 #include "../../util/util_bounding_box.h"
 #include "../../util/util_threadpool.h"
@@ -51,6 +52,32 @@ struct D3D9FixedFunctionPS;
 struct DrawCallState;
 struct AssetReplacement;
 struct ReplacementInstance;
+
+struct MeshReplacementLookupDebug {
+  bool valid = false;
+  XXH64_hash_t sourceHash = kEmptyHash;
+  bool directFound = false;
+  bool explicitAliasConfigured = false;
+  XXH64_hash_t explicitAliasHash = kEmptyHash;
+  bool explicitAliasFound = false;
+  bool automaticAttempted = false;
+  XXH64_hash_t automaticGeometryHash = kEmptyHash;
+  XXH64_hash_t automaticMatchedHash = kEmptyHash;
+  bool automaticFound = false;
+  bool legacy0Attempted = false;
+  XXH64_hash_t legacy0Hash = kEmptyHash;
+  bool legacy0Found = false;
+  bool legacy1Attempted = false;
+  XXH64_hash_t legacy1Hash = kEmptyHash;
+  bool legacy1Found = false;
+  MeshReplacementLookupRoute route = MeshReplacementLookupRoute::None;
+  XXH64_hash_t matchedHash = kEmptyHash;
+  uint32_t replacementCount = 0;
+  uint32_t meshReplacementCount = 0;
+  uint32_t lightReplacementCount = 0;
+  uint32_t graphReplacementCount = 0;
+  uint32_t emptyReplacementCount = 0;
+};
 
 using RasterBuffer = GeometryBuffer<Raster>;
 using RaytraceBuffer = GeometryBuffer<Raytrace>;
@@ -208,6 +235,12 @@ struct ReplacementInstance {
   // rebuilds prims when this mismatches.
   const std::vector<AssetReplacement>* activeReplacements = nullptr;
 
+  // Populated only while rtx.gmod.enableInstrumentation is enabled. Keeping
+  // lookup provenance on the source ReplacementInstance lets object picking
+  // report the original game draw even when the selected surface belongs to a
+  // replacement mesh.
+  MeshReplacementLookupDebug meshReplacementLookupDebug;
+
   // Draw call properties that affect anti-culling GC decisions.
   // Set from the original DrawCallState each time the RI is matched.
   // Stored as raw bits because CategoryFlags is defined later in this file.
@@ -296,17 +329,51 @@ struct SkinningData {
   static constexpr uint32_t MaxBlendIndexDebugSamples = 24;
 
   std::vector<Matrix4> pBoneMatrices;
+  std::vector<Matrix4> pAdditionalBoneMatrices;
   uint32_t numBones = 0;
   uint32_t numBonesPerVertex = 0;
   XXH64_hash_t boneHash = 0;
   uint32_t minBoneIndex = 0; // This is the smallest index of all bones actually used by vertex data
+  int32_t rigidBoneIndex = -1; // Single positively weighted bone across the full mesh, if any
   XXH64_hash_t blendIndicesHash = 0;
+  XXH64_hash_t blendWeightsHash = 0;
   std::array<uint8_t, MaxBlendIndexDebugSamples> blendIndexDebugSamples {};
   uint32_t blendIndexDebugSampleCount = 0;
+
+  // D3D9 can stage a larger matrix palette than the source mesh references.
+  // Replacement meshes may use those additional joints. Keep the unused tail
+  // separate so source consumers retain pBoneMatrices.size() == numBones.
+  bool expandBonePalette(uint32_t requiredBoneCount) {
+    if (requiredBoneCount <= numBones) {
+      return true;
+    }
+
+    const uint32_t additionalCount = requiredBoneCount - numBones;
+    if (additionalCount > pAdditionalBoneMatrices.size()) {
+      return false;
+    }
+
+    pBoneMatrices.insert(
+      pBoneMatrices.end(),
+      pAdditionalBoneMatrices.begin(),
+      pAdditionalBoneMatrices.begin() + additionalCount);
+    pAdditionalBoneMatrices.erase(
+      pAdditionalBoneMatrices.begin(),
+      pAdditionalBoneMatrices.begin() + additionalCount);
+    numBones = requiredBoneCount;
+    rigidBoneIndex = -1;
+    computeHash();
+    return true;
+  }
+
+  size_t getAvailableBoneCount() const {
+    return pBoneMatrices.size() + pAdditionalBoneMatrices.size();
+  }
 
   void computeHash() {
     if (numBones > 0) {
       assert(minBoneIndex >= 0);
+      assert(numBones <= pBoneMatrices.size());
       const Matrix4* firstBone = &pBoneMatrices[minBoneIndex];
       assert(numBones > minBoneIndex);
       boneHash = XXH3_64bits(firstBone, (numBones - minBoneIndex) * sizeof(Matrix4));
@@ -374,6 +441,11 @@ struct RasterGeometry {
   // Copy of the bones per vertex from SkinningState.
   // This allows replacements to have different values from the original.
   uint32_t numBonesPerVertex = 0;
+
+  // Number of matrix palette entries referenced by positively weighted
+  // replacement vertices. Source draws leave this at zero because their
+  // active palette size is carried by SkinningData::numBones.
+  uint32_t numBonesReferenced = 0;
 
   // Hashed values
   VkPrimitiveTopology topology = VkPrimitiveTopology(0);
@@ -726,6 +798,14 @@ struct DrawCallState {
     return skinningData;
   }
 
+  bool expandSkinningBonePalette(uint32_t requiredBoneCount) {
+    return skinningData.expandBonePalette(requiredBoneCount);
+  }
+
+  // Static replacement meshes have no blend streams of their own. If the
+  // source draw is effectively rigid, attach the replacement to that bone.
+  bool bakeRigidSkinningIntoTransforms();
+
   const FogState& getFogState() const {
     return fogState;
   }
@@ -830,6 +910,7 @@ struct DrawCallState {
       "  numBones: ", skinningData.numBones, "\n",
       "  numBonesPerVertex: ", skinningData.numBonesPerVertex, "\n",
       "  minBoneIndex: ", skinningData.minBoneIndex, "\n",
+      "  rigidBoneIndex: ", skinningData.rigidBoneIndex, "\n",
       "  boneHash: 0x", std::hex, skinningData.boneHash, std::dec));
     
     // Print fog info

@@ -442,10 +442,12 @@ private:
     uint32_t numBones {};
     uint32_t numBonesPerVertex {};
     uint32_t minBoneIndex {};
+    int32_t rigidBoneIndex { -1 };
     XXH64_hash_t boneHash {};
     std::array<Matrix4, MaxBoneMatrixDebugSamples> boneMatrixDebugSamples {};
     uint32_t boneMatrixDebugSampleCount {};
     XXH64_hash_t blendIndicesHash {};
+    XXH64_hash_t blendWeightsHash {};
     std::array<uint8_t, SkinningData::MaxBlendIndexDebugSamples> blendIndexDebugSamples {};
     uint32_t blendIndexDebugSampleCount {};
     Matrix4 textureTransform {};
@@ -454,6 +456,10 @@ private:
     TexGenMode texgenMode { TexGenMode::None };
     bool isEye {};
     bool externalMesh {};
+    MeshReplacementLookupDebug meshReplacementLookup {};
+    uint32_t replacementPrimCount {};
+    PrimInstance::Type replacementRootType { PrimInstance::Type::None };
+    bool activeReplacementsBound {};
 
     // Short-lived frame history used to diagnose animated-geometry tracking and
     // previous-position-buffer continuity from object-picking captures.
