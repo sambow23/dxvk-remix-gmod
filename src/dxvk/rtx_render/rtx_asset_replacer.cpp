@@ -51,6 +51,48 @@ std::vector<AssetReplacement>* AssetReplacer::getReplacementsForMesh(XXH64_hash_
   return nullptr;
 }
 
+std::vector<AssetReplacement>* AssetReplacer::getReplacementsForMeshByGeometryHash(
+    XXH64_hash_t geometryHash,
+    XXH64_hash_t& resolvedMeshHash) {
+  resolvedMeshHash = kEmptyHash;
+
+  if (!RtxOptions::getEnableReplacementMeshes()
+   || !RtxOptions::getEnableReplacementMaterials()
+   || !areAllReplacementsLoaded()) {
+    return nullptr;
+  }
+
+  const auto cached = m_geometryHashReplacementCache.find(geometryHash);
+  if (cached != m_geometryHashReplacementCache.end()) {
+    if (cached->second == kEmptyHash) {
+      return nullptr;
+    }
+    resolvedMeshHash = cached->second;
+    return getReplacementsForMesh(resolvedMeshHash);
+  }
+
+  std::vector<XXH64_hash_t> matchingMeshHashes;
+  for (const auto& mod : m_modManager.mods()) {
+    mod->replacements().appendMeshReplacementHashesForGeometryHash(
+      geometryHash, matchingMeshHashes);
+  }
+
+  // Multiple replacements for the same geometry generally represent skins or
+  // material variants.  Without a unique source-material match, choosing one
+  // automatically would be unsafe; leave those cases for an explicit alias.
+  const XXH64_hash_t match = matchingMeshHashes.size() == 1
+    ? matchingMeshHashes.front()
+    : kEmptyHash;
+  m_geometryHashReplacementCache[geometryHash] = match;
+
+  if (match == kEmptyHash) {
+    return nullptr;
+  }
+
+  resolvedMeshHash = match;
+  return getReplacementsForMesh(resolvedMeshHash);
+}
+
 std::vector<AssetReplacement>* AssetReplacer::getReplacementsForLight(XXH64_hash_t hash) {
   if (!RtxOptions::getEnableReplacementLights())
     return nullptr;
@@ -93,6 +135,7 @@ bool AssetReplacer::checkForChanges(const Rc<DxvkContext>& context) {
     changed |= mod->checkForChanges(context);
   }
   if (changed) {
+    m_geometryHashReplacementCache.clear();
     updateSecretReplacements();
   }
   return changed;

@@ -364,6 +364,10 @@ namespace dxvk {
                   "Pairs of source and target mesh hashes used only for replacement lookup. "
                   "This allows equivalent GMod geometry to consume replacements authored for another Source build.",
                   args.flags = RtxOptionFlags::InvalidatesDrawcallTranslation);
+    RTX_OPTION_ARGS("rtx.gmod", bool, automaticMeshReplacementHashAliases, false,
+                  "Automatically match replacement meshes when geometry is identical but the bound source material hash differs. "
+                  "Ambiguous geometry with multiple authored replacements is left unmatched.",
+                  args.flags = RtxOptionFlags::InvalidatesDrawcallTranslation);
     RTX_OPTION_ARGS("rtx", fast_unordered_set, raytracedRenderTargetTextures, {},
                     "DescriptorHashes for Render Targets. (Screens that should display the output of another camera).",
                     args.flags = RtxOptionFlags::InvalidatesDrawcallTranslation);

@@ -877,6 +877,22 @@ namespace dxvk {
       blendIndices.ref = nullptr;
     }
 
+    HashQuery blendWeights;
+    if (hasBlendWeight) {
+      auto& buffer = geoData.blendWeightBuffer;
+
+      blendWeights.pBase = (uint8_t*) buffer.mapPtr(buffer.offsetFromSlice());
+      blendWeights.elementSize = imageFormatInfo(buffer.vertexFormat())->elementSize;
+      blendWeights.stride = buffer.stride();
+      blendWeights.size = blendWeights.stride * vertexCount;
+      blendWeights.ref = buffer.buffer().ptr();
+
+      blendWeights.ref->acquire(DxvkAccess::Read);
+      blendWeights.ref->incRef();
+    } else {
+      blendWeights.ref = nullptr;
+    }
+
     // Copy bones up to the max bone we have registered so far.
     const uint32_t maxBone = m_maxBone > 0 ? m_maxBone : 255;
     const uint32_t startBoneTransform = GetTransformIndex(D3DTS_WORLDMATRIX(0));
@@ -889,7 +905,7 @@ namespace dxvk {
       && m_parent->GetDXVKDevice()->getCommon()->getResources()
         .getRaytracingOutput().m_primaryObjectPicking.isValid();
 
-    return m_pGeometryWorkers->Schedule([boneMatrices, blendIndices, numBonesPerVertex, vertexCount, collectSkinningDebug]()->SkinningData {
+    return m_pGeometryWorkers->Schedule([boneMatrices, nMat, blendIndices, blendWeights, numBonesPerVertex, vertexCount, collectSkinningDebug]()->SkinningData {
       ScopedCpuProfileZone();
       uint32_t numBones = numBonesPerVertex;
 
@@ -911,6 +927,20 @@ namespace dxvk {
 
       SkinningData skinningData;
       skinningData.pBoneMatrices.reserve(numBones);
+      if (nMat > numBones) {
+        skinningData.pAdditionalBoneMatrices.reserve(nMat - numBones);
+      }
+
+      if (blendIndices.ref && blendWeights.ref
+       && blendWeights.elementSize >= sizeof(float) * (numBonesPerVertex - 1)) {
+        skinningData.rigidBoneIndex = getRigidBoneIndex(
+          blendIndices.pBase,
+          static_cast<uint32_t>(blendIndices.stride),
+          blendWeights.pBase,
+          static_cast<uint32_t>(blendWeights.stride),
+          vertexCount,
+          numBonesPerVertex);
+      }
 
       if (collectSkinningDebug && blendIndices.pBase != nullptr) {
         const uint8_t* pBlendIndices = blendIndices.pBase;
@@ -931,14 +961,37 @@ namespace dxvk {
         skinningData.blendIndicesHash = blendIndicesHash;
       }
 
+      if (collectSkinningDebug && blendWeights.pBase != nullptr &&
+          numBonesPerVertex > 1) {
+        const uint32_t explicitWeightBytes =
+          sizeof(float) * (numBonesPerVertex - 1);
+        const uint8_t* pBlendWeights = blendWeights.pBase;
+        XXH64_hash_t blendWeightsHash = 0;
+        for (uint32_t vertex = 0; vertex < vertexCount; vertex++) {
+          blendWeightsHash = XXH3_64bits_withSeed(
+            pBlendWeights, explicitWeightBytes, blendWeightsHash);
+          pBlendWeights += blendWeights.stride;
+        }
+        skinningData.blendWeightsHash = blendWeightsHash;
+      }
+
       if (blendIndices.ref) {
         // Release only after optional diagnostics finish reading the stream.
         blendIndices.ref->release(DxvkAccess::Read);
         blendIndices.ref->decRef();
       }
+      if (blendWeights.ref) {
+        blendWeights.ref->release(DxvkAccess::Read);
+        blendWeights.ref->decRef();
+      }
 
       for (uint32_t n = 0; n < numBones; n++) {
         skinningData.pBoneMatrices.push_back(boneMatrices[n]);
+      }
+      // Retain the unused staged tail separately. A replacement draw may opt
+      // into it without changing the source draw's active palette contract.
+      for (uint32_t n = numBones; n < nMat; n++) {
+        skinningData.pAdditionalBoneMatrices.push_back(boneMatrices[n]);
       }
 
       skinningData.minBoneIndex = minBoneIndex;

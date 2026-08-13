@@ -459,6 +459,17 @@ namespace lss {
 
             // Helper to write the blend data to our vertex buffer
             const auto& writeBlendData = [&](uint32_t* blendIndices, float* blendWeights) {
+              // Keep the full matrix range needed by the final, limited
+              // influences.  A replacement may reference joints that the
+              // original low-poly draw does not use, even though the game has
+              // staged those joint transforms through D3D9.
+              for (uint32_t j = 0; j < m_limitedNumBonesPerVertex; ++j) {
+                if (blendWeights[j] > 0.0f) {
+                  m_numBonesReferenced = std::max(
+                    m_numBonesReferenced, blendIndices[j] + 1);
+                }
+              }
+
               // Encode the limited bone indices into compressed byte form
               for (int j = 0; j < m_limitedNumBonesPerVertex; j += 4) {
                 uint32_t vertIndices = 0;

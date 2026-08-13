@@ -1804,6 +1804,7 @@ bool UsdMod::Impl::processMesh(const pxr::UsdPrim& prim, Args& args) {
   }
 
   geometryData.vertexCount = processedMesh->GetNumVertices();
+  geometryData.numBonesReferenced = processedMesh->GetNumBonesReferenced();
 
   if (processedMesh->GetNumVertices() == 0) {
     throw DxvkError(str::format("Warning: No vertices on this mesh after processing, id=.", prim.GetName()));
