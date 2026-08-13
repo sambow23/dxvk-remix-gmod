@@ -19,6 +19,7 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
+#include <algorithm>
 #include <cstring>
 #include <iomanip>
 #include <limits>
@@ -1079,6 +1080,29 @@ namespace dxvk {
       ONCE(Logger::err("pReplacements should never be nullptr in SceneManager::drawReplacements"));
       return;
     }
+
+    // A source draw may expand into several replacement submeshes with different
+    // materials. If any sibling supplies an authored emission texture, suppress
+    // the source texture's Legacy Emissive fallback for the whole replacement
+    // asset so it cannot make the non-emissive siblings fullbright.
+    const bool replacementHasAuthoredEmissiveTexture = std::any_of(
+      pReplacements->begin(),
+      pReplacements->end(),
+      [](const AssetReplacement& replacement) {
+        if (replacement.materialData == nullptr) {
+          return false;
+        }
+
+        switch (replacement.materialData->getType()) {
+        case MaterialDataType::Opaque:
+          return replacement.materialData->getOpaqueMaterialData().getEmissiveColorTexture().isValid();
+        case MaterialDataType::Translucent:
+          return replacement.materialData->getTranslucentMaterialData().getEmissiveColorTexture().isValid();
+        default:
+          return false;
+        }
+      });
+
     // If the index contains an RtInstance, get a pointer to it.
     auto getExistingInstance = [replacementInstance](size_t idx) -> RtInstance* {
       if (replacementInstance->prims.size() <= idx) {
@@ -1093,6 +1117,9 @@ namespace dxvk {
 
       std::optional<DrawCallState> newDrawCallState = SceneManager::buildReplacementMeshDrawCallState(*input, replacement);
       if (newDrawCallState.has_value()) {
+        newDrawCallState->suppressLegacyEmissiveOutput =
+          input->suppressLegacyEmissiveOutput || replacementHasAuthoredEmissiveTexture;
+
         // Note: Material Data replaced if a replacement is specified in the Mesh Replacement.
         // Only meaningful when geometry is replaced (eMesh); the includeOriginal branch keeps the
         // game's original material data.

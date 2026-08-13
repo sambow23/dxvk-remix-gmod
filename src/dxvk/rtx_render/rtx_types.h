@@ -850,6 +850,11 @@ struct DrawCallState {
   // since it may be world geometry that should go through reprojection instead.
   bool skyAutoDetected = false;
 
+  // Preserve the Legacy Emissive category while preventing its albedo-based
+  // material override. Mesh replacements use this when any sibling material
+  // in the replacement asset already provides an authored emission texture.
+  bool suppressLegacyEmissiveOutput = false;
+
   void setupCategoriesForTexture();
   void setupCategoriesForGeometry();
   void setupCategoriesForHeuristics(uint32_t prevFrameSeenCamerasCount,
@@ -874,6 +879,7 @@ struct DrawCallState {
       "  maxZ: ", maxZ, "\n",
       "  isDrawingToRaytracedRenderTarget: ", isDrawingToRaytracedRenderTarget, "\n",
       "  isUsingRaytracedRenderTarget: ", isUsingRaytracedRenderTarget, "\n",
+      "  suppressLegacyEmissiveOutput: ", suppressLegacyEmissiveOutput, "\n",
       "  categoryFlags: ", categories.raw(), "\n",
       "  hasTextureCoordinates: ", hasTextureCoordinates(), "\n",
       "  materialHash: 0x", std::hex, materialData.getHash(), std::dec));

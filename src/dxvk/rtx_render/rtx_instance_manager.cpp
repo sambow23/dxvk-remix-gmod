@@ -1184,7 +1184,15 @@ namespace dxvk {
 
         if (materialData->getType() == MaterialDataType::Opaque)
         {
-          const bool useLegacyAlphaState = materialData->getOpaqueMaterialData().getUseLegacyAlphaState();
+          const auto& opaqueMaterialData = materialData->getOpaqueMaterialData();
+          const bool useLegacyAlphaState = opaqueMaterialData.getUseLegacyAlphaState();
+          // An authored emission map from a material enhancement is authoritative.
+          // Keep the Legacy Emissive category for categorization/debugging, but do
+          // not replace the enhancement's mask with the albedo fallback. A valid
+          // managed texture reference is available even while its mips are loading.
+          const bool suppressLegacyEmissiveOutput =
+            drawCall.suppressLegacyEmissiveOutput ||
+            opaqueMaterialData.getEmissiveColorTexture().isValid();
 
           if (currentInstance.m_isWorldSpaceUI) {
             // Here we need to do deep copy and patch the material
@@ -1194,13 +1202,13 @@ namespace dxvk {
             patchedMaterialData.getOpaqueMaterialData().setEnableEmission(true);
             patchedMaterialData.getOpaqueMaterialData().setEmissiveIntensity(2.0f);
             patchedMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(patchedMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
-          } else if (currentInstance.m_isLegacyEmissive && useLegacyAlphaState) {
+          } else if (currentInstance.m_isLegacyEmissive && useLegacyAlphaState && !suppressLegacyEmissiveOutput) {
             // Here we need to do a deep copy before applying per-instance emissive overrides.
             patchedMaterialData = *materialData;
             materialData = &patchedMaterialData;
 
-            // Block legacy emissive entirely when a material replacement/enhancement is active
-            // (useLegacyAlphaState is false for replaced materials).
+            // Replaced materials that opt out of legacy alpha state and enhancements
+            // with authored emission maps are blocked by the branch condition.
             // Also block by default when the texture has no alpha channel unless the user
             // explicitly opts in via legacyEmissiveForceAlbedo.
             const XXH64_hash_t textureHash = drawCall.getMaterialData().getColorTexture().getImageHash();
