@@ -38,12 +38,25 @@
 //!>       ENABLE_NRC=1
 //!>       UNORDERED_RESOLVE_WBOIT
 
+
+// Atmosphere variants
+
+
+// NRC
+
+
+// WBOIT
+
+
+// NRC
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 #define RAY_TRACING_PRIMARY_RAY
 #define RT_TRACE_RAY
 #define RAY_PIPELINE
-#define ATMOSPHERE_AVAILABLE
 // Note: Opacity lighting approximation used in the GBuffer pass due to it being most visually
 // prominent on particles in primary rays and important in PSR.
 #define RESOLVE_OPACITY_LIGHTING_APPROXIMATION 1

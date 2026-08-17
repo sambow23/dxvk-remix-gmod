@@ -55,9 +55,9 @@
 #define BINDING_ATMOSPHERE_SKY_VIEW_LUT          202
 // 203: retired (legacy 256^3 cloud noise volume, removed 2026-07-16 — do not reuse without a collision audit)
 #define BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER   204
-#define BINDING_ATMOSPHERE_FAST_NOISE            205
+// 205: retired (fast noise jitter texture, removed 2026-08-05 — do not reuse without a collision audit)
 // Cloud history textures (fork): screen-space ping-pong for temporal smoothing
-// of the per-frame FAST-noise jitter on the cloud ray-march. The PREV slot is
+// of the per-frame noise jitter on the cloud ray-march. The PREV slot is
 // the read view of last frame's accumulated cloud (rgb = premultiplied
 // radiance, a = alpha). The CURR slot is the RW write target this frame.
 // Allocated full-screen at downscale dimensions; ping-pong handled in
@@ -182,7 +182,6 @@
   TEXTURE2D(BINDING_ATMOSPHERE_MULTISCATTERING_LUT)                 \
   TEXTURE2D(BINDING_ATMOSPHERE_SKY_VIEW_LUT)                        \
   SAMPLER(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)                   \
-  TEXTURE2DARRAY(BINDING_ATMOSPHERE_FAST_NOISE)                     \
   TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)                  \
   RW_TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)                \
   TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV)          \

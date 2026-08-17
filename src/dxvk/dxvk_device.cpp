@@ -541,6 +541,8 @@ namespace dxvk {
     m_textureManager { std::make_unique<RtxTextureManager>(device) },
     m_imgui(device),
     m_dummyResources(device),
+    m_atmosphere(device),
+    m_precipitation(),
     m_globalVolumetrics(device),
     m_sparseRendering(device),
     m_pathtracerGbuffer(device),

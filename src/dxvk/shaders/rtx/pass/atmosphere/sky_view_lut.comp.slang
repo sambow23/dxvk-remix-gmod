@@ -24,20 +24,21 @@
 // Precomputes sky appearance for different view directions from camera position
 
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#include "rtx/pass/atmosphere/sky_view_lut_binding_indices.h"
 
-layout(binding = 0)
+layout(binding = SKY_VIEW_LUT_ATMOSPHERE_ARGS)
 ConstantBuffer<AtmosphereArgs> atmosphereArgs;
 
-layout(binding = 1)
+layout(binding = SKY_VIEW_LUT_TRANSMITTANCE_INPUT)
 Texture2D<float4> transmittanceLutInput;
 
-layout(binding = 2)
+layout(binding = SKY_VIEW_LUT_MULTISCATTERING_INPUT)
 Texture2D<float4> multiscatteringLutInput;
 
-layout(binding = 3)
+layout(binding = SKY_VIEW_LUT_SAMPLER)
 SamplerState lutSampler;
 
-layout(binding = 4, rgba16f)
+layout(binding = SKY_VIEW_LUT_OUTPUT, rgba16f)
 RWTexture2D<float4> skyViewLutOutput;
 
 // Compute sky color for a given view direction.

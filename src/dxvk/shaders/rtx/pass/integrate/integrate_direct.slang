@@ -25,7 +25,12 @@
 //!variant integrate_direct_rayquery_raygen.rgen
 //!>       RAY_PIPELINE
 
+// Atmosphere variants
+
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 #define USE_32BIT_RAY_DIRECTION 1
 // Note: Use thin film in the direct integration pass for its usage in direct lighting (as this is where
@@ -34,7 +39,6 @@
 #define OPAQUE_MATERIAL_USE_POM 1
 #define RAB_HAS_RTXDI_RESERVOIRS 1
 #define SHADOW_TERMINATOR_FIX_ALLOWED 1
-#define ATMOSPHERE_AVAILABLE
 
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/common_bindings.slangh"

@@ -57,17 +57,18 @@
 // Approximates multiple scattering contributions
 
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#include "rtx/pass/atmosphere/multiscattering_lut_binding_indices.h"
 
-layout(binding = 0)
+layout(binding = MULTISCATTERING_LUT_ATMOSPHERE_ARGS)
 ConstantBuffer<AtmosphereArgs> atmosphereArgs;
 
-layout(binding = 1)
+layout(binding = MULTISCATTERING_LUT_TRANSMITTANCE_INPUT)
 Texture2D<float4> transmittanceLutInput;
 
-layout(binding = 2)
+layout(binding = MULTISCATTERING_LUT_SAMPLER)
 SamplerState transmittanceSampler;
 
-layout(binding = 3, rgba16f)
+layout(binding = MULTISCATTERING_LUT_OUTPUT, rgba16f)
 RWTexture2D<float4> multiscatteringLutOutput;
 
 // Ground albedo for reflected light (Blender uses 0.3)

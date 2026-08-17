@@ -1,21 +1,11 @@
-// src/dxvk/rtx_render/rtx_fork_precipitation.cpp
-//
-// Fork-owned file. Implementation of the weather-driven precipitation particle
-// system. See rtx_fork_precipitation.h for the design rationale and for how
-// this relates to the NFS Carbon RTX mod's game-side rain.
-//
-// Structure of this file:
-//   1. Procedural drop texture   — a soft radial droplet built on the CPU, so
-//                                  the effect ships no assets and works in any
-//                                  game the runtime is dropped into.
-//   2. Emitter quad              — a unit quad registered as an external mesh.
-//   3. Parameter resolution      — blended weather options -> fall direction,
-//                                  speed, lifetime, spawn distance.
-//   4. Descriptor build + dwell  — RtxParticleSystemDesc, adopted on a timer.
-//   5. Per-frame submit          — one hidden external draw carrying the desc.
-//   6. ImGui                     — the global (non-preset) knobs.
+// src/dxvk/rtx_render/rtx_fork_precipitation.cpp — weather-driven precipitation particle system.
 
 #include "rtx_fork_precipitation.h"
+#include "rtx_fork_weather.h"  // fork_weather::WeatherSnapshot — weather override pointer
+#include "rtx_atmosphere.h"
+#include "rtx_utils.h"
+#include "../../util/util_math.h"
+#include "../../util/util_vector.h"
 
 #include "rtx_fork_hooks.h"
 #include "rtx_context.h"
@@ -49,27 +39,15 @@ namespace dxvk { namespace fork_precipitation {
 
   namespace {
 
-    // Fixed identities for the emitter mesh + material. The asset replacer keys
-    // its external tables on these, and the particle manager folds the material
-    // hash into its own system key, so both must be stable for the lifetime of
-    // the process (a changing material hash forks the particle system exactly
-    // like a changing descriptor would).
+    // Both must be stable for the process lifetime — a changing material hash forks the particle system.
     constexpr uint64_t kMeshHandleValue     = 0x50524543495F4D53ull;  // "PRECI_MS"
     constexpr uint64_t kMaterialHandleValue = 0x50524543495F4D54ull;  // "PRECI_MT"
     constexpr uint64_t kDropTextureHash     = 0x50524543495F5458ull;  // "PRECI_TX"
 
-    // Drop texture: small on purpose. It is a smooth falloff with no detail to
-    // resolve, it is drawn at a few pixels across, and there can be tens of
-    // thousands of them on screen — a big texture would only cost cache.
-    constexpr uint32_t kDropTextureSize = 64;
+    constexpr uint32_t kDropTextureSize = 64;  // small: drawn a few pixels across, tens of thousands on screen
     constexpr uint32_t kDropTextureMips = 7;  // 64,32,16,8,4,2,1
 
-    constexpr float kPi = 3.14159265358979323846f;
-    constexpr float kDegToRad = kPi / 180.0f;
-
-    // Vertex layout for the emitter quad. Matches remixapi_HardcodedVertex so
-    // the RasterBuffer strides/offsets below read exactly like the external-mesh
-    // builder in rtx_remix_api.cpp.
+    // Matches remixapi_HardcodedVertex so RasterBuffer strides/offsets read like the external-mesh builder.
     struct EmitterVertex {
       float    position[3];
       float    normal[3];
@@ -77,52 +55,17 @@ namespace dxvk { namespace fork_precipitation {
       uint32_t color;  // B8G8R8A8_UNORM
     };
 
-    float saturate(float v) {
-      return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-    }
-
-    // (fork - 2026-07-26) The previous "glow" emissive stand-in and its
-    // sun-elevation gating were removed here: the drops' darkness was traced
-    // to the froxel radiance cache containing no skylight at all, and the fix
-    // moved to the correct layer - the resolver's particle lighting
-    // approximation now adds a real sky-view-LUT ambient term for materials
-    // flagged sky-lit (see ensureMaterial below, resolve.slangh, and the
-    // per-preset skyLight field).
-
-    Vector3 safeNormalize(const Vector3& v, const Vector3& fallback) {
-      const float lenSq = v.x * v.x + v.y * v.y + v.z * v.z;
-      if (!(lenSq > 1e-12f)) {
-        return fallback;
-      }
-      const float invLen = 1.0f / std::sqrt(lenSq);
-      return Vector3(v.x * invLen, v.y * invLen, v.z * invLen);
-    }
-
     // Any orthonormal pair perpendicular to n. Branch picks the world axis least
     // aligned with n so the cross product never degenerates.
     void buildTangentBasis(const Vector3& n, Vector3& outT1, Vector3& outT2) {
       const Vector3 reference = (std::fabs(n.z) < 0.9f) ? Vector3(0.0f, 0.0f, 1.0f)
                                                         : Vector3(1.0f, 0.0f, 0.0f);
-      outT1 = safeNormalize(cross(reference, n), Vector3(1.0f, 0.0f, 0.0f));
+      outT1 = dxvk::safeNormalize(cross(reference, n), Vector3(1.0f, 0.0f, 0.0f));
       outT2 = cross(n, outT1);
     }
 
-    // ---------------------------------------------------------------------
-    // buildDropTexturePixels
-    //
-    // A radially symmetric droplet: opaque-ish core, smooth falloff to zero at
-    // the rim, RGB left at white so the per-particle colour (which the particle
-    // manager modulates in via VertexColor0) is the only tint. Keeping RGB at
-    // 1.0 also sidesteps the UNORM-vs-sRGB question entirely — white is white
-    // in both encodings.
-    //
-    // With motion trails enabled the runtime stretches only the CENTRE of the
-    // sprite and preserves its edges, so this same round drop becomes a rain
-    // streak with soft caps; with trails off it reads as a snowflake.
-    //
-    // Returns a tightly packed mip chain (level 0 first), box-filtered so
-    // distant precipitation doesn't shimmer.
-    // ---------------------------------------------------------------------
+    // White RGB so per-particle color is the only tint. Motion trails stretch the centre into a rain streak;
+    // no trails = round snowflake. Returns a tightly packed mip chain, box-filtered.
     std::vector<uint8_t> buildDropTexturePixels() {
       std::vector<uint8_t> mip0(kDropTextureSize * kDropTextureSize * 4);
 
@@ -133,8 +76,7 @@ namespace dxvk { namespace fork_precipitation {
           const float v = (static_cast<float>(y) + 0.5f) / kDropTextureSize * 2.0f - 1.0f;
           const float r = std::sqrt(u * u + v * v);
 
-          // smoothstep(1 -> 0) over the radius, squared for a tighter core.
-          const float t = saturate(1.0f - r);
+          const float t = dxvk::fclamp(1.0f - r, 0.0f, 1.0f);
           const float smooth = t * t * (3.0f - 2.0f * t);
           const float alpha = smooth * smooth;
 
@@ -142,7 +84,7 @@ namespace dxvk { namespace fork_precipitation {
           px[0] = 255;
           px[1] = 255;
           px[2] = 255;
-          px[3] = static_cast<uint8_t>(saturate(alpha) * 255.0f + 0.5f);
+          px[3] = static_cast<uint8_t>(dxvk::fclamp(alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
         }
       }
 
@@ -150,8 +92,6 @@ namespace dxvk { namespace fork_precipitation {
       chain.reserve(mip0.size() * 2);
       chain.insert(chain.end(), mip0.begin(), mip0.end());
 
-      // Box-filter down the chain. Source is always the previous level, which
-      // lives at the tail of `chain` at the time we read it.
       const uint8_t* src = chain.data();
       uint32_t srcSize = kDropTextureSize;
       size_t srcOffset = 0;
@@ -161,8 +101,7 @@ namespace dxvk { namespace fork_precipitation {
         const size_t dstOffset = chain.size();
         chain.resize(dstOffset + static_cast<size_t>(dstSize) * dstSize * 4);
 
-        // resize() may reallocate, so re-derive the source pointer after it.
-        src = chain.data() + srcOffset;
+        src = chain.data() + srcOffset;  // re-derive after resize() which may reallocate
         uint8_t* dst = chain.data() + dstOffset;
 
         for (uint32_t y = 0; y < dstSize; ++y) {
@@ -189,31 +128,6 @@ namespace dxvk { namespace fork_precipitation {
 
   }  // anonymous namespace
 
-  // ---------------------------------------------------------------------------
-  // Singleton. One emitter identity exists per process (see the fixed handles
-  // above), so the system is a singleton rather than a CommonDeviceObject.
-  // ---------------------------------------------------------------------------
-  PrecipitationSystem& PrecipitationSystem::get() {
-    static PrecipitationSystem s_instance;
-    return s_instance;
-  }
-
-  // ---------------------------------------------------------------------------
-  // ensureTexture — create + upload the procedural drop texture.
-  //
-  // Mirrors fork_hooks::createTexture (rtx_fork_api_entry.cpp): device-local
-  // image, host-visible staging buffer, per-mip copyBufferToImage, transition to
-  // SHADER_READ_ONLY_OPTIMAL. We are already on the render thread with a live
-  // DxvkContext, so the commands are recorded inline instead of via EmitCs.
-  //
-  // STAGING LIFETIME: the staging Rc<DxvkBuffer> is a local that dies when this
-  // function returns, which is safe — DxvkContext::copyBufferToImage calls
-  // m_cmd->trackResource<DxvkAccess::Read>(srcBuffer), so the command list holds
-  // its own reference until the GPU has executed the copy. (The API's
-  // createTexture only captures the buffer in its EmitCs lambda to carry it to
-  // the CS thread; the lambda reference likewise dies at record time and the
-  // same trackResource keeps the buffer alive for execution.)
-  // ---------------------------------------------------------------------------
   bool PrecipitationSystem::ensureTexture(RtxContext& ctx) {
     if (m_dropImageView != nullptr) {
       return true;
@@ -303,30 +217,16 @@ namespace dxvk { namespace fork_precipitation {
 
     ctx.changeImageLayout(image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    // The texture table keys on the image hash (see TextureRef::getImageHash),
-    // so stamp our own rather than leaving it at whatever the data hash gives.
-    image->setHash(kDropTextureHash);
+    image->setHash(kDropTextureHash);  // stable hash so the texture table entry is consistent
 
     m_dropImage = image;
     m_dropImageView = imageView;
     return true;
   }
 
-  // ---------------------------------------------------------------------------
-  // ensureMaterial — register the drop material with the asset replacer under
-  // the fixed material handle.
-  //
-  // Deliberately neutral: white albedo, fully opaque, legacy alpha state. All
-  // of the weather-driven look (colour, opacity) rides on the per-particle
-  // colour, which RtxParticleSystemManager::submitDrawState modulates against
-  // this material via VertexColor0. That keeps the material — and therefore its
-  // hash, and therefore the particle system identity — constant across weather
-  // changes.
-  //
-  // Because it goes through the external-material table it is also replaceable:
-  // a mod can author a USD material against the material hash and get bespoke
-  // raindrops without touching the runtime.
-  // ---------------------------------------------------------------------------
+  // Deliberately neutral (white albedo) so all weather-driven look rides on per-particle color via VertexColor0,
+  // keeping the material hash — and thus the particle system identity — constant across weather changes.
+  // Being in the external-material table makes it mod-replaceable.
   bool PrecipitationSystem::ensureMaterial(RtxContext& ctx) {
     if (m_materialRegistered) {
       return true;
@@ -335,11 +235,8 @@ namespace dxvk { namespace fork_precipitation {
       return false;
     }
 
-    // Record what we actually registered so refreshDesc can detect live edits
-    // of the material options (registration is otherwise once-per-process and
-    // later edits would silently do nothing).
-    m_materialRoughness = saturate(roughness());
-    m_materialMetallic = saturate(metallic());
+    m_materialRoughness = dxvk::fclamp(roughness(), 0.0f, 1.0f);
+    m_materialMetallic = dxvk::fclamp(metallic(), 0.0f, 1.0f);
 
     OpaqueMaterialData opaque;
     opaque.setAlbedoOpacityTexture(TextureRef { m_dropImageView, kDropTextureHash });
@@ -348,18 +245,9 @@ namespace dxvk { namespace fork_precipitation {
     opaque.setRoughnessConstant(m_materialRoughness);
     opaque.setMetallicConstant(m_materialMetallic);
 
-    // Sky-lit particle flag (fork - 2026-07-26). Particle-category surfaces
-    // are shaded by the resolver's opacity lighting approximation (albedo x
-    // froxel volumetric radiance), and the froxel integrator carries no sky
-    // term - which left rain black under overcast daylight. This flag opts
-    // the drop material into the resolver's sky-view-LUT ambient term
-    // (resolve.slangh, gated by rtx.weather.precipitation.appearance.
-    // per-preset skyLight field via cb.particleSkyAmbientScale). Safe for THIS system
-    // specifically because the spawn-time shelter probe guarantees every
-    // living drop saw open sky at birth.
+    // Froxel integrator carries no sky term; setSkyLitParticle adds sky-view-LUT ambient in the resolver.
+    // Safe here because the shelter probe guarantees every living drop saw open sky.
     opaque.setSkyLitParticle(true);
-    // Alpha/blend state comes from the emitter draw call (which we set up in
-    // submit()), matching how the NFSC mod drives its spawner material.
     opaque.setUseLegacyAlphaState(true);
 
     auto handle = reinterpret_cast<remixapi_MaterialHandle>(kMaterialHandleValue);
@@ -370,19 +258,9 @@ namespace dxvk { namespace fork_precipitation {
     return true;
   }
 
-  // ---------------------------------------------------------------------------
-  // ensureMesh — build and register the emitter quad.
-  //
-  // A UNIT quad (±1 in local XY, normal +Z). Everything physical — radius,
-  // orientation, position — lives in the per-frame transform, so changing the
-  // spawn radius never has to rebuild geometry.
-  //
-  // Winding matters more than usual here. The spawn shader derives the emission
-  // direction as cross(normalize(p1-p0), normalize(p2-p0)) and uses it
-  // UNNORMALIZED to scale initial velocity, so both triangles must be wound off
-  // perpendicular unit-length edges or the two halves of the quad would emit at
-  // different speeds. Indices {0,1,2} and {3,2,1} both give exactly +Z.
-  // ---------------------------------------------------------------------------
+  // Unit quad; all physical parameters live in the per-frame transform.
+  // Winding: spawn shader uses cross(p1-p0, p2-p0) UNNORMALIZED to scale velocity,
+  // so both triangles must use perpendicular unit-length edges ({0,1,2} and {3,2,1} give +Z).
   bool PrecipitationSystem::ensureMesh(RtxContext& ctx) {
     if (m_meshRegistered) {
       return true;
@@ -441,8 +319,6 @@ namespace dxvk { namespace fork_precipitation {
     geometry.boundingBox.minPos = Vector3(-1.0f, -1.0f, 0.0f);
     geometry.boundingBox.maxPos = Vector3( 1.0f,  1.0f, 0.0f);
 
-    // Fixed hashes: the geometry never changes, and a stable identity keeps the
-    // emitter matching to the same RtInstance frame over frame.
     geometry.hashes[HashComponents::Indices]            = kMeshHandleValue ^ 0x01ull;
     geometry.hashes[HashComponents::VertexPosition]     = kMeshHandleValue ^ 0x02ull;
     geometry.hashes[HashComponents::VertexTexcoord]     = kMeshHandleValue ^ 0x03ull;
@@ -464,99 +340,57 @@ namespace dxvk { namespace fork_precipitation {
     return ensureTexture(ctx) && ensureMaterial(ctx) && ensureMesh(ctx);
   }
 
-  // ---------------------------------------------------------------------------
-  // resolveParams — blended weather options -> the geometry of the fall.
-  //
-  // Wind: the horizontal drift borrows the atmosphere's cloud wind so the rain
-  // slants the same way the sky is moving. cloudWindSpeed is stored in km/s and
-  // the direction is the same (cos, sin) convention the cloud advection uses
-  // (RtxAtmosphere::advanceCloudMotion), mapped onto the scene's right/forward
-  // axes.
-  // ---------------------------------------------------------------------------
-  PrecipitationSystem::Params PrecipitationSystem::resolveParams() {
+  // Wind borrows the atmosphere's cloud wind (same direction convention as advanceCloudMotion),
+  // so rain slants the same way the sky is moving.
+  PrecipitationSystem::Params PrecipitationSystem::resolveParams(const fork_weather::WeatherSnapshot* wx) {
     Params params;
 
     const Vector3 up      = SceneManager::getSceneUp();
     const Vector3 forward = SceneManager::getSceneForward();
     const Vector3 right   = SceneManager::calculateSceneRight();
 
-    const float fallSpeedMs = std::max(fallSpeed(), 0.05f);
+    const float fallSpeedMs = std::max(wx ? wx->precipitationFallSpeed : fallSpeed(), 0.05f);
 
-    const float windAngleRad = RtxOptions::cloudWindDirection() * kDegToRad;
-    const float windSpeedMs  = std::max(RtxOptions::cloudWindSpeed(), 0.0f) * 1000.0f;  // km/s -> m/s
-    const float horizontalMs = windSpeedMs * std::max(windResponse(), 0.0f);
+    const float windAngleRad = RtxAtmosphere::cloudWindDirection() * dxvk::kDegreesToRadians;
+    const float windSpeedMs  = std::max(RtxAtmosphere::cloudWindSpeed(), 0.0f) * 1000.0f;  // km/s -> m/s
+    const float horizontalMs = windSpeedMs * std::max(wx ? wx->precipitationWindResponse : windResponse(), 0.0f);
 
     const Vector3 windDir = right * std::cos(windAngleRad) + forward * std::sin(windAngleRad);
 
-    // Travel = straight down at fallSpeed, pushed sideways by the wind.
     const Vector3 velocity = (up * -fallSpeedMs) + (windDir * horizontalMs);
     const float speedMs = std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
 
-    params.fallDirection = safeNormalize(velocity, up * -1.0f);
+    params.fallDirection = dxvk::safeNormalize(velocity, up * -1.0f);
     params.speedMetersPerSec = std::max(speedMs, 0.05f);
 
-    // How far along the travel direction the spawn plane sits so that it is
-    // spawnHeightMeters ABOVE the camera. Clamped so a near-horizontal fall
-    // (huge wind, tiny fall speed) can't push the plane to infinity.
+    // Clamp downComponent so a near-horizontal fall can't push the spawn plane to infinity.
     const float downComponent = std::max(-dot(params.fallDirection, up), 0.15f);
     const float heightM = std::max(spawnHeightMeters(), 0.5f);
     params.spawnDistanceWorld = (heightM / downComponent) * RtxOptions::getMeterToWorldUnitScale();
 
-    // Lifetime: enough to fall from the plane to fallMarginMeters below the
-    // camera. This is what recycles the budget, so it directly sets density.
     const float travelM = (heightM + std::max(fallMarginMeters(), 0.0f)) / downComponent;
     params.timeToLiveSec = std::max(travelM / params.speedMetersPerSec, 0.05f);
 
     return params;
   }
 
-  // ---------------------------------------------------------------------------
-  // buildDesc — the RtxParticleSystemDesc for the current look.
-  //
-  // Unit notes, because the particle system mixes conventions:
-  //   * velocities / sizes / forces are in CENTIMETRES (the shader multiplies
-  //     them by rtx.sceneScale itself),
-  //   * positions (attractor, and our emitter transform) are in world units.
-  //
-  // Drag/gravity coupling: the evolve shader integrates
-  //   v = (v + up * gravity * dt) * (1 - drag * dt)
-  // so the steady state is gravity/drag, and gravity acts on the VERTICAL axis
-  // only. Setting gravity = -fallSpeed * drag (the vertical component of the
-  // spawn velocity, NOT the total speed, which also contains the wind push)
-  // makes the spawn velocity the terminal velocity too: particles neither
-  // accelerate nor stall, and turbulence kicks decay back toward the fall speed.
-  // That is the difference between snow (drag + turbulence: flutters, then
-  // resumes falling) and rain (no drag: dead straight).
-  //
-  // KNOWN CONSEQUENCE: there is no horizontal force to balance drag against, so
-  // drag also bleeds the wind push off over a particle's flight with time
-  // constant 1/drag. That is why the wind-driven presets (blizzard, sandstorm)
-  // use LOW drag with high turbulence rather than the reverse — high drag would
-  // straighten them to a vertical fall within a second of spawning.
-  // ---------------------------------------------------------------------------
-  RtxParticleSystemDesc PrecipitationSystem::buildDesc(const Params& params) {
+  // Velocities/forces in cm; positions in world units.
+  // gravity = -fallSpeed * drag sets spawn velocity == terminal velocity; turbulence kicks decay back to it.
+  // Drag also bleeds horizontal wind push (time constant 1/drag), so wind-driven presets use LOW drag.
+  RtxParticleSystemDesc PrecipitationSystem::buildDesc(const Params& params, const fork_weather::WeatherSnapshot* wx) {
     RtxParticleSystemDesc desc;
 
     const float speedCmS = params.speedMetersPerSec * 100.0f;
-    const float verticalSpeedCmS = std::max(fallSpeed(), 0.05f) * 100.0f;
-    const float dragCoeff = std::max(drag(), 0.0f);
+    const float verticalSpeedCmS = std::max(wx ? wx->precipitationFallSpeed : fallSpeed(), 0.05f) * 100.0f;
+    const float dragCoeff = std::max(wx ? wx->precipitationDrag : drag(), 0.0f);
     const int   budget = std::max(maxParticles(), 1);
 
     desc.maxNumParticles = static_cast<uint32_t>(budget);
 
-    // Population = spawnRate * lifetime, so this saturates the budget at
-    // intensity 1 and scales linearly below it.
-    //
-    // CAPPED below the budget: RtxParticleSystemManager::spawnParticles treats
-    // spawnRatePerSecond >= maxNumParticles as "constant population" mode and
-    // re-initializes EVERY particle EVERY frame (spawnParticleCount = max, the
-    // whole buffer re-runs the spawn kernel) — precipitation would freeze into
-    // a static sheet at the spawn plane. budget/ttl crosses that threshold
-    // whenever ttl < 1 s (fast fall speed + a small spawn volume), so clamp
-    // with margin. The only cost is a slightly under-filled budget for such
-    // extreme configurations.
+    // Capped below budget: spawnRate >= maxParticles triggers "constant population" mode which re-initializes
+    // every particle every frame (static sheet). Clamp with margin so fast-fall configs don't hit this.
     desc.spawnRatePerSecond = std::min(
-      saturate(intensity()) * static_cast<float>(budget) / params.timeToLiveSec,
+      dxvk::fclamp(wx ? wx->precipitationIntensity : intensity(), 0.0f, 1.0f) * static_cast<float>(budget) / params.timeToLiveSec,
       0.9f * static_cast<float>(budget));
     desc.spawnBurstDuration = 0.0f;
 
@@ -565,23 +399,17 @@ namespace dxvk { namespace fork_precipitation {
 
     desc.initialVelocityFromNormal = speedCmS;
     desc.initialVelocityConeAngleDegrees = std::max(spreadDegrees(), 0.0f);
-    // The emitter is glued to the camera; inheriting its motion would fling
-    // every drop sideways whenever the player moves.
-    desc.initialVelocityFromMotion = 0.0f;
+    desc.initialVelocityFromMotion = 0.0f;  // emitter is camera-glued; inheriting motion would fling drops sideways
 
     desc.dragCoefficient = dragCoeff;
     desc.gravityForce = -verticalSpeedCmS * dragCoeff;
 
-    const float turbulenceCmS2 = std::max(turbulence(), 0.0f) * 100.0f;
+    const float turbulenceCmS2 = std::max(wx ? wx->precipitationTurbulence : turbulence(), 0.0f) * 100.0f;
     desc.useTurbulence = turbulenceCmS2 > 0.0f ? 1 : 0;
     desc.turbulenceForce = turbulenceCmS2;
     desc.turbulenceFrequency = std::max(turbulenceFrequency(), 1e-4f);
 
-    // Appearance overrides (fork - 2026-07-26): global user-taste multipliers
-    // stacked on the blended per-preset look - see the option block in the
-    // header for why these exist (the blender owns the per-preset fields, so
-    // only a separate layer can stick while weather is active).
-    const float trail = std::max(streak() * std::max(streakScale(), 0.0f), 0.0f);
+    const float trail = std::max((wx ? wx->precipitationStreak : streak()) * std::max(streakScale(), 0.0f), 0.0f);
     desc.enableMotionTrail = trail > 0.01f ? 1 : 0;
     desc.motionTrailMultiplier = std::max(trail, 0.01f);
     // Motion trails already imply velocity alignment; without them we want the
@@ -589,23 +417,9 @@ namespace dxvk { namespace fork_precipitation {
     // than spinning).
     desc.alignParticlesToVelocity = desc.enableMotionTrail ? 1 : 0;
 
-    // Billboard choice matters a lot for how "anchored" precipitation reads
-    // (fork — 2026-07-25, fixing "the rain changes direction when I turn").
-    //
-    // FaceCamera_Spherical puts the billboard plane in the CAMERA plane
-    // (basisRight/basisUp = camera right/up). The motion trail then stretches
-    // along the world velocity PROJECTED into that plane, so any horizontal
-    // component of the fall gets re-projected as the camera yaws and the
-    // apparent fall direction sweeps around with the view.
-    //
-    // FaceCamera_UpAxisLocked pins basisUp to world up and only yaws the quad
-    // to face the viewer, so a falling streak stays locked to the world
-    // vertical no matter where the camera looks. That is what streaked
-    // precipitation wants.
-    //
-    // Round, un-streaked particles (snow) have no orientation to betray, and
-    // spherical gives them a better silhouette when looking up or down, so they
-    // keep it.
+    // FaceCamera_Spherical: trail stretches in the camera plane, so horizontal fall re-projects as camera yaws.
+    // FaceCamera_UpAxisLocked: basisUp = world up, so streaks stay locked to world vertical.
+    // Spherical is kept for round un-streaked particles (snow) for a better up/down silhouette.
     desc.billboardType = desc.enableMotionTrail
       ? ParticleBillboardType::FaceCamera_UpAxisLocked
       : ParticleBillboardType::FaceCamera_Spherical;
@@ -615,9 +429,6 @@ namespace dxvk { namespace fork_precipitation {
     desc.randomFlipAxis = ParticleRandomFlipAxis::None;
     desc.initialRotationDeviationDegrees = 0.0f;
 
-    // Spawn-time TLAS occlusion: the mechanism that actually makes interiors
-    // work, since it is view-independent (see the option description and the
-    // traceSpawnOcclusion comment in particle_system_common.h).
     desc.traceSpawnOcclusion = occludeUnderCover() ? 1 : 0;
 
     desc.enableCollisionDetection = enableCollision() ? 1 : 0;
@@ -635,38 +446,29 @@ namespace dxvk { namespace fork_precipitation {
     desc.attractorForce = 0.0f;
     desc.attractorRadius = 0.0f;
 
-    // Safety clamp. Turbulence integrates into velocity with only drag to
-    // oppose it, so a low-drag/high-turbulence preset could otherwise fling
-    // particles arbitrarily fast. 3x the intended speed leaves plenty of room
-    // for gusting while bounding the worst case. (Per world axis; a zero or
-    // negative entry would mean unclamped.)
+    // Turbulence integrates with only drag opposing it; 3x speed leaves room for gusting while bounding the worst case.
     const float velocityClampCmS = std::max(speedCmS * 3.0f, 100.0f);
     desc.maxVelocity = { vec3(velocityClampCmS, velocityClampCmS, velocityClampCmS) };
 
-    // Animated curves: two identical keyframes (spawn, end-of-life) so size
-    // and colour hold constant over each particle's life. The min/max PAIR of
-    // curves is where per-drop randomness lives: the GPU samples the
-    // animation texture between the min row and the max row with the
-    // particle's stable randSeed (computeDataRow, randomizeAcrossTwoRows), so
-    // spreading min/max apart by the variance options gives every drop its
-    // own size/opacity, fixed for its lifetime, at zero extra cost.
-    const float width = std::max(dropWidth() * std::max(widthScale(), 0.0f), 0.01f);
-    const float length = std::max(dropLength() * std::max(lengthScale(), 0.0f), 0.01f);
+    // Two identical keyframes so size/color hold constant over each particle's life.
+    // Spreading min/max rows apart gives stable per-drop randomness (GPU samples between them by randSeed).
+    const float width = std::max((wx ? wx->precipitationDropWidth : dropWidth()) * std::max(widthScale(), 0.0f), 0.01f);
+    const float length = std::max((wx ? wx->precipitationDropLength : dropLength()) * std::max(lengthScale(), 0.0f), 0.01f);
     const float sizeVar = std::min(std::max(sizeVariance(), 0.0f), 0.9f);
     const vec2 sizeLo(width * (1.0f - sizeVar), length * (1.0f - sizeVar));
     const vec2 sizeHi(width * (1.0f + sizeVar), length * (1.0f + sizeVar));
     desc.minSize = { sizeLo, sizeLo };
     desc.maxSize = { sizeHi, sizeHi };
 
-    const Vector3 presetColor = color();
+    const Vector3 presetColor = wx ? wx->precipitationColor : color();
     const Vector3 tintOverride = tintColor();
-    const Vector3 tint(saturate(presetColor.x * std::max(tintOverride.x, 0.0f)),
-                       saturate(presetColor.y * std::max(tintOverride.y, 0.0f)),
-                       saturate(presetColor.z * std::max(tintOverride.z, 0.0f)));
-    const float alpha = saturate(opacity() * std::max(opacityScale(), 0.0f));
+    const Vector3 tint(dxvk::fclamp(presetColor.x * std::max(tintOverride.x, 0.0f), 0.0f, 1.0f),
+                       dxvk::fclamp(presetColor.y * std::max(tintOverride.y, 0.0f), 0.0f, 1.0f),
+                       dxvk::fclamp(presetColor.z * std::max(tintOverride.z, 0.0f), 0.0f, 1.0f));
+    const float alpha = dxvk::fclamp((wx ? wx->precipitationOpacity : opacity()) * std::max(opacityScale(), 0.0f), 0.0f, 1.0f);
     const float alphaVar = std::min(std::max(opacityVariance(), 0.0f), 0.9f);
-    const vec4 rgbaLo(tint.x, tint.y, tint.z, saturate(alpha * (1.0f - alphaVar)));
-    const vec4 rgbaHi(tint.x, tint.y, tint.z, saturate(alpha * (1.0f + alphaVar)));
+    const vec4 rgbaLo(tint.x, tint.y, tint.z, dxvk::fclamp(alpha * (1.0f - alphaVar), 0.0f, 1.0f));
+    const vec4 rgbaHi(tint.x, tint.y, tint.z, dxvk::fclamp(alpha * (1.0f + alphaVar), 0.0f, 1.0f));
     desc.minColor = { rgbaLo, rgbaLo };
     desc.maxColor = { rgbaHi, rgbaHi };
 
@@ -676,35 +478,9 @@ namespace dxvk { namespace fork_precipitation {
     return desc;
   }
 
-  // ---------------------------------------------------------------------------
-  // refreshDesc — dwell-gated adoption of a new descriptor.
-  //
-  // See the DESCRIPTOR STABILITY note in the header: the particle manager keys
-  // systems on the descriptor hash, so adopting a freshly computed descriptor
-  // every frame during a weather blend would allocate a full particle system per
-  // frame. Holding each descriptor for descUpdateIntervalMs bounds that to a
-  // handful of systems per transition, and the orphans crossfade out on their
-  // own (no new spawns, existing particles finish their lifetime, the manager
-  // evicts once the last one dies).
-  //
-  // The dwell is FLOORED at maxTimeToLive/6. Orphans live for their remaining
-  // particle lifetime (prepareForNextFrame erases a system maxTimeToLive after
-  // its last spawn), so the number of systems alive at once during a continuous
-  // blend is ~lifetime/dwell + 1; a flat 750 ms dwell with slow-falling snow
-  // (~20 s lifetime, ~7.5 MB of buffers per system at the default budget) would
-  // stack ~27 systems = ~200 MB of transient VRAM plus 27 simulate dispatch
-  // groups per frame. The floor bounds that at ~7 systems for ANY preset while
-  // leaving fast-lifetime rain at the configured interval. descUpdateIntervalMs
-  // = 0 disables the dwell AND the floor (debugging only).
-  //
-  // Material refresh rides the same dwell: re-registering the drop material
-  // changes its MaterialData hash, and submitExternalDraw stamps that hash onto
-  // the emitter draw call (setHashOverride), which is exactly the hash the
-  // particle manager folds into the system key — i.e. a material edit forks the
-  // system identity just like a descriptor edit and would allocate a system per
-  // frame if applied while a slider is being dragged.
-  // ---------------------------------------------------------------------------
-  const RtxParticleSystemDesc& PrecipitationSystem::refreshDesc(RtxContext& ctx, const Params& params) {
+  // Dwell floor = maxTimeToLive/6 to bound orphan stack-up during continuous blends (otherwise slow-falling
+  // snow at flat 750ms would stack ~27 systems = ~200 MB of transient VRAM). 0 disables floor (debug only).
+  const RtxParticleSystemDesc& PrecipitationSystem::refreshDesc(RtxContext& ctx, const Params& params, const fork_weather::WeatherSnapshot* wx) {
     const uint64_t nowMs = GlobalTime::get().absoluteTimeMs();
     uint64_t intervalMs = static_cast<uint64_t>(std::max(descUpdateIntervalMs(), 0));
     if (intervalMs > 0 && m_activeDesc.has_value()) {
@@ -723,14 +499,14 @@ namespace dxvk { namespace fork_precipitation {
       // and crossfades out; the forked identity picks the new material up on
       // this frame's fetchParticleSystem.
       if (m_materialRegistered &&
-          (saturate(roughness()) != m_materialRoughness || saturate(metallic()) != m_materialMetallic)) {
+          (dxvk::fclamp(roughness(), 0.0f, 1.0f) != m_materialRoughness || dxvk::fclamp(metallic(), 0.0f, 1.0f) != m_materialMetallic)) {
         ctx.getSceneManager().getAssetReplacer()->destroyExternalMaterial(
           reinterpret_cast<remixapi_MaterialHandle>(kMaterialHandleValue));
         m_materialRegistered = false;
         ensureMaterial(ctx);
       }
 
-      RtxParticleSystemDesc next = buildDesc(params);
+      RtxParticleSystemDesc next = buildDesc(params, wx);
       // Only pay for a new system if something actually moved. A settled
       // weather state produces a bit-identical descriptor every time, so this
       // is the common case once a blend finishes.
@@ -747,25 +523,9 @@ namespace dxvk { namespace fork_precipitation {
     return *m_activeDesc;
   }
 
-  // ---------------------------------------------------------------------------
-  // buildEmitterTransform — place and orient the spawn plane.
-  //
-  // Local +Z maps to the fall direction (which is what makes
-  // initialVelocityFromNormal launch drops downwind), local XY spans the plane
-  // scaled to spawnRadiusMeters. The plane sits spawnDistanceWorld back along
-  // the travel direction from the camera, so drops converge on the viewer
-  // instead of falling behind them in a crosswind.
-  //
-  // DELIBERATELY INDEPENDENT OF CAMERA ORIENTATION (fork — 2026-07-25). This
-  // used to add a bias along the camera's flattened forward vector to push the
-  // volume into view. That tied the spawn plane to where the player was
-  // LOOKING: panning swung the whole volume around them, and because the spawn
-  // shader smears new particles between the emitter's previous and current
-  // transform, a turn dragged freshly spawned drops along the swing. Only the
-  // camera's POSITION may move the emitter; nothing here may read its rotation.
-  // A 20 m radius disc centred on the viewer already covers the view in every
-  // direction, so the bias was buying very little for that cost.
-  // ---------------------------------------------------------------------------
+  // Local +Z = fall direction; local XY scaled to spawnRadiusMeters.
+  // Camera POSITION may move the emitter; rotation must NOT — a view-direction bias ties the spawn plane to
+  // where the player is looking, and turns drag freshly spawned drops along the swing.
   Matrix4 PrecipitationSystem::buildEmitterTransform(RtxContext& ctx, const Params& params) {
     const RtCamera& camera = ctx.getSceneManager().getCamera();
     const Vector3 cameraPos = camera.getPosition();
@@ -785,36 +545,30 @@ namespace dxvk { namespace fork_precipitation {
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // submit — the per-frame entry point.
-  // ---------------------------------------------------------------------------
   void PrecipitationSystem::submit(RtxContext& ctx) {
-    const bool active = enable() && intensity() > 0.0f && maxParticles() > 0;
+    // Get blended snapshot (nullptr when blender is dormant).
+    const fork_weather::WeatherSnapshot* wx =
+      ctx.getSceneManager().getWeatherBlender()
+      ? ctx.getSceneManager().getWeatherBlender()->getBlendedSnapshot()
+      : nullptr;
+
+    const float effectiveIntensity = wx ? wx->precipitationIntensity : intensity();
+    const bool active = enable() && effectiveIntensity > 0.0f && maxParticles() > 0;
 
     if (!active) {
       if (m_wasActive) {
-        // Stop submitting: existing particles finish their lifetime and the
-        // manager evicts the system. Forget the descriptor so re-enabling
-        // starts a fresh one immediately rather than waiting out the dwell.
-        m_activeDesc.reset();
+        m_activeDesc.reset();  // forget so re-enabling starts fresh rather than waiting out the dwell
         m_wasActive = false;
       }
       return;
     }
 
-    // Camera-anchored, so there is nothing sensible to do before the main
-    // camera has been established for this frame.
     if (!ctx.getSceneManager().getCamera().isValid(ctx.getDevice()->getCurrentFrameId())) {
       return;
     }
 
-    // The singleton outlives any DxvkDevice. If the device changed since the
-    // resources were built (device recreation, a second D3D9 device in the
-    // process), every cached Rc<> belongs to the OLD device and — worse — the
-    // registered-flags say "done" while the NEW device's asset replacer has
-    // never seen the mesh/material handles, which would make submitExternalDraw
-    // log "External mesh has no submeshes" every frame forever. Drop everything
-    // and rebuild against the current device.
+    // Device recreation: drop everything so the next frame rebuilds against the new device.
+    // (Old device's Rc<>s plus "done" flags would make submitExternalDraw log errors every frame.)
     if (m_resourceDevice != ctx.getDevice().ptr()) {
       m_dropImage = nullptr;
       m_dropImageView = nullptr;
@@ -831,21 +585,13 @@ namespace dxvk { namespace fork_precipitation {
       return;
     }
 
-    const Params params = resolveParams();
-    const RtxParticleSystemDesc& desc = refreshDesc(ctx, params);
+    const Params params = resolveParams(wx);
+    const RtxParticleSystemDesc& desc = refreshDesc(ctx, params, wx);
 
     DrawCallState drawCall {};
     drawCall.cameraType = CameraType::Main;
-    // transformData / materialData are private to DrawCallState; the friended
-    // hook fills them in (same arrangement the Remix API uses for its own
-    // hand-built external draws).
     fork_hooks::precipitationEmitterDrawCall(drawCall, buildEmitterTransform(ctx, params));
-
-    // No categories on the emitter itself: it is hidden, and the particle
-    // manager stamps InstanceCategories::Particle onto the geometry it
-    // generates. (This field only feeds the external-draw identity hash anyway;
-    // the categories that reach the instance come from the draw call.)
-    const CategoryFlags categories {};
+    const CategoryFlags categories {};  // emitter is hidden; particle manager stamps Particle on its geometry
 
     // commitExternalGeometryToRT takes ownership via unique_ptr (upstream
     // changed the signature; picked up in the 2026-07-29 sync).
@@ -863,11 +609,6 @@ namespace dxvk { namespace fork_precipitation {
     m_wasActive = true;
   }
 
-  // ---------------------------------------------------------------------------
-  // showImguiSettings — the global knobs. Per-preset look values are generated
-  // into the Weather Preset Editor automatically by the weather field table, so
-  // this panel deliberately covers only what is NOT per-preset.
-  // ---------------------------------------------------------------------------
   void PrecipitationSystem::showImguiSettings() {
     if (!ImGui::TreeNode("Precipitation (global)")) {
       return;
@@ -1028,29 +769,14 @@ namespace dxvk { namespace fork_precipitation {
 } }  // namespace dxvk::fork_precipitation
 
 
-// ---------------------------------------------------------------------------
-// fork_hooks bodies
-// ---------------------------------------------------------------------------
 namespace dxvk { namespace fork_hooks {
 
-  // Called once per frame from RtxContext::injectRTX, immediately before
-  // SceneManager::prepareSceneData (which runs the particle simulation). No-op
-  // unless a weather preset has actually asked for precipitation.
   void submitPrecipitation(class RtxContext& ctx) {
-    fork_precipitation::PrecipitationSystem::get().submit(ctx);
+    ctx.getCommonObjects()->metaPrecipitation().submit(ctx);
   }
 
-  // Fills in the precipitation emitter's draw call. Friended by DrawCallState
-  // for transformData / materialData, mirroring how
-  // RemixAPIPrivateAccessor::toRtDrawState builds the API's external draws.
-  //
-  // The blend state here is what makes the DROPS translucent, not the emitter:
-  // RtxParticleSystemManager::submitDrawState copies this LegacyMaterialData
-  // onto the generated particle geometry's draw call. It is the runtime-side
-  // equivalent of the InstanceInfoBlendEXT the NFSC mod chains onto its spawner
-  // instance. Colour/alpha are modulated against VertexColor0 so the
-  // per-particle colour (which carries the weather-driven tint and opacity)
-  // reaches the surface.
+  // Blend state here makes the DROPS translucent: submitDrawState copies this onto the generated
+  // particle geometry. Color/alpha modulated against VertexColor0 so per-particle tint and opacity reach the surface.
   void precipitationEmitterDrawCall(DrawCallState& drawCall, const Matrix4& objectToWorld) {
     drawCall.transformData.objectToWorld = objectToWorld;
     drawCall.transformData.textureTransform = Matrix4 {};

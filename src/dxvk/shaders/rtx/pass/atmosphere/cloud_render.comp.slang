@@ -56,7 +56,7 @@
 // helpers in atmosphere_common.slangh resolve to texture lookups (rather
 // than the binding-free fallback stubs used by the LUT bakers). The
 // global names the helpers reach for (AtmosphereCloudDSun, AtmosphereCloudDAmbient,
-// AtmosphereCloudNoise3DSampler, AtmosphereFastNoise)
+// AtmosphereCloudNoise3DSampler, BlueNoise)
 // are declared at our local slots BELOW so they're in scope before the
 // include's helper bodies are parsed.
 #define ATMOSPHERE_AVAILABLE
@@ -84,10 +84,8 @@ Texture3D<float> AtmosphereCloudDSun;
 layout(binding = 4)
 Texture3D<float> AtmosphereCloudDAmbient;
 
-// EA Importance-Sampled FAST noise (128x128x32 RG8 Texture2DArray) — same
-// resource consumed by fastJitter() in atmosphere_common.slangh.
 layout(binding = 5)
-Texture2DArray<float2> AtmosphereFastNoise;
+Texture2DArray<float> BlueNoise;
 
 layout(binding = 6, rgba16f)
 RWTexture2D<float4> cloudRenderOutput;
@@ -120,8 +118,7 @@ layout(binding = 14)
 Texture3D<float4> AtmosphereCloudDetailNoise3D;
 
 // Include the helper library AFTER the texture globals are declared so the
-// ATMOSPHERE_AVAILABLE-gated helper bodies (sampleDSun / sampleDAmbient /
-// fastJitter / etc.) resolve to our local declarations.
+// ATMOSPHERE_AVAILABLE-gated helper bodies resolve to our local declarations.
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 // Shared slab-march + shade-context library (fork — 2026-06-10). Hosts
@@ -179,15 +176,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     return;
   }
 
-  // ===== Per-pixel FAST-noise jitter on the fractional step offset =====
-  // Channel x is the view-march; we don't take more than one tap so channel
-  // y is unused.
-  // Slab intersection + stepLen now live inside marchCloudSlab so both layer
-  // marches can reuse them with their own slab params.
   float jitter = fastJitter(pixelCoord, args.cloudRenderFrameIdx).x;
-  // Static per-pixel hash for the adaptive march's far-field jitter (Nubis
-  // p.172: animated hash < 250 m, static beyond — no distant shimmer). Frame
-  // slice 0 of the same FAST noise = a frame-constant blue-noise value.
+  // Static per-pixel hash for far-field jitter (animated < 250 m, static beyond — no distant shimmer).
   float jitterStatic = fastJitter(pixelCoord, 0u).x;
 
   // ===== Static-per-frame shading context (cloud_march_common.slangh) =====

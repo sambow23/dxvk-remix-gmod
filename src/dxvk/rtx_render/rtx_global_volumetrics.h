@@ -29,6 +29,10 @@
 
 namespace dxvk {
 
+// Forward declaration for the weather override pointer (full definition in
+// rtx_fork_weather.h, included only by rtx_global_volumetrics.cpp).
+namespace fork_weather { struct WeatherSnapshot; }
+
   class RtxGlobalVolumetrics : public CommonDeviceObject, public RtxPass {
 
   public:
@@ -257,6 +261,18 @@ namespace dxvk {
 
     VolumeArgs getVolumeArgs(CameraManager const& cameraManager, FogState const& fogState, bool enablePortalVolumes) const;
 
+    /**
+     * \brief Set per-frame weather override (fork — snapshot pattern).
+     *
+     * When non-null, getVolumeArgs() reads blended volumetric weather values
+     * from the snapshot instead of the RTX_OPTION getters for every field that
+     * the WeatherBlender can drive. Frame-local: call once per frame before
+     * getVolumeArgs() runs; do NOT cache the pointer across frames.
+     */
+    void applyWeatherOverride(const dxvk::fork_weather::WeatherSnapshot* wx) {
+      m_weatherOverride = wx;
+    }
+
     void dispatch(class RtxContext* ctx, const Resources::RaytracingOutput& rtOutput, uint32_t numActiveFroxelVolumes);
     
     const Resources::Resource& getCurrentVolumeReservoirs() const { return m_volumeReservoirs[0]; }
@@ -291,6 +307,12 @@ namespace dxvk {
     Resources::Resource m_volumeAccumulatedRadianceAge[2];
     bool m_swapTextures = false;
     bool m_rebuildFroxels = false;
+
+    // Per-frame weather override (fork — snapshot pattern). Set once per frame
+    // by applyWeatherOverride() (called from rtx_context.cpp before
+    // getVolumeArgs runs). getVolumeArgs() reads the snapshot's fields instead
+    // of the RTX_OPTION getters for every weather-blendable volumetric param.
+    const dxvk::fork_weather::WeatherSnapshot* m_weatherOverride = nullptr;
 
     DxvkRaytracingPipelineShaders getPipelineShaders(bool useRayQuery) const;
 

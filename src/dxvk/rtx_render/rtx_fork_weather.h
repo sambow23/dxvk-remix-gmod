@@ -1,30 +1,12 @@
 #pragma once
 
-// rtx_fork_weather.h — fork-owned weather preset declarations.
-// Defines 756 RTX_OPTIONs (12 presets x 63 fields) under the
-// rtx.weather.preset.<presetName> namespace.
-//
-// Field bucket breakdown: 17 cloud + 5 atmosphere + 4 sky/moon mood + 26 volumetric
-// + 11 precipitation.
-//
-// Usage: invoke DECLARE_ALL_WEATHER_PRESETS() inside the RtxOptions struct body
-// (see rtx_options.h). The macro expands all 12 preset declarations inline.
-//
-// The WEATHER_PRESET_FIELD_LIST(X) X-macro is preserved here for use by Task 2
-// (WeatherSnapshot struct member generation). It expands to one X(type, name,
-// default) call per field, and is the single source of truth for the field
-// list. DECLARE_WEATHER_PRESET delegates to it via a per-preset binder, so
-// adding a field requires only one edit (in WEATHER_PRESET_FIELD_LIST) and the
-// 12 preset declarations regenerate automatically.
+// rtx_fork_weather.h — 756 RTX_OPTIONs (12 presets x 63 fields) under rtx.weather.preset.*
+// Adding a field to WEATHER_PRESET_FIELD_LIST automatically propagates it everywhere.
 
 #include "rtx_option.h"
 #include "../../util/util_vector.h"
 
-// ---------------------------------------------------------------------------
-// WeatherFieldKind - per-field blend/widget classifier (see field table below).
-// Consumed from the descriptor table onward; an ignorable column for the
-// WeatherSnapshot member generator.
-// ---------------------------------------------------------------------------
+namespace dxvk { class ImGUI; }
 namespace dxvk { namespace fork_weather {
   enum WeatherFieldKind {
     WK_Scalar,      // plain float, linear lerp
@@ -37,33 +19,12 @@ namespace dxvk { namespace fork_weather {
     // plain linear on the STORED value; only the widget converts units, so the
     // conf/API/shader-facing value is unchanged. For these kinds the table's
     // min/max/step/fmt columns are in DISPLAY units (they feed only the widget).
-    WK_SpeedKmS,    // stored km/s; widget displays m/s (x1000)
-    WK_PatchPerKm,  // stored spatial frequency (1/km); widget displays patch size in km (1/x)
+    WK_SpeedKmS,    // stored km/s; widget shows m/s
+    WK_PatchPerKm,  // stored 1/km; widget shows km
   };
 } }
 
-// ---------------------------------------------------------------------------
-// Field table X-macro - THE single source of truth for the 63 weather fields
-// (17 cloud + 5 atmosphere + 4 sky/moon mood + 27 volumetric + 11 precipitation).
-// Every consumer
-// (WeatherSnapshot members, the per-field descriptor table, the generated
-// ImGui panel, and the blend/read/write loops) is driven from here, so a field
-// added here propagates everywhere with no second site to keep in sync.
-//
-// Each row expands to:
-//   X(type, name, defaultValue, kind, group, section, label, min, max, step, fmt)
-//     type/name/defaultValue - C++ type, member name, NEUTRAL default
-//     kind                   - WeatherFieldKind (blend math + widget type)
-//     group                  - top-level panel tab ("Clouds", "Atmosphere", ...)
-//     section                - subsection header within the group
-//     label                  - ImGui widget label
-//     min/max/step/fmt       - slider range, drag step, printf format
-//
-// UI metadata (group/section/label/range/fmt) is lifted verbatim from the old
-// WEATHER_PRESET_SLIDERS macro so the regenerated panel matches today's ranges.
-// Consumers needing only a subset (e.g. the snapshot member generator) still
-// take all 11 args and ignore the rest.
-// ---------------------------------------------------------------------------
+// X(type, name, defaultValue, kind, group, section, label, min, max, step, fmt)
 #define WEATHER_PRESET_FIELD_LIST(X) \
   /* Cloud (16) */ \
   X(float,   cloudDensity,                       1.0f,                            WK_Scalar,     "Clouds",         "Look",             "Density",                    0.0f,    10.0f,   0.05f,   "%.2f") \
@@ -138,26 +99,11 @@ namespace dxvk { namespace fork_weather {
   X(float,   precipitationSkyLight,    1.0f,                           WK_Scalar, "Precipitation", "Look",   "Sky Light",      0.0f,  10.0f, 0.05f, "%.2f") \
   X(Vector3, precipitationColor,        Vector3(0.75f, 0.80f, 0.90f),  WK_Color,  "Precipitation", "Look",   "Color",          0.0f,  1.0f,  0.01f, "%.2f")
 
-// ---------------------------------------------------------------------------
-// Per-field RTX_OPTION generator. Takes the preset name plus the X-macro's
-// (type, fieldName, defaultVal) tuple and emits one RTX_OPTION declaration in
-// the rtx.weather.preset.<presetName> namespace with getter
-// presetName_fieldName.
-// ---------------------------------------------------------------------------
 #define WEATHER_PRESET_RTX_OPTION_FOR(presetName, type, fieldName, defaultVal)                     \
   RTX_OPTION("rtx.weather.preset." #presetName, type, presetName##_##fieldName, defaultVal,        \
              "Weather preset '" #presetName "' value for " #fieldName ". Override per-game in user.conf.")
 
-// ---------------------------------------------------------------------------
-// Per-preset binder macros. WEATHER_PRESET_VALUES_<name>(X) expects X to be a
-// 3-arg macro (type, name, default), but RTX_OPTION generation also needs the
-// preset name. Each binder closes over a specific preset name and forwards to
-// WEATHER_PRESET_RTX_OPTION_FOR.
-//
-// Adding a new preset requires (a) defining a new binder here, (b) defining a
-// WEATHER_PRESET_VALUES_<name> macro below, and (c) adding a
-// DECLARE_WEATHER_PRESET line to DECLARE_ALL_WEATHER_PRESETS below.
-// ---------------------------------------------------------------------------
+// Adding a preset: (a) new binder here, (b) WEATHER_PRESET_VALUES_<name> macro, (c) DECLARE_ALL_WEATHER_PRESETS entry.
 #define WEATHER_PRESET_BIND_clear(type, name, def)         WEATHER_PRESET_RTX_OPTION_FOR(clear,         type, name, def);
 #define WEATHER_PRESET_BIND_partlyCloudy(type, name, def)  WEATHER_PRESET_RTX_OPTION_FOR(partlyCloudy,  type, name, def);
 #define WEATHER_PRESET_BIND_overcast(type, name, def)      WEATHER_PRESET_RTX_OPTION_FOR(overcast,      type, name, def);
@@ -170,13 +116,6 @@ namespace dxvk { namespace fork_weather {
 #define WEATHER_PRESET_BIND_blizzard(type, name, def)      WEATHER_PRESET_RTX_OPTION_FOR(blizzard,      type, name, def);
 #define WEATHER_PRESET_BIND_sandstorm(type, name, def)     WEATHER_PRESET_RTX_OPTION_FOR(sandstorm,     type, name, def);
 #define WEATHER_PRESET_BIND_smoggy(type, name, def)        WEATHER_PRESET_RTX_OPTION_FOR(smoggy,        type, name, def);
-
-// ---------------------------------------------------------------------------
-// Per-preset value X-macros — one per archetype, 63 fields each, in the same
-// order as WEATHER_PRESET_FIELD_LIST. Fields not explicitly tuned use the
-// neutral default from WEATHER_PRESET_FIELD_LIST, which is also the canonical
-// field order — see that macro above rather than duplicating the list here.
-// ---------------------------------------------------------------------------
 
 // clear — sunny, crisp, low haze
 #define WEATHER_PRESET_VALUES_clear(X)                                                                 \
@@ -647,9 +586,7 @@ namespace dxvk { namespace fork_weather {
   X(float,   precipitationSkyLight,    1.00f                       ) \
   X(Vector3, precipitationColor,        Vector3(0.72f, 0.78f, 0.90f))
 
-// thunderstorm — heaviest, bruised tone (retuned 2026-05-09 by in-game
-// tuning against the post-FAST-noise + temporal-smoother + Jensen-revert
-// pipeline at cloudAltitude=1.5 km, cloudCurvature=0.38)
+// thunderstorm — heaviest, bruised tone
 #define WEATHER_PRESET_VALUES_thunderstorm(X)                                                          \
   X(float,   cloudDensity,                              2.65f)                                         \
   X(float,   cloudCoverageMean,                         0.95f)                                         \
@@ -984,18 +921,8 @@ namespace dxvk { namespace fork_weather {
   X(float,   precipitationSkyLight,    1.00f                       ) \
   X(Vector3, precipitationColor,        Vector3(0.75f, 0.80f, 0.90f))
 
-// ---------------------------------------------------------------------------
-// Single-preset macro. Walks WEATHER_PRESET_VALUES_<N> via the binder for
-// preset N, emitting all 63 RTX_OPTION declarations with archetype-tuned
-// defaults. Must be invoked inside a class body (RTX_OPTION declares inline
-// static members).
-// ---------------------------------------------------------------------------
 #define DECLARE_WEATHER_PRESET(N) WEATHER_PRESET_VALUES_##N(WEATHER_PRESET_BIND_##N)
 
-// ---------------------------------------------------------------------------
-// Umbrella macro. Invoke inside RtxOptions struct body to declare all 756
-// RTX_OPTIONs (12 presets x 63 fields).
-// ---------------------------------------------------------------------------
 #define DECLARE_ALL_WEATHER_PRESETS()   \
   DECLARE_WEATHER_PRESET(clear)         \
   DECLARE_WEATHER_PRESET(partlyCloudy)  \
@@ -1010,101 +937,116 @@ namespace dxvk { namespace fork_weather {
   DECLARE_WEATHER_PRESET(sandstorm)     \
   DECLARE_WEATHER_PRESET(smoggy)
 
-// ---------------------------------------------------------------------------
-// WeatherSnapshot + WeatherBlender — Task 2 additions.
-// Lives in dxvk::fork_weather namespace. Included by rtx_fork_weather.cpp;
-// forward-use in rtx_fork_hooks.h needs only the hook forward declarations
-// (no WeatherBlender include required there).
-// ---------------------------------------------------------------------------
+#include <mutex>
 #include <string>
 
 namespace dxvk { namespace fork_weather {
 
-  // -------------------------------------------------------------------------
-  // WeatherSnapshot — a plain-value copy of all 63 renderer weather params.
-  // Members are auto-generated from the single-source-of-truth X-macro so
-  // that any field addition automatically propagates here.
-  // -------------------------------------------------------------------------
+  // Plain-value copy of all 63 weather params; members auto-generated from WEATHER_PRESET_FIELD_LIST.
   struct WeatherSnapshot {
 #define WEATHER_PRESET_FIELD_AS_MEMBER_(type, name, defaultValue, kind, group, section, label, mn, mx, step, fmt) type name = defaultValue;
     WEATHER_PRESET_FIELD_LIST(WEATHER_PRESET_FIELD_AS_MEMBER_)
 #undef WEATHER_PRESET_FIELD_AS_MEMBER_
   };
 
-  // -------------------------------------------------------------------------
-  // WeatherBlender — per-frame lerp pipeline.
-  //
-  // Reads __weather.target + __weather.blend_seconds from the GameStateStore,
-  // lerps from m_previousSnapshot toward the named preset's RTX_OPTION values
-  // over m_blendDurationSec seconds, and writes interpolated values into the
-  // Derived layer of each underlying RTX_OPTION via setImmediately().
-  //
-  // Dormant when __weather.target is absent or unknown — zero upstream
-  // behavioural change.
-  //
-  // Caller (Task 3) provides deltaTimeSeconds from the per-frame render loop.
-  // ImGui surface (Task 4) implemented in showImguiSettings().
-  // -------------------------------------------------------------------------
+  // Per-frame lerp pipeline. Setters are thread-safe (protected by m_ioMutex). Dormant when no target is set.
   class WeatherBlender {
+    friend class dxvk::ImGUI;
   public:
     WeatherBlender();
     ~WeatherBlender();
 
-    // Called once per frame from fork_hooks::updateWeatherBlender (Task 3).
     void update(float deltaTimeSeconds);
-
-    // Renders the inline weather-preset panel (transition controls, status, and
-    // the button that toggles the pop-out editor window).
     void showImguiSettings();
+    void renderEditorWindow();  // no-op while closed; call once per frame
 
-    // Renders the pop-out preset editor as a separate movable window (toggled
-    // from showImguiSettings). No-op while closed. Call once per frame.
-    void renderEditorWindow();
+    // 756 RTX_OPTIONs: 12 presets x 63 fields. Getter form: WeatherBlender::clear_cloudDensity(), etc.
+    DECLARE_ALL_WEATHER_PRESETS();
+#undef DECLARE_ALL_WEATHER_PRESETS
+#undef DECLARE_WEATHER_PRESET
+#undef WEATHER_PRESET_RTX_OPTION_FOR
+#undef WEATHER_PRESET_BIND_clear
+#undef WEATHER_PRESET_BIND_partlyCloudy
+#undef WEATHER_PRESET_BIND_overcast
+#undef WEATHER_PRESET_BIND_hazy
+#undef WEATHER_PRESET_BIND_foggy
+#undef WEATHER_PRESET_BIND_drizzle
+#undef WEATHER_PRESET_BIND_rainstorm
+#undef WEATHER_PRESET_BIND_thunderstorm
+#undef WEATHER_PRESET_BIND_snow
+#undef WEATHER_PRESET_BIND_blizzard
+#undef WEATHER_PRESET_BIND_sandstorm
+#undef WEATHER_PRESET_BIND_smoggy
+    // NOTE: WEATHER_PRESET_FIELD_LIST is intentionally NOT undef'd here — WeatherSnapshot uses it.
+
+    // Setters — safe to call from any thread.
+    void setTargetPreset(const std::string& name) {
+      std::lock_guard<std::mutex> lock{ m_ioMutex };
+      m_inputTarget = name;
+    }
+    void setBlendSeconds(float seconds) {
+      std::lock_guard<std::mutex> lock{ m_ioMutex };
+      m_inputBlendSeconds = std::max(0.0f, seconds);
+    }
+    void setDriftSpeed(float speed) {
+      std::lock_guard<std::mutex> lock{ m_ioMutex };
+      m_inputDriftSpeed = std::max(0.0f, speed);
+    }
+    void setDriftIntensity(float intensity) {
+      std::lock_guard<std::mutex> lock{ m_ioMutex };
+      m_inputDriftIntensity = std::max(0.0f, intensity);
+    }
+
+    // Getters — safe to call from any thread.
+    std::string getTargetPreset()   const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_inputTarget; }
+    float       getBlendSeconds()   const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_inputBlendSeconds; }
+    float       getDriftSpeed()     const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_inputDriftSpeed; }
+    float       getDriftIntensity() const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_inputDriftIntensity; }
+    std::string getCurrentPreset()  const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_outputCurrent; }
+    std::string getPreviousPreset() const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_outputPrevious; }
+    float       getBlendProgress()  const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_outputBlendProgress; }
+
+    // Returns the blended state, or nullptr when dormant. Valid for the current frame only — do not cache.
+    const WeatherSnapshot* getBlendedSnapshot() const {
+      return m_blendActive ? &m_blendedSnapshot : nullptr;
+    }
 
   private:
-    // Preset cache — empty string means "not yet active".
     std::string m_previousPresetName;
     std::string m_targetPresetName;
 
-    // Blend timeline. Wall-clock accumulators are double so sub-frame precision
-    // survives multi-hour sessions (a 32-bit float erodes to ~4 ms after ~9 h).
+    // Double precision so sub-frame accuracy survives multi-hour sessions.
     double m_blendStartTimeSec = 0.0;
     float  m_blendDurationSec  = 1.0f;
     double m_currentTimeSec    = 0.0;
 
     bool m_paused = false;
-
-    // Pop-out preset editor window visibility (toggled from showImguiSettings).
     bool m_editorWindowOpen = false;
-
-    // "Pin & Freeze for Tuning" toggle state + the drift intensity to restore on
-    // un-pin (so freezing variation for tuning is non-destructive).
     bool  m_pinnedForTuning   = false;
     float m_savedDriftIntensity = 1.0f;
 
-    // Drift state (cloud-drift modulation; spec 2026-05-09-cloud-drift-design).
-    // m_driftPhaseSeconds is monotonically advanced each frame by
-    // dt * m_driftSpeedSmoothed. Smoothed values are one-pole filtered toward
-    // the GameStateStore-supplied raw values with tau = 1.0s.
+    // Drift phase advanced each frame by dt * m_driftSpeedSmoothed; smoothed values one-pole filtered (tau 1s).
     double m_driftPhaseSeconds     = 0.0;
     float m_driftSpeedSmoothed     = 1.0f;
     float m_driftIntensitySmoothed = 1.0f;
 
-    // Snapshot of renderer state at the moment the last blend began (or the
-    // retarget mid-blend captured the partially-blended state).
     WeatherSnapshot m_previousSnapshot;
+    WeatherSnapshot m_blendedSnapshot;
+    bool            m_blendActive = false;
 
-    // Writes interpolated snapshot values to the Derived RTX_OPTION layer.
     void applyBlendedValues(float t);
-
-    // Returns a WeatherSnapshot populated from the current renderer RTX_OPTION
-    // getters (not from any preset table). Used at first-activation to seed
-    // m_previousSnapshot so the initial blend transitions smoothly from
-    // whatever the renderer was already doing.
+    // Snapshot current live renderer RTX_OPTION values; used at first activation to seed m_previousSnapshot.
     WeatherSnapshot snapshotCurrentValues() const;
 
-    // Writes blend progress state back to the GameStateStore.
-    void publishStateToGameStateStore(float t) const;
+    mutable std::mutex m_ioMutex;
+    std::string        m_inputTarget;
+    float              m_inputBlendSeconds   = 1.0f;
+    float              m_inputDriftSpeed     = 1.0f;
+    float              m_inputDriftIntensity = 1.0f;
+
+    float       m_outputBlendProgress = 0.0f;
+    std::string m_outputCurrent;
+    std::string m_outputPrevious;
   };
 
 } }  // namespace dxvk::fork_weather

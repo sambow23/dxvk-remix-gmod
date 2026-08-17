@@ -31,7 +31,7 @@
 #include "rtx_globals.h"
 #include "rtx_options.h"
 #include "rtx_debug_view.h"
-#include "rtx_fork_game_state.h"
+#include "rtx_fork_weather.h"
 
 #include "../dxvk_device.h"
 #include "../dxvk_objects.h"
@@ -2514,13 +2514,35 @@ extern "C"
     if (!key || key[0] == '\0' || !value) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
+    if (strncmp(key, "__weather.", 10) != 0) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
 
-    // The game-state store owns its own mutex. s_mutex is deliberately NOT
-    // taken here: funnelling high-frequency plugin writes through the same
-    // lock as the rest of the API has no benefit and would add contention.
-    dxvk::fork_game_state::GameStateStore::get().set(
-      std::string{ key }, std::string{ value });
+    // WeatherBlender owns its own mutex; s_mutex is deliberately NOT taken here
+    // to avoid contention on high-frequency plugin writes.
+    auto* device  = s_dxvkDevice;
+    auto* blender = device ? device->GetDXVKDevice()->getCommon()->getSceneManager().getWeatherBlender() : nullptr;
+    if (!blender) {
+      return REMIXAPI_ERROR_CODE_SUCCESS;  // device not ready; drop silently
+    }
 
+    const char* sub = key + 10;  // portion after "__weather."
+    if (strcmp(sub, "target") == 0) {
+      blender->setTargetPreset(value);
+    } else if (strcmp(sub, "blend_seconds") == 0) {
+      char* end = nullptr;
+      const float v = std::strtof(value, &end);
+      if (end != value) blender->setBlendSeconds(v);
+    } else if (strcmp(sub, "drift_speed") == 0) {
+      char* end = nullptr;
+      const float v = std::strtof(value, &end);
+      if (end != value) blender->setDriftSpeed(v);
+    } else if (strcmp(sub, "drift_intensity") == 0) {
+      char* end = nullptr;
+      const float v = std::strtof(value, &end);
+      if (end != value) blender->setDriftIntensity(v);
+    }
+    // Unrecognised sub-keys are silently dropped (forward-compat).
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -2538,12 +2560,45 @@ extern "C"
     if (in_buffer_size > 0 && out_buffer == nullptr) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
+    if (strncmp(key, "__weather.", 10) != 0) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
 
-    // Like SetGameValue, rely on GameStateStore's internal mutex.
-    // s_mutex is deliberately NOT taken here to avoid contention on
-    // high-frequency reads from plugin threads.
+    // WeatherBlender owns its own mutex; s_mutex is deliberately NOT taken here
+    // to avoid contention on high-frequency reads from plugin threads.
+    auto* device  = s_dxvkDevice;
+    auto* blender = device ? device->GetDXVKDevice()->getCommon()->getSceneManager().getWeatherBlender() : nullptr;
+    if (!blender) {
+      *out_actual_size = 0;
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    const char* sub = key + 10;  // portion after "__weather."
     std::string value;
-    if (!dxvk::fork_game_state::GameStateStore::get().tryGet(std::string{ key }, value)) {
+    if (strcmp(sub, "target") == 0) {
+      value = blender->getTargetPreset();
+    } else if (strcmp(sub, "current") == 0) {
+      value = blender->getCurrentPreset();
+    } else if (strcmp(sub, "previous") == 0) {
+      value = blender->getPreviousPreset();
+    } else if (strcmp(sub, "blend_progress") == 0) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.4f", blender->getBlendProgress());
+      value = buf;
+    } else if (strcmp(sub, "blend_seconds") == 0) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.6f", blender->getBlendSeconds());
+      value = buf;
+    } else if (strcmp(sub, "drift_speed") == 0) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.6f", blender->getDriftSpeed());
+      value = buf;
+    } else if (strcmp(sub, "drift_intensity") == 0) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.6f", blender->getDriftIntensity());
+      value = buf;
+    } else {
+      // Unrecognised sub-key — return empty (not found).
       *out_actual_size = 0;
       return REMIXAPI_ERROR_CODE_SUCCESS;
     }

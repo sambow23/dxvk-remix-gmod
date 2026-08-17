@@ -208,8 +208,6 @@ namespace dxvk {
     GlobalTime::get().init(RtxOptions::timeDeltaBetweenFrames() * 0.001f);
     GlobalTime::get().setAdvanceTime(RtxOptions::advanceTime());
 
-    fork_hooks::initAtmosphere(*this);
-    m_weatherBlender = std::make_unique<fork_weather::WeatherBlender>();
   }
 
   RtxContext::~RtxContext() {
@@ -1387,7 +1385,14 @@ namespace dxvk {
     constants.viewModelRayTMax = RtxOptions::ViewModel::rangeMeters() * RtxOptions::getMeterToWorldUnitScale();
     constants.roughnessDemodulationOffset = m_common->metaDemodulate().demodulateRoughnessOffset();
     
-    const RtxGlobalVolumetrics& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
+    RtxGlobalVolumetrics& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
+    // Set per-frame weather override so getVolumeArgs() reads blended values
+    // instead of RTX_OPTION defaults for every weather-blendable volumetric
+    // field. Must be set BEFORE getVolumeArgs() is called (below).
+    globalVolumetrics.applyWeatherOverride(
+      getSceneManager().getWeatherBlender()
+      ? getSceneManager().getWeatherBlender()->getBlendedSnapshot()
+      : nullptr);
     constants.volumeArgs = globalVolumetrics.getVolumeArgs(cameraManager, getSceneManager().getFogState(), enablePortalVolumes);
     constants.startInMediumMaterialIndex = getSceneManager().getStartInMediumMaterialIndex();
     OpaqueMaterialOptions::fillShaderParams(constants.opaqueMaterialArgs);

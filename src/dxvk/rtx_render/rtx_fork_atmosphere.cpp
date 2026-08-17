@@ -1,21 +1,10 @@
-// src/dxvk/rtx_render/rtx_fork_atmosphere.cpp
-//
-// Fork-owned file. Contains the implementations of fork_hooks:: functions
-// for the RtxAtmosphere subsystem (Hillaire physically-based sky), lifted
-// from rtx_context.cpp during the 2026-04-18 fork touchpoint-pattern refactor.
-//
-// See docs/fork-touchpoints.md for the full fork-hooks catalogue.
-//
-// NOTE: initAtmosphere, updateAtmosphereConstants, and bindAtmosphereLuts
-// access private members of RtxContext (m_atmosphere, m_lastSkyMode,
-// m_skyColorFormat, m_skyRtColorFormat, m_device).  This file requires
-// that RtxContext declare each hook as a friend — see rtx_context.h.
-// injectRtxAtmosphereSkySkip accesses only the public RtxOptions API and
-// therefore does not require a friend declaration.
+// src/dxvk/rtx_render/rtx_fork_atmosphere.cpp — fork_hooks implementations for RtxAtmosphere.
+// See docs/fork-touchpoints.md. updateAtmosphereConstants requires RtxContext friendship (rtx_context.h).
 
 #include "rtx_fork_hooks.h"
 #include "rtx_context.h"
 #include "rtx_atmosphere.h"
+#include "rtx_fork_weather.h"  // fork_weather::WeatherSnapshot — weather override pointer
 #include "rtx_scene_manager.h"       // getLightManager (directional sun/moon injection)
 #include "rtx_light_manager.h"       // createExternallyTrackedLight / updateExternallyTrackedLight
 #include "rtx_lights.h"              // RtDistantLight, RtLight
@@ -35,279 +24,27 @@
 namespace dxvk {
 namespace fork_hooks {
 
-  // ===========================================================================
-  // Sun + moon as real Remix distant lights (fork — 2026-06-21)
-  //
-  // In physical-atmosphere mode the sun (and each enabled moon) is injected as
-  // an externally-tracked RtDistantLight driven by the atmosphere model — the
-  // sole sun/moon path in Numos. They flow through the standard NEE/RTXDI path,
-  // so SSS / decals / viewmodels are handled by the unified pipeline. The
-  // radiance is the CPU port of the atmosphere sun/moon sample divided by pi: a
-  // distant light contributes radiance/sin^2(halfAngle) * coneSolidAngle ~=
-  // pi*radiance of effective irradiance. Cloud-on-terrain shadows are folded
-  // per-pixel onto the real sun in the NEE (integrator_direct.slangh). The
-  // older bespoke evalAtmosphereSunNEE/MoonNEE path was removed 2026-06-21.
-  // ===========================================================================
-  namespace {
-    constexpr float kFhPi = 3.14159265358979323846f;
-
-    inline float fhSmoothstep(float e0, float e1, float x) {
-      const float denom = e1 - e0;
-      float t = (denom != 0.0f) ? (x - e0) / denom : 0.0f;
-      t = std::min(std::max(t, 0.0f), 1.0f);
-      return t * t * (3.0f - 2.0f * t);
-    }
-
-    inline Vector3 fhMul(const Vector3& a, const Vector3& b) {
-      return Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
-    }
-
-    // Port of getAtmosphericTransmittanceForDir (atmosphere_common.slangh): the
-    // closed-form Kasten-Young air-mass extinction the sun/moon/cloud paths use.
-    // dirYUp must be normalized, Y-up. ozoneDensity at the ozone layer altitude
-    // is exactly 1.0, so the ozone path length collapses to airMass.
-    Vector3 fhAtmTransmittanceYUp(const AtmosphereArgs& a, const Vector3& dirYUp) {
-      const float H = a.rayleighScaleHeight;
-      const float zc = dirYUp.y;  // zenith cosine
-      float airMass;
-      if (zc > 0.01f) {
-        const float zenithRad = std::acos(std::min(std::max(zc, -1.0f), 1.0f));
-        const float zenithDeg = zenithRad * (180.0f / kFhPi);
-        airMass = 1.0f / (zc + 0.15f * std::pow(93.885f - zenithDeg, -1.253f));
-      } else {
-        airMass = 40.0f * std::exp(-zc * 10.0f);
-      }
-      airMass = std::min(airMass, 200.0f);
-      const float rayleighOD = H * airMass;
-      const float mieOD = a.mieScaleHeight * airMass;
-      const float ozonePath = airMass;  // ozoneDensity(layerAltitude) == 1
-      Vector3 t(
-        std::exp(-(a.rayleighScattering.x * rayleighOD + a.mieScattering.x * mieOD + a.ozoneAbsorption.x * ozonePath * 0.15f)),
-        std::exp(-(a.rayleighScattering.y * rayleighOD + a.mieScattering.y * mieOD + a.ozoneAbsorption.y * ozonePath * 0.15f)),
-        std::exp(-(a.rayleighScattering.z * rayleighOD + a.mieScattering.z * mieOD + a.ozoneAbsorption.z * ozonePath * 0.15f)));
-      if (zc < 0.0f) {
-        const float f = std::exp(-(-zc) * 15.0f);  // twilight fade
-        t = Vector3(t.x * f, t.y * f, t.z * f);
-      }
-      return t;
-    }
-
-    // Persistent externally-tracked light handles. Kept alive across frames;
-    // radiance goes to 0 when a body is below the horizon / disabled (inert,
-    // no create/destroy churn). Moons are created lazily on first use.
-    struct AtmosphereDistantLightState {
-      RtLight* sun = nullptr;
-      RtLight* moons[MAX_MOONS] = {};
-      RtLight* lightning = nullptr;  // transient strike flash (fork — 2026-07-14)
-    };
-    AtmosphereDistantLightState g_atmoLights;
-
-    void fhDropAtmosphereLights() {
-      if (g_atmoLights.sun) {
-        g_atmoLights.sun->markForGarbageCollection();
-        g_atmoLights.sun = nullptr;
-      }
-      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
-        if (g_atmoLights.moons[i]) {
-          g_atmoLights.moons[i]->markForGarbageCollection();
-          g_atmoLights.moons[i] = nullptr;
-        }
-      }
-      if (g_atmoLights.lightning) {
-        g_atmoLights.lightning->markForGarbageCollection();
-        g_atmoLights.lightning = nullptr;
-      }
-    }
-
-    void fhSyncAtmosphereDistantLights(RtxContext& ctx, const AtmosphereArgs& args) {
-      // Mode gate. Sun/moon distant lights are the sole atmosphere sun path in
-      // Numos; drop any previously-injected lights when not in Numos.
-      if (RtxOptions::skyMode() != SkyMode::Numos) {
-        fhDropAtmosphereLights();
-        return;
-      }
-
-      LightManager& lm = ctx.getSceneManager().getLightManager();
-      const bool isZUp = RtxOptions::zUp();
-      const float radScale = RtxOptions::directionalLightRadianceScale();
-      constexpr float kMinHalfAngle = 0.0005f;  // avoid sin(halfAngle)==0 in distantLightSampleArea
-
-      auto toWorld = [isZUp](const Vector3& yup) -> Vector3 {
-        return isZUp ? Vector3(yup.x, yup.z, yup.y) : yup;  // Y-up -> Z-up swap
-      };
-
-      // m_direction is the propagation direction (toward the ground) = -toBody.
-      auto ensureLight = [&](RtLight*& slot, const Vector3& propDir, float halfAngle, const Vector3& radiance, bool cloudShadowed) {
-        const Vector3 clamped(std::max(radiance.x, 0.0f), std::max(radiance.y, 0.0f), std::max(radiance.z, 0.0f));
-        auto dl = RtDistantLight::tryCreate(propDir, std::max(halfAngle, kMinHalfAngle), clamped);
-        if (!dl) {
-          return;
-        }
-        RtLight rtl(*dl);
-        // Mark dynamic so updateLightStaticSleep applies *light = newLight every
-        // frame. Without this the light is treated as static and put to sleep
-        // after getNumFramesToPutLightsToSleep() frames — which froze the sun's
-        // direction (it stopped tracking sunRotation/sunElevation).
-        rtl.isDynamic = true;
-        // When set, the NEE folds the per-pixel cloud-on-terrain transmittance
-        // onto this light's contribution (distant-light GPU flags bit 2).
-        rtl.atmosphereCloudShadowed = cloudShadowed;
-        if (slot == nullptr) {
-          slot = lm.createExternallyTrackedLight(rtl);
-        } else {
-          lm.updateExternallyTrackedLight(slot, rtl);
-        }
-      };
-
-      // ---- Sun (always present in Numos; radiance 0 below horizon) ----
-      {
-        const Vector3 sunDirYUp(args.sunDirection.x, args.sunDirection.y, args.sunDirection.z);
-        Vector3 radiance(0.0f, 0.0f, 0.0f);
-        if (sunDirYUp.y > 0.0f) {
-          const float mieModulation = 0.3f + 1.7f * args.mieAnisotropy;         // mix(0.3, 2.0, g)
-          const float sunVisibility = 0.05f + 0.95f * fhSmoothstep(0.0f, 0.8f, args.mieAnisotropy);
-          const Vector3 T = fhAtmTransmittanceYUp(args, sunDirYUp);
-          const Vector3 sunIll(args.sunIlluminance.x, args.sunIlluminance.y, args.sunIlluminance.z);
-          const Vector3 sample = fhMul(sunIll, T) * (mieModulation * sunVisibility * args.sunRayBrightness * 0.5f);
-          radiance = sample * (radScale / kFhPi);
-        }
-        // Half-angle: physical sun disc radius (sunSize/2) by default, or the
-        // decoupled sunShadowSoftnessDeg override (>0) so shadows can be softened
-        // without enlarging the visible sun disc. Half-angle does not affect
-        // brightness (contribution ~= pi * m_radiance).
-        const float softnessDeg = RtxOptions::sunShadowSoftnessDeg();
-        const float sunHalfAngle = (softnessDeg > 0.0f) ? (softnessDeg * (kFhPi / 180.0f))
-                                                        : args.sunAngularRadius;
-        const Vector3 toSun = toWorld(sunDirYUp);
-        const Vector3 propDir = (sunDirYUp.y > 0.0f) ? Vector3(-toSun.x, -toSun.y, -toSun.z)
-                                                     : Vector3(0.0f, -1.0f, 0.0f);
-        ensureLight(g_atmoLights.sun, propDir, sunHalfAngle, radiance, /*cloudShadowed=*/true);
-      }
-
-      // ---- Moons (lazily created; mirror sampleAtmosphereMoonLight radiance) ----
-      const float moonNee = args.moonNeeStrength;
-      const float surfMoon = args.surfaceMoonBrightness;
-      const float nightFactor = fhSmoothstep(0.02f, -0.05f, args.sunDirection.y);
-      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
-        const MoonParams& m = args.moons[i];
-        const Vector3 dirRaw(m.direction.x, m.direction.y, m.direction.z);
-        const float len = std::sqrt(dirRaw.x * dirRaw.x + dirRaw.y * dirRaw.y + dirRaw.z * dirRaw.z);
-        const bool lit = (m.enabled >= 0.5f) && (moonNee > 0.0f) && (nightFactor > 0.001f) && (len > 1e-4f);
-
-        // Skip moons that have never been lit (avoid creating unused light slots).
-        if (!lit && g_atmoLights.moons[i] == nullptr) {
-          continue;
-        }
-
-        const Vector3 dirN = (len > 1e-4f) ? Vector3(dirRaw.x / len, dirRaw.y / len, dirRaw.z / len)
-                                           : Vector3(0.0f, 1.0f, 0.0f);
-        Vector3 radiance(0.0f, 0.0f, 0.0f);
-        if (lit) {
-          const Vector3 T = fhAtmTransmittanceYUp(args, dirN);  // ~0 below horizon (twilight fade)
-          const Vector3 sunIll(args.sunIlluminance.x, args.sunIlluminance.y, args.sunIlluminance.z);
-          const Vector3 color(m.color.x, m.color.y, m.color.z);
-          const Vector3 sharedFactor = fhMul(fhMul(sunIll, color), T) * (m.brightness / kFhPi);
-          const float phaseGlow = 0.5f - 0.5f * std::cos(m.phase * 2.0f * kFhPi);
-          const float moonSolidAngleSr = 2.0f * kFhPi * (1.0f - std::cos(m.angularRadius));
-          const Vector3 sample = sharedFactor * (phaseGlow * moonSolidAngleSr * moonNee * surfMoon * nightFactor);
-          radiance = sample * (radScale / kFhPi);
-        }
-        const Vector3 toMoon = toWorld(dirN);
-        const Vector3 propDir = lit ? Vector3(-toMoon.x, -toMoon.y, -toMoon.z) : Vector3(0.0f, -1.0f, 0.0f);
-        // Half-angle = the moon's physical angular radius (same as the sun).
-        ensureLight(g_atmoLights.moons[i], propDir, m.angularRadius, radiance, /*cloudShadowed=*/false);
-      }
-
-      // ---- Lightning scene flash (fork — 2026-07-14, tier 2) ----
-      // A transient sphere light at the strike position so the terrain /
-      // scene flashes in sync with the in-cloud glow. Same persistent-handle
-      // pattern as the sun: created lazily on the first strike, then kept
-      // alive with zero radiance between strikes (inert — no create/destroy
-      // churn, and RTXDI keeps a stable light to resample). The froxel
-      // volumetrics pick it up automatically because it is a real light.
-      // Radiance uses the RAW envelope so the scene brightness calibrates
-      // independently of the in-cloud flash intensity. NOT cloudShadowed —
-      // the strike is below/inside the deck, folding the cloud-on-terrain
-      // shadow onto it would kill exactly the light it represents.
-      {
-        const float sceneScaleL = std::max(RtxOptions::lightningSceneLightIntensity(), 0.0f);
-        const bool lit = RtxOptions::lightningEnable()
-                      && args.lightningEnvelope > 0.001f
-                      && sceneScaleL > 0.0f;
-        // Skip entirely until the first lit frame (avoid an unused light slot).
-        if (lit || g_atmoLights.lightning != nullptr) {
-          Vector3 radiance(0.0f, 0.0f, 0.0f);
-          Vector3 posWorld(0.0f, 0.0f, 0.0f);
-          if (lit) {
-            const Vector3 c = RtxOptions::lightningColor();
-            radiance = c * (args.lightningEnvelope * sceneScaleL);
-            const Vector3 posKmYUp(args.lightningStrikePosKm.x,
-                                   args.lightningStrikePosKm.y,
-                                   args.lightningStrikePosKm.z);
-            posWorld = toWorld(posKmYUp) * args.worldUnitsPerKm;  // km Y-up -> engine units
-          }
-          // ~150 m emitter radius: reads as a channel glow, not a point spark,
-          // and keeps the sphere-light solid angle sane for RIS at km range.
-          const float radiusWorld = 0.15f * args.worldUnitsPerKm;
-          auto sl = RtSphereLight::tryCreate(posWorld, radiance, radiusWorld, RtLightShaping());
-          if (sl) {
-            RtLight rtl(*sl);
-            rtl.isDynamic = true;  // moves every strike, radiance every frame
-            if (g_atmoLights.lightning == nullptr) {
-              g_atmoLights.lightning = lm.createExternallyTrackedLight(rtl);
-            } else {
-              lm.updateExternallyTrackedLight(g_atmoLights.lightning, rtl);
-            }
-          }
-        }
-      }
-    }
-  }  // anonymous namespace
-
-  // ---------------------------------------------------------------------------
-  // initAtmosphere
-  //
-  // Constructs the RtxAtmosphere object during RtxContext initialization.
-  // Called from the RtxContext constructor after GlobalTime::get().init().
-  //
-  // ACCESS NOTE: reads m_device (private Rc<DxvkDevice>) and writes
-  // m_atmosphere (private unique_ptr<RtxAtmosphere>). Friend declaration
-  // required in RtxContext.
-  // ---------------------------------------------------------------------------
-  void initAtmosphere(RtxContext& ctx) {
-    ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-  }
-
-  // ---------------------------------------------------------------------------
-  // updateAtmosphereConstants
-  //
-  // Sets constants.skyMode, detects sky-mode transitions (clearing rasterized
-  // skybox buffers when switching to Numos), and when Numos
-  // is active ensures the atmosphere object exists, calls
-  // initialize/computeLuts, and writes atmosphereArgs into the constant block.
-  //
-  // Called from RtxContext::updateRaytraceArgsConstantBuffer immediately after
-  // constants.skyBrightness is set.
-  //
-  // ACCESS NOTE: reads/writes m_atmosphere, m_lastSkyMode, m_skyColorFormat,
-  // m_skyRtColorFormat, and m_device (all private). Friend declaration required
-  // in RtxContext.
-  // ---------------------------------------------------------------------------
   void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants) {
     constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
 
     // Fork (2026-07-26): sky-ambient scale for sky-lit particle materials
-    // (weather precipitation) - consumed by the resolver's opacity lighting
-    // approximation. Lives here because it is atmosphere-coupled and this is
-    // where the rest of the sky constants are filled.
-    constants.particleSkyAmbientScale =
-      std::max(fork_precipitation::PrecipitationSystem::skyLight(), 0.0f);
+    // (weather precipitation) — consumed by the resolver's opacity lighting
+    // approximation. Reads from the blended snapshot when the weather blender
+    // is active so precipitation's sky-light tracks the current weather state.
+    {
+      const fork_weather::WeatherSnapshot* precipWx =
+        ctx.getSceneManager().getWeatherBlender()
+        ? ctx.getSceneManager().getWeatherBlender()->getBlendedSnapshot()
+        : nullptr;
+      constants.particleSkyAmbientScale = std::max(
+        precipWx ? precipWx->precipitationSkyLight
+                 : fork_precipitation::PrecipitationSystem::skyLight(),
+        0.0f);
+    }
 
-    // Detect sky mode change and clear sky buffers when switching to Numos
     SkyMode currentSkyMode = RtxOptions::skyMode();
     if (currentSkyMode != ctx.m_lastSkyMode) {
       if (currentSkyMode == SkyMode::Numos) {
-        // Clear the rasterized skybox buffers when switching to physical atmosphere
         auto skyProbe = ctx.getResourceManager().getSkyProbe(&ctx, ctx.m_skyColorFormat);
         auto skyMatte = ctx.getResourceManager().getSkyMatte(&ctx, ctx.m_skyRtColorFormat);
 
@@ -327,27 +64,12 @@ namespace fork_hooks {
       ctx.m_lastSkyMode = currentSkyMode;
     }
 
-    // Update atmosphere parameters
+    RtxAtmosphere& atmosphere = ctx.getCommonObjects()->metaAtmosphere();
     if (RtxOptions::skyMode() == SkyMode::Numos) {
-      if (!ctx.m_atmosphere) {
-        ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-      }
-      ctx.m_atmosphere->initialize(&ctx);
+      atmosphere.initialize(&ctx);
+      // Advance wind/morph/boil accumulators once per frame before getAtmosphereArgs (called many times per frame).
+      atmosphere.advanceCloudMotion(GlobalTime::get().deltaTime());
 
-      // Unified cloud-motion integrator (fork — 2026-06-21). Advance the wind /
-      // morph / boil accumulators exactly once per frame, before getAtmosphereArgs
-      // (called many times per frame) reads them. dt comes from the same GlobalTime
-      // clock the weather blender uses, so the drift-modulated wind it reads is
-      // consistent with the parameters the blender wrote this frame.
-      ctx.m_atmosphere->advanceCloudMotion(GlobalTime::get().deltaTime());
-
-      // Cloud render compute pass setup (Nubis Cubed 2023, fork — 2026-05-12, C4).
-      // Push the per-frame camera basis and ensure the screen-space RT is
-      // allocated at the downscale extent BEFORE computeLuts dispatches the
-      // cloud render compute. The basis vectors are in Y-up world space (cloud
-      // math convention, camera at origin) and the Right/Up vectors are
-      // pre-scaled by tan(halfFovX/Y) + aspect ratio so the shader does just
-      // a weighted sum to reconstruct viewDir per pixel.
       {
         const RtCamera& camera = ctx.getSceneManager().getCamera();
         const Vector3 forward = camera.getDirection(/*freecam=*/true);
@@ -355,8 +77,6 @@ namespace fork_hooks {
         const Vector3 up      = camera.getUp(/*freecam=*/true);
 
         const bool isZUp = RtxOptions::zUp();
-        // Swap (x, y, z) -> (x, z, y) when the game is Z-up. Mirrors the
-        // existing isZUp swap inside `evalSkyRadiance` in atmosphere_sky.slangh.
         auto toYUp = [isZUp](const Vector3& v) -> Vector3 {
           if (isZUp) {
             return Vector3(v.x, v.z, v.y);
@@ -368,9 +88,7 @@ namespace fork_hooks {
         const Vector3 rightYUp   = toYUp(right);
         const Vector3 upYUp      = toYUp(up);
 
-        // tan(halfFovY) and aspect. halfFov is fov/2 (RtCamera::getFov() is
-        // the full vertical FOV). Pre-scale the basis vectors so the shader
-        // simply does forward + ndc.x*right + ndc.y*up.
+        // Pre-scale so the shader does forward + ndc.x*right + ndc.y*up.
         const float fovYRad = camera.getFov();
         const float halfFovY = 0.5f * fovYRad;
         const float tanHalfFovY = std::tan(halfFovY);
@@ -380,16 +98,9 @@ namespace fork_hooks {
         const Vector3 rightScaled = rightYUp * tanHalfFovX;
         const Vector3 upScaled    = upYUp    * tanHalfFovY;
 
-        const uint32_t frameIdx = static_cast<uint32_t>(ctx.m_device->getCurrentFrameId());
-        ctx.m_atmosphere->setCloudRenderCameraBasis(forwardYUp, rightScaled, upScaled, frameIdx);
+        const uint32_t frameIdx = static_cast<uint32_t>(ctx.getDevice()->getCurrentFrameId());
+        atmosphere.setCloudRenderCameraBasis(forwardYUp, rightScaled, upScaled, frameIdx);
 
-        // Push the camera world position (Y-up km) for the C6 voxel-grid
-        // cloud-on-terrain shadow plumbing. The G-buffer worldPos that the
-        // helper consumes is in engine game units; the helper converts to
-        // km internally via worldUnitsPerKm. We do the matching conversion
-        // here CPU-side: km = gameUnits / worldUnitsPerKm. The isZUp swap
-        // mirrors the basis-vector swap above so the helper's camera-relative
-        // subtraction lands in the right frame.
         {
           const Vector3 cameraPosWorldUnits = camera.getPosition(/*freecam=*/false);
           const Vector3 cameraPosWorldUnitsYUp = toYUp(cameraPosWorldUnits);
@@ -397,66 +108,43 @@ namespace fork_hooks {
           const float worldUnitsPerKm = 100000.0f * sceneScaleSafe;
           const float kmPerWorldUnit = 1.0f / worldUnitsPerKm;
           const Vector3 cameraPosYUpKm = cameraPosWorldUnitsYUp * kmPerWorldUnit;
-          ctx.m_atmosphere->setCloudShadowCameraPosition(cameraPosYUpKm);
+          atmosphere.setCloudShadowCameraPosition(cameraPosYUpKm);
         }
 
-        // Lightning scheduler tick (fork — 2026-07-14). After the camera push
-        // so strike placement uses this frame's camera; before computeLuts /
-        // getAtmosphereArgs so this frame's envelope reaches the CB.
-        ctx.m_atmosphere->advanceLightning(GlobalTime::get().deltaTime());
+        // Must be after camera push (for strike placement) and before computeLuts (for envelope in CB).
+        atmosphere.advanceLightning(GlobalTime::get().deltaTime());
 
-        // Allocate the cloud render RT at the downscale extent (the resolution
-        // the geometry resolver raygen writes to and DLSS sees as its input).
         const VkExtent3D downscaledExtent3D = ctx.getResourceManager().getDownscaleDimensions();
         const VkExtent2D downscaleExtent = { downscaledExtent3D.width, downscaledExtent3D.height };
-        ctx.m_atmosphere->ensureCloudRenderRT(&ctx, downscaleExtent);
+        atmosphere.ensureCloudRenderRT(&ctx, downscaleExtent);
       }
 
-      ctx.m_atmosphere->computeLuts(&ctx);
-      constants.atmosphereArgs = ctx.m_atmosphere->getAtmosphereArgs();
+      // Must be set before computeLuts and before the explicit getAtmosphereArgs() call below.
+      atmosphere.applyWeatherOverride(
+        ctx.getSceneManager().getWeatherBlender()
+        ? ctx.getSceneManager().getWeatherBlender()->getBlendedSnapshot()
+        : nullptr);
+
+      atmosphere.computeLuts(&ctx);
+      constants.atmosphereArgs = atmosphere.getAtmosphereArgs();
     }
 
-    // Inject / update (or drop) the sun + moon distant lights. Called
-    // unconditionally — the helper internally gates on skyMode and drops its
-    // lights when not in Numos. Uses the atmosphere args
-    // just written above; when not in Numos those are stale but unread (the
-    // helper early-outs before touching them). One-frame latency vs the light
-    // manager's prepareSceneData linearization is acceptable (the sun moves
-    // slowly); steady state the light is always present.
-    fhSyncAtmosphereDistantLights(ctx, constants.atmosphereArgs);
+    atmosphere.syncDistantLights(ctx.getSceneManager().getLightManager(), constants.atmosphereArgs);
   }
 
-  // ---------------------------------------------------------------------------
-  // bindAtmosphereLuts
-  //
-  // Ensures the RtxAtmosphere object exists and is initialized (it is
-  // idempotent), then binds the three atmosphere LUT textures at their
-  // declared shader binding slots.  Called unconditionally because the LUT
-  // slots are declared in common_bindings.slangh for all passes.
-  //
-  // ACCESS NOTE: reads/writes m_atmosphere and m_device (both private).
-  // Friend declaration required in RtxContext.
-  // ---------------------------------------------------------------------------
   void bindAtmosphereLuts(RtxContext& ctx) {
-    // Bind atmosphere LUTs - must always bind since they're declared in common_bindings.slangh
-    // Initialize atmosphere if not already done (needed for dummy resources)
-    if (!ctx.m_atmosphere) {
-      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-    }
-    // Always call initialize - it's idempotent (has internal m_initialized check)
-    ctx.m_atmosphere->initialize(&ctx);
+    RtxAtmosphere& atmosphere = ctx.getCommonObjects()->metaAtmosphere();
+    atmosphere.initialize(&ctx);
 
-    auto transmittanceLut         = ctx.m_atmosphere->getTransmittanceLut();
-    auto multiscatteringLut       = ctx.m_atmosphere->getMultiscatteringLut();
-    auto skyViewLut               = ctx.m_atmosphere->getSkyViewLut();
-    auto fastNoiseView            = ctx.m_atmosphere->getFastNoiseView();  // EA importance-sampled FAST noise
-    auto cloudSkyTransmittanceLut = ctx.m_atmosphere->getCloudSkyTransmittanceLut();  // Fork: per-frame cloud occlusion of sky-ambient
-    auto cloudDSun                = ctx.m_atmosphere->getCloudDSun();      // Fork: Nubis Cubed sun-direction optical depth grid
-    auto cloudDAmbient            = ctx.m_atmosphere->getCloudDAmbient();  // Fork: Nubis Cubed zenith optical depth grid
-    auto cloudRenderRT            = ctx.m_atmosphere->getCloudRenderRT();  // Fork: Nubis Cubed screen-space cloud render (C4)
-    auto cloudSecondaryLut        = ctx.m_atmosphere->getCloudSecondaryLut();  // Fork: secondary-ray cloud dome LUT (perf, 2026-06-10)
+    auto transmittanceLut         = atmosphere.getTransmittanceLut();
+    auto multiscatteringLut       = atmosphere.getMultiscatteringLut();
+    auto skyViewLut               = atmosphere.getSkyViewLut();
+    auto cloudSkyTransmittanceLut = atmosphere.getCloudSkyTransmittanceLut();
+    auto cloudDSun                = atmosphere.getCloudDSun();
+    auto cloudDAmbient            = atmosphere.getCloudDAmbient();
+    auto cloudRenderRT            = atmosphere.getCloudRenderRT();
+    auto cloudSecondaryLut        = atmosphere.getCloudSecondaryLut();
 
-    // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_TRANSMITTANCE_LUT, transmittanceLut.view, nullptr);
     }
@@ -465,9 +153,6 @@ namespace fork_hooks {
     }
     if (skyViewLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, skyViewLut.view, nullptr);
-    }
-    if (fastNoiseView != nullptr) {
-      ctx.bindResourceView(BINDING_ATMOSPHERE_FAST_NOISE, fastNoiseView, nullptr);
     }
     if (cloudSkyTransmittanceLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT, cloudSkyTransmittanceLut.view, nullptr);
@@ -485,22 +170,15 @@ namespace fork_hooks {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, cloudSecondaryLut.view, nullptr);
     }
 
-    // Cloud history (fork). Allocate at the current downscaled render extent
-    // (where the geometry resolver raygen writes the per-pixel sky radiance),
-    // advance the ping-pong index once per frame, then bind PREV (read) and
-    // CURR (write) at their respective slots. Both slots are declared in
-    // common_bindings.slangh and so must always be bound for any pass to
-    // compile/dispatch — on the first frame, both slices are zero-cleared
-    // and the shader's disocclusion guard treats history as invalid.
     {
-      ctx.m_atmosphere->onFrameAdvanceForCloudHistory(
-        static_cast<uint32_t>(ctx.m_device->getCurrentFrameId()));
+      atmosphere.onFrameAdvanceForCloudHistory(
+        static_cast<uint32_t>(ctx.getDevice()->getCurrentFrameId()));
 
       const VkExtent3D downscaledExtent = ctx.getResourceManager().getDownscaleDimensions();
-      ctx.m_atmosphere->ensureCloudHistoryResources(&ctx, downscaledExtent);
+      atmosphere.ensureCloudHistoryResources(&ctx, downscaledExtent);
 
-      auto cloudPrev = ctx.m_atmosphere->getPreviousCloudHistory();
-      auto cloudCurr = ctx.m_atmosphere->getCurrentCloudHistory();
+      auto cloudPrev = atmosphere.getPreviousCloudHistory();
+      auto cloudCurr = atmosphere.getCurrentCloudHistory();
       if (cloudPrev.isValid()) {
         ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV, cloudPrev.view, nullptr);
       }
@@ -508,11 +186,8 @@ namespace fork_hooks {
         ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR, cloudCurr.view, nullptr);
       }
 
-      // R16_UINT frame-id companion (fork — 2026-05-13). Same lifecycle as the
-      // color pair; carries last-refresh frame index per pixel so the shader's
-      // age check can reject stale history at foreground-occluded slots.
-      auto cloudFrameIdPrev = ctx.m_atmosphere->getPreviousCloudHistoryFrameId();
-      auto cloudFrameIdCurr = ctx.m_atmosphere->getCurrentCloudHistoryFrameId();
+      auto cloudFrameIdPrev = atmosphere.getPreviousCloudHistoryFrameId();
+      auto cloudFrameIdCurr = atmosphere.getCurrentCloudHistoryFrameId();
       if (cloudFrameIdPrev.isValid()) {
         ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV, cloudFrameIdPrev.view, nullptr);
       }
@@ -521,10 +196,7 @@ namespace fork_hooks {
       }
     }
 
-    // Bind a linear/REPEAT sampler for the Nubis3 volume taps.
-    // REPEAT matches the frac-based tilable wraparound texcoord logic
-    // so the hardware sampler and the shader math agree.
-    // Created per-bind (cheap — DxvkDevice caches identical samplers).
+    // REPEAT wrapping matches the shader's frac-based tilable texcoords.
     {
       DxvkSamplerCreateInfo samplerInfo = {};
       samplerInfo.magFilter    = VK_FILTER_LINEAR;
@@ -533,15 +205,11 @@ namespace fork_hooks {
       samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
       samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
       samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-      Rc<DxvkSampler> cloudNoiseSampler = ctx.m_device->createSampler(samplerInfo);
+      Rc<DxvkSampler> cloudNoiseSampler = ctx.getDevice()->createSampler(samplerInfo);
       ctx.bindResourceSampler(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER, cloudNoiseSampler);
     }
 
-    // Sky-view LUT sampler: linear, REPEAT in azimuth (U), CLAMP in elevation
-    // (V). Consumed by evalSkyRadiance to replace the per-ray ~50-step
-    // atmosphere march with a single bilinear tap of AtmosphereSkyViewLut.
-    // CLAMP-V avoids the pole rows mixing horizon values into zenith / nadir
-    // at uv.y = 0 or 1; REPEAT-U handles the azimuth wraparound at uv.x = 0/1.
+    // REPEAT-U for azimuth wraparound; CLAMP-V prevents pole rows mixing into zenith/nadir.
     {
       DxvkSamplerCreateInfo samplerInfo = {};
       samplerInfo.magFilter    = VK_FILTER_LINEAR;
@@ -550,139 +218,50 @@ namespace fork_hooks {
       samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
       samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
       samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-      // Allow explicit-LOD sampling of mips: the secondary cloud LUT (shared via
-      // this sampler) is mipmapped and the sky<-clouds bleed samples a coarse
-      // mip. Harmless for the mip-less sky-view LUT / cloud RT (only mip 0 used).
-      samplerInfo.mipmapLodMax = VK_LOD_CLAMP_NONE;
-      Rc<DxvkSampler> skyViewSampler = ctx.m_device->createSampler(samplerInfo);
+      samplerInfo.mipmapLodMax = VK_LOD_CLAMP_NONE;  // secondary cloud LUT is mipmapped
+      Rc<DxvkSampler> skyViewSampler = ctx.getDevice()->createSampler(samplerInfo);
       ctx.bindResourceSampler(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER, skyViewSampler);
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // getCloudSkyTransmittanceLut
-  //
-  // Public accessor for the per-frame cloud-occluded sky-ambient transmittance
-  // LUT. Returns an invalid Resources::Resource if the atmosphere has not been
-  // initialized yet. Used by the debug view to bind the LUT into its
-  // pass-local descriptor set.
-  //
-  // ACCESS NOTE: reads m_atmosphere (private). Friend declaration required in
-  // RtxContext.
-  // ---------------------------------------------------------------------------
   Resources::Resource getCloudSkyTransmittanceLut(RtxContext& ctx) {
-    // Lazy-initialize the atmosphere on demand so the LUT resource is allocated
-    // even when the caller (e.g. debug view dispatch) runs before any
-    // ray-tracing pass has triggered bindAtmosphereLuts. createLutResources is
-    // idempotent and allocates the LUT regardless of skyMode, so the returned
-    // resource is always valid after initialize() returns.
-    if (!ctx.m_atmosphere) {
-      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-    }
-    ctx.m_atmosphere->initialize(&ctx);
-    return ctx.m_atmosphere->getCloudSkyTransmittanceLut();
+    RtxAtmosphere& atmosphere = ctx.getCommonObjects()->metaAtmosphere();
+    atmosphere.initialize(&ctx);
+    return atmosphere.getCloudSkyTransmittanceLut();
   }
 
-  // ---------------------------------------------------------------------------
-  // getCloudDSun / getCloudDAmbient
-  //
-  // Public accessors for the Nubis Cubed cloud voxel grids. D_sun stores
-  // sun-direction optical depth (used by cloud-on-terrain shadow lookups);
-  // D_ambient stores zenith optical depth (used for sky-ambient occlusion of
-  // the cloud volume itself). Returns an invalid Resources::Resource if the
-  // atmosphere has not been initialized yet. Used by the debug view to bind
-  // the grids into its pass-local descriptor set so the user can visually
-  // verify the bake content before any production consumer reads from it.
-  //
-  // ACCESS NOTE: reads m_atmosphere (private). Friend declarations required
-  // in RtxContext.
-  // ---------------------------------------------------------------------------
   Resources::Resource getCloudDSun(RtxContext& ctx) {
-    if (!ctx.m_atmosphere) {
-      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-    }
-    ctx.m_atmosphere->initialize(&ctx);
-    return ctx.m_atmosphere->getCloudDSun();
+    RtxAtmosphere& atmosphere = ctx.getCommonObjects()->metaAtmosphere();
+    atmosphere.initialize(&ctx);
+    return atmosphere.getCloudDSun();
   }
 
   Resources::Resource getCloudDAmbient(RtxContext& ctx) {
-    if (!ctx.m_atmosphere) {
-      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-    }
-    ctx.m_atmosphere->initialize(&ctx);
-    return ctx.m_atmosphere->getCloudDAmbient();
+    RtxAtmosphere& atmosphere = ctx.getCommonObjects()->metaAtmosphere();
+    atmosphere.initialize(&ctx);
+    return atmosphere.getCloudDAmbient();
   }
 
-  // Published cloud NVDF SDF (fork — Nubis3 conversion Phase A). Same
-  // lazy-init pattern as the voxel-grid accessors above; the init path runs
-  // the full synchronous NVDF bake chain, so the returned front buffer is
-  // always a complete field.
   Resources::Resource getCloudNvdfSdf(RtxContext& ctx) {
-    if (!ctx.m_atmosphere) {
-      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-    }
-    ctx.m_atmosphere->initialize(&ctx);
-    return ctx.m_atmosphere->getCloudNvdfSdf();
+    RtxAtmosphere& atmosphere = ctx.getCommonObjects()->metaAtmosphere();
+    atmosphere.initialize(&ctx);
+    return atmosphere.getCloudNvdfSdf();
   }
 
-  // ---------------------------------------------------------------------------
-  // getCloudRenderRT
-  //
-  // Public accessor for the per-frame Nubis Cubed cloud render RT (C4 of the
-  // 2026-05-12 workstream). Returns an invalid Resource until the first
-  // updateAtmosphereConstants pass has run ensureCloudRenderRT — the debug
-  // view (enum 876) tolerates this by clearing to zero in that case.
-  //
-  // ACCESS NOTE: reads m_atmosphere (private). Friend declaration required
-  // in RtxContext.
-  // ---------------------------------------------------------------------------
   Resources::Resource getCloudRenderRT(RtxContext& ctx) {
-    if (!ctx.m_atmosphere) {
-      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
-    }
-    ctx.m_atmosphere->initialize(&ctx);
-    return ctx.m_atmosphere->getCloudRenderRT();
+    RtxAtmosphere& atmosphere = ctx.getCommonObjects()->metaAtmosphere();
+    atmosphere.initialize(&ctx);
+    return atmosphere.getCloudRenderRT();
   }
 
-  // ---------------------------------------------------------------------------
-  // injectRtxAtmosphereSkySkip
-  //
-  // Returns true when the caller (RtxContext::rasterizeSky) should skip
-  // rasterized sky rendering because Numos mode is active.
-  //
-  // No private-member access — uses only the public RtxOptions::skyMode() API.
-  // No friend declaration needed.
-  // ---------------------------------------------------------------------------
   bool injectRtxAtmosphereSkySkip() {
     return RtxOptions::skyMode() == SkyMode::Numos;
   }
 
-  // ---------------------------------------------------------------------------
-  // showAtmosphereUI
-  //
-  // Renders the sky mode selector and atmosphere preset/parameter UI inside
-  // the "Sky Tuning" collapsing header (showRenderingSettings). When the sky
-  // mode is SkyboxRasterization, draws only the Sky Brightness slider (upstream
-  // behaviour). When Numos is selected, draws the full Hillaire
-  // atmosphere preset buttons and parameter tree.
-  //
-  // The skyModeCombo static is owned here (moved from dxvk_imgui.cpp) so that
-  // this function is self-contained and requires no parameters.
-  //
-  // No private-member access — uses only public RtxOptions and ImGui APIs.
-  // No friend declaration needed.
-  // ---------------------------------------------------------------------------
-
   namespace {
-    // Display-transformed drag widgets (fork - 2026-07-02, UI usability).
-    // The option keeps its canonical storage unit (conf/API/shader unchanged);
-    // only the widget converts, so sub-decimal crawls like 0.020 km/s become
-    // draggable "20.0 m/s". Pattern mirrors RemixGui::DragFloatMB_showGB
-    // (rtx_imgui.h); range/step/format arguments are in DISPLAY units. The
-    // weather preset editor applies the same transforms via WK_SpeedKmS /
-    // WK_PatchPerKm (rtx_fork_weather.cpp) - keep them in sync.
+    // Display-transform helpers: option stored in canonical units, widget shows human-friendly units.
+    // Keep in sync with WK_SpeedKmS / WK_PatchPerKm in rtx_fork_weather.cpp.
 
-    // Stored km/s, displayed m/s.
     bool dragSpeedKmSAsMS(const char* label, RtxOption<float>* opt,
                           float stepMs, float minMs, float maxMs,
                           ImGuiSliderFlags flags) {
@@ -696,9 +275,6 @@ namespace fork_hooks {
       return changed;
     }
 
-    // Stored spatial frequency (1/km), displayed as the wavelength in km (1/x)
-    // - so a "Patch Size" number IS a size: bigger km = bigger patches.
-    // Guards keep 1/x finite for zeroed conf values.
     bool dragFreqPerKmAsKm(const char* label, RtxOption<float>* opt,
                            float stepKm, float minKm, float maxKm,
                            ImGuiSliderFlags flags) {
@@ -712,9 +288,6 @@ namespace fork_hooks {
       return changed;
     }
 
-    // Owned here so that showAtmosphereUI is self-contained. Previously this
-    // static lived in dxvk_imgui.cpp at file scope and was passed implicitly
-    // via the inline call site. Moved as part of the touchpoint migration.
     RemixGui::ComboWithKey<SkyMode> skyModeCombo {
       "Sky Mode",
       RemixGui::ComboWithKey<SkyMode>::ComboEntries { {
@@ -723,11 +296,6 @@ namespace fork_hooks {
       } }
     };
 
-    // Per-moon UI block. RTX_OPTION accessors are static-named per index
-    // (enabled0, enabled1, ...), so we dispatch via a small macro that fans
-    // the index into one set of pointers, then drive a single index-agnostic
-    // ImGui body off those pointers. MAX_MOONS = 4; the macro expands four
-    // times — deliberate simple repetition over a fixed cap.
     void renderMoonUI(int idx) {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
 
@@ -746,21 +314,21 @@ namespace fork_hooks {
       RtxOption<float>*    pPhase           = nullptr;
 
       switch (idx) {
-#define MOON_PTRS(N)                                                         \
-        case N:                                                              \
-          pEnabled         = &RtxOptions::enabled##N##Object();              \
-          pAngularRadius   = &RtxOptions::angularRadius##N##Object();        \
-          pBrightness      = &RtxOptions::brightness##N##Object();           \
-          pColor           = &RtxOptions::color##N##Object();                \
-          pSurfaceStyle    = &RtxOptions::surfaceStyle##N##Object();         \
-          pCraterDensity   = &RtxOptions::craterDensity##N##Object();        \
-          pSurfaceContrast = &RtxOptions::surfaceContrast##N##Object();      \
-          pNoiseScale      = &RtxOptions::surfaceNoiseScale##N##Object();    \
-          pDarkSide        = &RtxOptions::darkSideBrightness##N##Object();   \
-          pRoughness       = &RtxOptions::roughnessAmount##N##Object();      \
-          pElevation       = &RtxOptions::elevation##N##Object();            \
-          pRotation        = &RtxOptions::rotation##N##Object();             \
-          pPhase           = &RtxOptions::phase##N##Object();                \
+#define MOON_PTRS(N)                                                              \
+        case N:                                                                   \
+          pEnabled         = &RtxAtmosphere::Moon##N::enabledObject();            \
+          pAngularRadius   = &RtxAtmosphere::Moon##N::angularRadiusObject();      \
+          pBrightness      = &RtxAtmosphere::Moon##N::brightnessObject();         \
+          pColor           = &RtxAtmosphere::Moon##N::colorObject();              \
+          pSurfaceStyle    = &RtxAtmosphere::Moon##N::surfaceStyleObject();       \
+          pCraterDensity   = &RtxAtmosphere::Moon##N::craterDensityObject();      \
+          pSurfaceContrast = &RtxAtmosphere::Moon##N::surfaceContrastObject();    \
+          pNoiseScale      = &RtxAtmosphere::Moon##N::surfaceNoiseScaleObject();  \
+          pDarkSide        = &RtxAtmosphere::Moon##N::darkSideBrightnessObject(); \
+          pRoughness       = &RtxAtmosphere::Moon##N::roughnessAmountObject();    \
+          pElevation       = &RtxAtmosphere::Moon##N::elevationObject();          \
+          pRotation        = &RtxAtmosphere::Moon##N::rotationObject();           \
+          pPhase           = &RtxAtmosphere::Moon##N::phaseObject();              \
           break
         MOON_PTRS(0);
         MOON_PTRS(1);
@@ -791,21 +359,15 @@ namespace fork_hooks {
           static const char* kStyleNames[] = { "Rocky", "Volcanic" };
           int styleInt = static_cast<int>(pSurfaceStyle->get());
           if (ImGui::Combo("Surface Style", &styleInt, kStyleNames, IM_ARRAYSIZE(kStyleNames))) {
-            pSurfaceStyle->setImmediately(static_cast<uint32_t>(styleInt));
+            pSurfaceStyle->setDeferred(static_cast<uint32_t>(styleInt));
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Procedural surface preset. Knobs below tune the chosen style.");
 
           RemixGui::DragFloat("Crater Density", pCraterDensity, 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
 
-          // #8: Detail knob replaces Surface Contrast + Surface Noise Scale.
-          // Detail is transient ImGui state — reconstructed from current Contrast on each
-          // frame. NoiseScale is overwritten by the curve when Detail changes; off-curve
-          // .conf values are preserved on the Contrast side only.
-          //
-          // Curve (two-segment linear hitting three anchors exactly):
-          //   Detail = 0.0 -> Contrast=0.5, NoiseScale=2.0  (smooth, coarse)
-          //   Detail = 1.0 -> Contrast=1.0, NoiseScale=1.0  (default)
-          //   Detail = 2.0 -> Contrast=1.5, NoiseScale=0.5  (punchy, fine)
+          // Two-segment curve mapping Detail [0,2] to Contrast/NoiseScale:
+          //   0.0 -> Contrast=0.5, NoiseScale=2.0   1.0 -> default   2.0 -> Contrast=1.5, NoiseScale=0.5
+          // NoiseScale is overwritten by the curve; off-curve .conf values survive on the Contrast side only.
           float detail = (pSurfaceContrast->get() - 0.5f) / 0.5f;
           detail = std::max(0.0f, std::min(2.0f, detail));
           if (ImGui::DragFloat("Detail", &detail, 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags)) {
@@ -817,8 +379,8 @@ namespace fork_hooks {
               newContrast   = 1.0f + 0.5f * (detail - 1.0f); // 1.0 -> 1.5
               newNoiseScale = 1.0f - 0.5f * (detail - 1.0f); // 1.0 -> 0.5
             }
-            pSurfaceContrast->setImmediately(newContrast);
-            pNoiseScale->setImmediately(newNoiseScale);
+            pSurfaceContrast->setDeferred(newContrast);
+            pNoiseScale->setDeferred(newNoiseScale);
           }
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Combined surface detail: smooth/coarse <- 0.0 ... 1.0 (default) ... 2.0 -> punchy/fine. "
@@ -838,15 +400,10 @@ namespace fork_hooks {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
 
       if (ImGui::TreeNode("Sun")) {
-        // Sun Size drives the sun distant light's angular half-angle (Sun Size
-        // / 2) whenever Shadow Softness is 0; a nonzero softness takes over the
-        // half-angle, so grey Sun Size out rather than let it drag dead
-        // (fork - 2026-07-17 panel audit). Numos draws no separate sun disc
-        // (removed at the distant-light graduation) - the size manifests as
-        // shadow penumbra width and the sun's footprint in reflections.
-        const bool softnessOverride = RtxOptions::sunShadowSoftnessDeg() > 0.0f;
+        // Grey out Sun Size when Shadow Softness > 0 — the softness knob owns the half-angle then.
+        const bool softnessOverride = RtxAtmosphere::sunShadowSoftnessDeg() > 0.0f;
         ImGui::BeginDisabled(softnessOverride);
-        RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f deg", sliderFlags);
+        RemixGui::DragFloat("Sun Size", &RtxAtmosphere::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f deg", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Angular diameter of the sun light in degrees (Earth's sun is "
             "~0.545 deg). The light's half-angle = Sun Size / 2, which sets "
@@ -855,7 +412,7 @@ namespace fork_hooks {
             "Softness > 0 (the override owns the half-angle).");
         ImGui::EndDisabled();
 
-        RemixGui::DragFloat("Shadow Softness", &RtxOptions::sunShadowSoftnessDegObject(), 0.01f, 0.0f, 10.0f, "%.3f deg", sliderFlags);
+        RemixGui::DragFloat("Shadow Softness", &RtxAtmosphere::sunShadowSoftnessDegObject(), 0.01f, 0.0f, 10.0f, "%.3f deg", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Override for the sun light's angular half-angle, in degrees. "
             "0 = physical: track Sun Size / 2 (leave here unless you need the "
@@ -864,37 +421,22 @@ namespace fork_hooks {
             "game/API-driven physical sun size can stay untouched while "
             "shadows are art-directed.");
 
-        RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+        RemixGui::DragFloat("Sun Intensity", &RtxAtmosphere::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
 
-        RemixGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f deg", sliderFlags);
+        RemixGui::DragFloat("Sun Elevation", &RtxAtmosphere::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f deg", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
 
-        RemixGui::DragFloat("Sun Rotation", &RtxOptions::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f deg", sliderFlags);
+        RemixGui::DragFloat("Sun Rotation", &RtxAtmosphere::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f deg", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
 
         ImGui::TreePop();
       }
     }
 
-    // Render an RtxOption<Vector3> as a ColorEdit3 chromaticity picker plus a
-    // magnitude scalar. opt holds chromaticity * magnitude; the picker shows
-    // chromaticity (normalized to max channel == 1 in steady state) and the
-    // DragFloat shows magnitude == max(opt).
-    //
-    // Designed for atmospheric-coefficient triplets (Base Rayleigh / Base Mie /
-    // Base Ozone / Base Sun Illuminance) where the Vector3's per-channel ratio
-    // IS the visible "color" and the overall magnitude is the user-tunable
-    // strength.
-    //
-    // We cache chromaticity and magnitude per widget across frames because the
-    // picker popup manipulates RGB in place and re-deriving them every frame
-    // from opt = chromaticity * magnitude makes the SV cursor spring back to
-    // V=1 mid-drag (and collapse to (1,1,1) entirely when the user crosses
-    // the S=0 axis, taking the popup's "Original" ref swatch with it). Sync
-    // from opt only on external mutation (preset load, .conf reload), and
-    // re-normalize chromaticity to max=1 once the picker popup closes so the
-    // magnitude slider keeps reading max(opt) in steady state.
+    // Splits an atmospheric-coefficient Vector3 into a chromaticity picker + magnitude scalar.
+    // Caches the decomposition per widget: re-deriving every frame makes the SV cursor spring back to V=1 mid-drag.
+    // Syncs from opt only on external mutation; re-normalizes chromaticity to max=1 when the picker closes.
     void renderChromaticityWidget(const char* colorLabel,
                                   const char* magLabel,
                                   RtxOption<Vector3>* opt,
@@ -939,22 +481,19 @@ namespace fork_hooks {
         // If the user picks a color while magnitude is zero, color * 0 = (0,0,0)
         // erases the chromaticity entirely. Nudge magnitude to magSpeed so the
         // pick is recoverable.
-        if (colorChanged && st.magnitude <= 1e-9f) {
-          st.magnitude = magSpeed;
-        }
+        if (colorChanged && st.magnitude <= 1e-9f)
+          st.magnitude = magSpeed;  // guard: picking color at zero magnitude would erase the chromaticity
         st.chromaticity.x = std::max(0.0f, std::min(1.0f, st.chromaticity.x));
         st.chromaticity.y = std::max(0.0f, std::min(1.0f, st.chromaticity.y));
         st.chromaticity.z = std::max(0.0f, std::min(1.0f, st.chromaticity.z));
         const Vector3 newOpt(st.chromaticity.x * st.magnitude,
                              st.chromaticity.y * st.magnitude,
                              st.chromaticity.z * st.magnitude);
-        opt->setImmediately(newOpt);
+        opt->setDeferred(newOpt);
         st.lastWrittenOpt = newOpt;
       }
 
-      // Detect ColorEdit3's internal popup state. ColorEdit3 calls
-      // PushID(label) then OpenPopup("picker"); mirror the PushID so the
-      // hash matches.
+      // Mirror ColorEdit3's internal PushID(label) so the popup hash matches.
       ImGui::PushID(colorLabel);
       const bool pickerOpen = ImGui::IsPopupOpen("picker");
       ImGui::PopID();
@@ -966,8 +505,7 @@ namespace fork_hooks {
                                      st.chromaticity.y * invMax,
                                      st.chromaticity.z * invMax);
           st.magnitude *= maxCh;
-          // chromaticity * magnitude is preserved, so opt and lastWrittenOpt
-          // stay correct without a writeback.
+          // chromaticity * magnitude unchanged, so opt / lastWrittenOpt stay correct without a writeback.
         }
       }
     }
@@ -975,12 +513,12 @@ namespace fork_hooks {
     void renderStarsUI() {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
       if (ImGui::TreeNode("Stars")) {
-        RemixGui::DragFloat("Star Brightness", &RtxOptions::starBrightnessObject(),
+        RemixGui::DragFloat("Star Brightness", &RtxAtmosphere::starBrightnessObject(),
                             0.1f, 0.0f, 50.0f, "%.1f", sliderFlags);
-        RemixGui::DragFloat("Star Density", &RtxOptions::starDensityObject(),
+        RemixGui::DragFloat("Star Density", &RtxAtmosphere::starDensityObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Threshold: 0 = all stars visible, 1 = no stars.");
-        RemixGui::DragFloat("Star Twinkle Speed", &RtxOptions::starTwinkleSpeedObject(),
+        RemixGui::DragFloat("Star Twinkle Speed", &RtxAtmosphere::starTwinkleSpeedObject(),
                             0.1f, 0.0f, 10.0f, "%.1f", sliderFlags);
         ImGui::TreePop();
       }
@@ -989,29 +527,29 @@ namespace fork_hooks {
     void renderMilkyWayUI() {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
       if (ImGui::TreeNode("Milky Way")) {
-        RemixGui::Checkbox("Enabled##milkyway", &RtxOptions::milkyWayEnabledObject());
+        RemixGui::Checkbox("Enabled##milkyway", &RtxAtmosphere::milkyWayEnabledObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Master toggle for galactic-band effects: in-band density boost, band-specific "
             "star colors, and the diffuse background glow. When off, stars distribute uniformly.");
-        RemixGui::DragFloat("Density Boost", &RtxOptions::milkyWayDensityBoostObject(),
+        RemixGui::DragFloat("Density Boost", &RtxAtmosphere::milkyWayDensityBoostObject(),
                             0.005f, 0.0f, 0.3f, "%.3f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Extra star density inside the galactic band. Higher = more (dim) band stars.");
-        RemixGui::DragFloat("Glow Brightness", &RtxOptions::milkyWayBackgroundBrightnessObject(),
+        RemixGui::DragFloat("Glow Brightness", &RtxAtmosphere::milkyWayBackgroundBrightnessObject(),
                             0.01f, 0.0f, 2.0f, "%.3f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Diffuse band-glow brightness (the soft dust haze across the Milky Way). 0 disables the glow.");
-        RemixGui::ColorEdit3("Outer Color", &RtxOptions::milkyWayBackgroundColorObject());
+        RemixGui::ColorEdit3("Outer Color", &RtxAtmosphere::milkyWayBackgroundColorObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Cool outer-edge tint of the band (where young stars dominate). Default cool blue.");
-        RemixGui::ColorEdit3("Core Color", &RtxOptions::milkyWayCoreColorObject(),
+        RemixGui::ColorEdit3("Core Color", &RtxAtmosphere::milkyWayCoreColorObject(),
                              ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Warm bright-core tint at the galactic center. Default warm cream/yellow. "
             "HDR — values above 1.0 push beyond LDR gamut for a brighter core.");
         // #4: Dust Color slider is intentionally dropped from ImGui.
         // RtxOption rtx.atmosphere.milkyWayDustColor remains .conf-tunable.
-        RemixGui::DragFloat("Dust Amount", &RtxOptions::milkyWayDustAmountObject(),
+        RemixGui::DragFloat("Dust Amount", &RtxAtmosphere::milkyWayDustAmountObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "How strongly dust patches darken the glow. 0 = no dust, 1 = full dust contrast.");
@@ -1022,15 +560,15 @@ namespace fork_hooks {
     void renderStarAppearanceUI() {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
       if (ImGui::TreeNode("Star Appearance")) {
-        RemixGui::DragFloat("Star PSF Sharpness", &RtxOptions::starPsfSharpnessObject(),
+        RemixGui::DragFloat("Star PSF Sharpness", &RtxAtmosphere::starPsfSharpnessObject(),
                             0.5f, 1.0f, 500.0f, "%.1f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Gaussian PSF exponent. Lower = bigger softer stars, higher = sharper pinpoints.");
-        RemixGui::DragFloat("Star Cloud Extinction Power", &RtxOptions::starCloudExtinctionPowerObject(),
+        RemixGui::DragFloat("Star Cloud Extinction Power", &RtxAtmosphere::starCloudExtinctionPowerObject(),
                             0.1f, 1.0f, 6.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Exponent on cloud view-transmittance when extincting stars. Higher = stars die through clouds faster.");
-        RemixGui::DragFloat("Star Ambient Coupling", &RtxOptions::starAmbientCouplingStrengthObject(),
+        RemixGui::DragFloat("Star Ambient Coupling", &RtxAtmosphere::starAmbientCouplingStrengthObject(),
                             0.02f, 0.0f, 3.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Star/airglow coupling into cloud-march nightLight, as a multiple of the calibrated "
@@ -1042,7 +580,7 @@ namespace fork_hooks {
     void renderMoonGlobalLightingUI() {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
       if (ImGui::TreeNode("Global Lighting")) {
-        RemixGui::DragFloat("Atmospheric Coupling", &RtxOptions::moonAtmosphericCouplingStrengthObject(),
+        RemixGui::DragFloat("Atmospheric Coupling", &RtxAtmosphere::moonAtmosphericCouplingStrengthObject(),
                             0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Multiplier on the moon's contribution to atmospheric scattering. "
@@ -1054,7 +592,7 @@ namespace fork_hooks {
         // field); the two orthogonal per-path knobs below stay in the UI.
         // Halo Brightness moved to Cloud-Look & Halo Shape, next to its
         // Halo Glow master.
-        RemixGui::DragFloat("Surface Brightness", &RtxOptions::surfaceMoonBrightnessObject(),
+        RemixGui::DragFloat("Surface Brightness", &RtxAtmosphere::surfaceMoonBrightnessObject(),
                             1.0f, 0.0f, 200.0f, "%.1f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Moonlight level on the ground / scene (surface path only; clouds "
@@ -1062,7 +600,7 @@ namespace fork_hooks {
             "calibration. The conf-only moonNeeStrength master scales both "
             "paths and is driven by weather presets.");
 
-        RemixGui::DragFloat("Cloud Brightness", &RtxOptions::cloudMoonBrightnessObject(),
+        RemixGui::DragFloat("Cloud Brightness", &RtxAtmosphere::cloudMoonBrightnessObject(),
                             0.1f, 0.0f, 50.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Overall cloud-moon lighting: the directional silver-lining term "
@@ -1076,7 +614,7 @@ namespace fork_hooks {
     void renderMoonCloudLookUI() {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
       if (ImGui::TreeNode("Cloud-Look & Halo Shape")) {
-        RemixGui::DragFloat("Silver Lining Intensity", &RtxOptions::moonSilverLiningIntensityObject(),
+        RemixGui::DragFloat("Silver Lining Intensity", &RtxAtmosphere::moonSilverLiningIntensityObject(),
                             0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Forward-glow emphasis ONLY: scales the directional silver-lining "
@@ -1086,13 +624,13 @@ namespace fork_hooks {
             "emphasize here. 0 = no silver lining. Diffuse-vs-phase ratio: "
             ".conf moonCloudDiffuseGain / moonCloudPhaseGain.");
 
-        RemixGui::DragFloat("Silver Lining Sharpness", &RtxOptions::moonCloudAnisotropyObject(),
+        RemixGui::DragFloat("Silver Lining Sharpness", &RtxAtmosphere::moonCloudAnisotropyObject(),
                             0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Tightness of the silver-lining glow peak. Higher = sharper pinpoint; lower = softer falloff. "
             "Henyey-Greenstein g for cloud-moon forward scatter. Default 0.85.");
 
-        RemixGui::DragFloat("Halo Glow", &RtxOptions::moonHaloGlowStrengthObject(),
+        RemixGui::DragFloat("Halo Glow", &RtxAtmosphere::moonHaloGlowStrengthObject(),
                             0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "MASTER over the moon's glow: scales the disk halo AND the cloud "
@@ -1102,7 +640,7 @@ namespace fork_hooks {
 
         // Halo Brightness moved here 2026-07-17 (panel audit) from Global
         // Lighting so the master/trim pair reads as a pair.
-        RemixGui::DragFloat("Halo Brightness", &RtxOptions::haloMoonBrightnessObject(),
+        RemixGui::DragFloat("Halo Brightness", &RtxAtmosphere::haloMoonBrightnessObject(),
                             0.5f, 0.0f, 100.0f, "%.1f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Halo-only trim under the Halo Glow master: scales the disk halo "
@@ -1114,7 +652,7 @@ namespace fork_hooks {
     }
   } // anonymous namespace
 
-  void showAtmosphereUI() {
+  void showAtmosphereUI(fork_weather::WeatherBlender* blender) {
     constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
 
     // Sky mode selection
@@ -1128,31 +666,26 @@ namespace fork_hooks {
       ImGui::Separator();
       ImGui::Text("Atmosphere Presets:");
 
-      // Preset buttons write absolute base coefficients, but the top-level
-      // multiplier knobs (Sun Intensity / Air / Dust / Ozone) scale those
-      // coefficients at pack time — a non-default multiplier silently
-      // re-tinted every preset. Reset them to their declared defaults on any
-      // preset click so a preset always lands on the same look
-      // (fork - 2026-07-17 panel audit).
+      // Reset multipliers on any preset click so non-default multipliers don't silently re-tint the preset.
       auto resetAtmosphereMultipliers = [] {
-        RtxOptions::sunIntensityObject().setImmediately(RtxOptions::sunIntensityObject().getDefaultValue());
-        RtxOptions::airDensityObject().setImmediately(RtxOptions::airDensityObject().getDefaultValue());
-        RtxOptions::aerosolDensityObject().setImmediately(RtxOptions::aerosolDensityObject().getDefaultValue());
-        RtxOptions::ozoneDensityObject().setImmediately(RtxOptions::ozoneDensityObject().getDefaultValue());
+        RtxAtmosphere::sunIntensityObject().setDeferred(RtxAtmosphere::sunIntensityObject().getDefaultValue());
+        RtxAtmosphere::airDensityObject().setDeferred(RtxAtmosphere::airDensityObject().getDefaultValue());
+        RtxAtmosphere::aerosolDensityObject().setDeferred(RtxAtmosphere::aerosolDensityObject().getDefaultValue());
+        RtxAtmosphere::ozoneDensityObject().setDeferred(RtxAtmosphere::ozoneDensityObject().getDefaultValue());
       };
 
       if (ImGui::Button("Earth (Default)", ImVec2(120, 0))) {
         resetAtmosphereMultipliers();
         // Earth-like atmosphere based on Hillaire paper
-        RtxOptions::sunIlluminanceObject().setImmediately(Vector3(20.0f, 20.0f, 20.0f));
-        RtxOptions::planetRadiusObject().setImmediately(6371.0f);  // Earth's actual radius
-        RtxOptions::atmosphereThicknessObject().setImmediately(100.0f);
-        RtxOptions::rayleighScatteringObject().setImmediately(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
-        RtxOptions::mieScatteringObject().setImmediately(Vector3(3.996e-3f, 3.996e-3f, 3.996e-3f));
-        RtxOptions::mieAnisotropyObject().setImmediately(0.8f);
-        RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
-        RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
-        RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
+        RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(20.0f, 20.0f, 20.0f));
+        RtxAtmosphere::planetRadiusObject().setDeferred(6371.0f);  // Earth's actual radius
+        RtxAtmosphere::atmosphereThicknessObject().setDeferred(100.0f);
+        RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
+        RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(3.996e-3f, 3.996e-3f, 3.996e-3f));
+        RtxAtmosphere::mieAnisotropyObject().setDeferred(0.8f);
+        RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
+        RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(25.0f);
+        RtxAtmosphere::ozoneLayerWidthObject().setDeferred(15.0f);
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Physically accurate Earth atmosphere parameters from Hillaire paper");
 
@@ -1160,15 +693,15 @@ namespace fork_hooks {
       if (ImGui::Button("Mars", ImVec2(120, 0))) {
         resetAtmosphereMultipliers();
         // Mars atmosphere (thin, dusty, red-shifted)
-        RtxOptions::sunIlluminanceObject().setImmediately(Vector3(15.0f, 12.0f, 10.0f));  // Weaker, reddish sun
-        RtxOptions::planetRadiusObject().setImmediately(3389.5f);  // Mars radius
-        RtxOptions::atmosphereThicknessObject().setImmediately(50.0f);  // Thinner atmosphere
-        RtxOptions::rayleighScatteringObject().setImmediately(Vector3(8.0e-3f, 10.0e-3f, 12.0e-3f));  // Red bias
-        RtxOptions::mieScatteringObject().setImmediately(Vector3(8.0e-3f, 8.0e-3f, 8.0e-3f));  // More dust
-        RtxOptions::mieAnisotropyObject().setImmediately(0.7f);
-        RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(0.0f, 0.0f, 0.0f));  // No ozone
-        RtxOptions::ozoneLayerAltitudeObject().setImmediately(0.0f);
-        RtxOptions::ozoneLayerWidthObject().setImmediately(1.0f);
+        RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(15.0f, 12.0f, 10.0f));  // Weaker, reddish sun
+        RtxAtmosphere::planetRadiusObject().setDeferred(3389.5f);  // Mars radius
+        RtxAtmosphere::atmosphereThicknessObject().setDeferred(50.0f);  // Thinner atmosphere
+        RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(8.0e-3f, 10.0e-3f, 12.0e-3f));  // Red bias
+        RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(8.0e-3f, 8.0e-3f, 8.0e-3f));  // More dust
+        RtxAtmosphere::mieAnisotropyObject().setDeferred(0.7f);
+        RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.0f, 0.0f, 0.0f));  // No ozone
+        RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(0.0f);
+        RtxAtmosphere::ozoneLayerWidthObject().setDeferred(1.0f);
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Mars-like atmosphere: thin, dusty, yellowish sky with blue sunsets");
 
@@ -1176,30 +709,30 @@ namespace fork_hooks {
       if (ImGui::Button("Clear Sky", ImVec2(120, 0))) {
         resetAtmosphereMultipliers();
         // Very clear, minimal scattering (high altitude/clean air)
-        RtxOptions::sunIlluminanceObject().setImmediately(Vector3(25.0f, 25.0f, 25.0f));
-        RtxOptions::planetRadiusObject().setImmediately(6371.0f);
-        RtxOptions::atmosphereThicknessObject().setImmediately(80.0f);
-        RtxOptions::rayleighScatteringObject().setImmediately(Vector3(4.0e-3f, 9.0e-3f, 22.0e-3f));  // Reduced
-        RtxOptions::mieScatteringObject().setImmediately(Vector3(1.0e-3f, 1.0e-3f, 1.0e-3f));  // Minimal dust
-        RtxOptions::mieAnisotropyObject().setImmediately(0.9f);  // Sharp sun
-        RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
-        RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
-        RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
+        RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(25.0f, 25.0f, 25.0f));
+        RtxAtmosphere::planetRadiusObject().setDeferred(6371.0f);
+        RtxAtmosphere::atmosphereThicknessObject().setDeferred(80.0f);
+        RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(4.0e-3f, 9.0e-3f, 22.0e-3f));  // Reduced
+        RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(1.0e-3f, 1.0e-3f, 1.0e-3f));  // Minimal dust
+        RtxAtmosphere::mieAnisotropyObject().setDeferred(0.9f);  // Sharp sun
+        RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
+        RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(25.0f);
+        RtxAtmosphere::ozoneLayerWidthObject().setDeferred(15.0f);
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Crystal clear atmosphere with minimal haze");
 
       if (ImGui::Button("Polluted/Hazy", ImVec2(120, 0))) {
         resetAtmosphereMultipliers();
         // Heavy pollution/haze (smoggy city)
-        RtxOptions::sunIlluminanceObject().setImmediately(Vector3(18.0f, 18.0f, 18.0f));
-        RtxOptions::planetRadiusObject().setImmediately(6371.0f);
-        RtxOptions::atmosphereThicknessObject().setImmediately(100.0f);
-        RtxOptions::rayleighScatteringObject().setImmediately(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
-        RtxOptions::mieScatteringObject().setImmediately(Vector3(12.0e-3f, 12.0e-3f, 12.0e-3f));  // Heavy aerosols
-        RtxOptions::mieAnisotropyObject().setImmediately(0.65f);  // More diffuse sun
-        RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
-        RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
-        RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
+        RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(18.0f, 18.0f, 18.0f));
+        RtxAtmosphere::planetRadiusObject().setDeferred(6371.0f);
+        RtxAtmosphere::atmosphereThicknessObject().setDeferred(100.0f);
+        RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
+        RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(12.0e-3f, 12.0e-3f, 12.0e-3f));  // Heavy aerosols
+        RtxAtmosphere::mieAnisotropyObject().setDeferred(0.65f);  // More diffuse sun
+        RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
+        RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(25.0f);
+        RtxAtmosphere::ozoneLayerWidthObject().setDeferred(15.0f);
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Heavy atmospheric haze with strong light scattering");
 
@@ -1207,15 +740,15 @@ namespace fork_hooks {
       if (ImGui::Button("Alien World", ImVec2(120, 0))) {
         resetAtmosphereMultipliers();
         // Exotic alien atmosphere (greenish tint)
-        RtxOptions::sunIlluminanceObject().setImmediately(Vector3(15.0f, 22.0f, 18.0f));  // Green bias
-        RtxOptions::planetRadiusObject().setImmediately(5000.0f);
-        RtxOptions::atmosphereThicknessObject().setImmediately(120.0f);
-        RtxOptions::rayleighScatteringObject().setImmediately(Vector3(4.0e-3f, 18.0e-3f, 10.0e-3f));  // Green peak
-        RtxOptions::mieScatteringObject().setImmediately(Vector3(5.0e-3f, 5.0e-3f, 5.0e-3f));
-        RtxOptions::mieAnisotropyObject().setImmediately(0.75f);
-        RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(1.0e-3f, 0.5e-3f, 3.0e-3f));  // Exotic absorption
-        RtxOptions::ozoneLayerAltitudeObject().setImmediately(30.0f);
-        RtxOptions::ozoneLayerWidthObject().setImmediately(20.0f);
+        RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(15.0f, 22.0f, 18.0f));  // Green bias
+        RtxAtmosphere::planetRadiusObject().setDeferred(5000.0f);
+        RtxAtmosphere::atmosphereThicknessObject().setDeferred(120.0f);
+        RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(4.0e-3f, 18.0e-3f, 10.0e-3f));  // Green peak
+        RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(5.0e-3f, 5.0e-3f, 5.0e-3f));
+        RtxAtmosphere::mieAnisotropyObject().setDeferred(0.75f);
+        RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(1.0e-3f, 0.5e-3f, 3.0e-3f));  // Exotic absorption
+        RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(30.0f);
+        RtxAtmosphere::ozoneLayerWidthObject().setDeferred(20.0f);
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Fictional alien atmosphere with green-tinted scattering");
 
@@ -1223,22 +756,22 @@ namespace fork_hooks {
       if (ImGui::Button("Desert Planet", ImVec2(120, 0))) {
         resetAtmosphereMultipliers();
         // Arid desert world (Dune-like)
-        RtxOptions::sunIlluminanceObject().setImmediately(Vector3(28.0f, 24.0f, 18.0f));  // Warm sun
-        RtxOptions::planetRadiusObject().setImmediately(6000.0f);
-        RtxOptions::atmosphereThicknessObject().setImmediately(90.0f);
-        RtxOptions::rayleighScatteringObject().setImmediately(Vector3(7.0e-3f, 11.0e-3f, 18.0e-3f));
-        RtxOptions::mieScatteringObject().setImmediately(Vector3(15.0e-3f, 12.0e-3f, 8.0e-3f));  // Sandy dust
-        RtxOptions::mieAnisotropyObject().setImmediately(0.6f);  // Diffuse from dust
-        RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(0.5e-3f, 1.0e-3f, 0.1e-3f));
-        RtxOptions::ozoneLayerAltitudeObject().setImmediately(20.0f);
-        RtxOptions::ozoneLayerWidthObject().setImmediately(10.0f);
+        RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(28.0f, 24.0f, 18.0f));  // Warm sun
+        RtxAtmosphere::planetRadiusObject().setDeferred(6000.0f);
+        RtxAtmosphere::atmosphereThicknessObject().setDeferred(90.0f);
+        RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(7.0e-3f, 11.0e-3f, 18.0e-3f));
+        RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(15.0e-3f, 12.0e-3f, 8.0e-3f));  // Sandy dust
+        RtxAtmosphere::mieAnisotropyObject().setDeferred(0.6f);  // Diffuse from dust
+        RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.5e-3f, 1.0e-3f, 0.1e-3f));
+        RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(20.0f);
+        RtxAtmosphere::ozoneLayerWidthObject().setDeferred(10.0f);
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Hot, arid world with sandy atmospheric dust");
 
       ImGui::Separator();
 
       // ----- Weather Presets panel (fork, placed right under atmosphere presets) -----
-      fork_hooks::showWeatherUI();
+      fork_hooks::showWeatherUI(blender);
 
       ImGui::Separator();
 
@@ -1252,30 +785,30 @@ namespace fork_hooks {
         // AtmosphereArgs::viewAltitude, which nothing ever read. The RTX_OPTION
         // was retired outright (see rtx_options.h).
 
-        RemixGui::DragFloat("Air", &RtxOptions::airDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+        RemixGui::DragFloat("Air", &RtxAtmosphere::airDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Density of air molecules");
 
-        RemixGui::DragFloat("Dust", &RtxOptions::aerosolDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+        RemixGui::DragFloat("Dust", &RtxAtmosphere::aerosolDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Density of aerosols/dust");
 
-        RemixGui::DragFloat("Ozone", &RtxOptions::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+        RemixGui::DragFloat("Ozone", &RtxAtmosphere::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Density of ozone layer");
 
         if (ImGui::TreeNode("Advanced")) {
-          RemixGui::DragFloat("Planet Radius", &RtxOptions::planetRadiusObject(), 10.0f, 1000.0f, 10000.0f, "%.0f km", sliderFlags);
-          RemixGui::DragFloat("Atmosphere Thickness", &RtxOptions::atmosphereThicknessObject(), 1.0f, 10.0f, 500.0f, "%.0f km", sliderFlags);
-          RemixGui::DragFloat("Mie Anisotropy", &RtxOptions::mieAnisotropyObject(), 0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Planet Radius", &RtxAtmosphere::planetRadiusObject(), 10.0f, 1000.0f, 10000.0f, "%.0f km", sliderFlags);
+          RemixGui::DragFloat("Atmosphere Thickness", &RtxAtmosphere::atmosphereThicknessObject(), 1.0f, 10.0f, 500.0f, "%.0f km", sliderFlags);
+          RemixGui::DragFloat("Mie Anisotropy", &RtxAtmosphere::mieAnisotropyObject(), 0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
 
           renderChromaticityWidget(
               "Sun Color (Base)", "Sun Illuminance",
-              &RtxOptions::sunIlluminanceObject(),
+              &RtxAtmosphere::sunIlluminanceObject(),
               0.1f, 100.0f, "%.1f",
               "Sun spectral color (Hillaire base illuminance, chromaticity).",
               "Sun base illuminance magnitude (overall sun-power level).");
 
           renderChromaticityWidget(
               "Air Color (Base)", "Air Scattering Strength",
-              &RtxOptions::rayleighScatteringObject(),
+              &RtxAtmosphere::rayleighScatteringObject(),
               0.0005f, 0.1f, "%.4f /km",
               "Air molecule scattering chromaticity (Rayleigh per-channel scattering coefficients). "
               "Larger blue = cooler sky.",
@@ -1283,22 +816,22 @@ namespace fork_hooks {
 
           renderChromaticityWidget(
               "Dust Color (Base)", "Dust Scattering Strength",
-              &RtxOptions::mieScatteringObject(),
+              &RtxAtmosphere::mieScatteringObject(),
               0.0005f, 0.05f, "%.4f /km",
               "Aerosol / dust scattering chromaticity (Mie per-channel coefficients).",
               "Dust scattering magnitude. Higher = hazier atmosphere.");
 
           renderChromaticityWidget(
               "Ozone Tint (Base)", "Ozone Absorption Strength",
-              &RtxOptions::ozoneAbsorptionObject(),
+              &RtxAtmosphere::ozoneAbsorptionObject(),
               0.0001f, 0.05f, "%.5f /km",
               "Ozone absorption chromaticity (per-channel coefficients). "
               "Affects twilight color and high-altitude tint.",
               "Ozone absorption magnitude.");
-          RemixGui::DragFloat("Ozone Layer Altitude", &RtxOptions::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
-          RemixGui::DragFloat("Ozone Layer Width", &RtxOptions::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
+          RemixGui::DragFloat("Ozone Layer Altitude", &RtxAtmosphere::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
+          RemixGui::DragFloat("Ozone Layer Width", &RtxAtmosphere::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
 
-          RemixGui::DragFloat("Multiscatter Physical Strength", &RtxOptions::multiScatterPhysicalStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Multiscatter Physical Strength", &RtxAtmosphere::multiScatterPhysicalStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "0 = artistic multiscattering (analytical inline fit; preset color stays faithful, easy to style). "
               "1 = physical multiscattering (Hillaire-style LUT hemisphere integration; wavelength-amplifies each preset's "
@@ -1307,19 +840,19 @@ namespace fork_hooks {
           // Artistic sunset color controls (fork — 2026-06-14). Recover the
           // sunset warmth/saturation lost when reddening moved onto the physical
           // two-term LUT model; both feed the sky-view LUT so clouds inherit them.
-          RemixGui::DragFloat("Multiscatter Strength", &RtxOptions::multiScatterStrengthObject(), 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Multiscatter Strength", &RtxAtmosphere::multiScatterStrengthObject(), 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Global scale on the multiscattering 'fill' term. The physical model adds a broadband (pale-blue) "
               "multiscatter term that desaturates warm sunset color. Lower (e.g. 0.3-0.6) to let warm single-scatter "
               "dominate for a punchier sunset; 1.0 = physical. Feeds the sky-view LUT, so clouds inherit it.");
 
-          RemixGui::DragFloat("Sunset Saturation", &RtxOptions::sunsetSaturationObject(), 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Sunset Saturation", &RtxAtmosphere::sunsetSaturationObject(), 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Saturation boost on sky radiance, ramped in only as the sun nears the horizon (midday sky untouched). "
               ">1 amplifies the warm horizon hues the physical model renders accurately but undersaturated; 1.0 = no change. "
               "Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
 
-          RemixGui::DragFloat("Sky Indirect Scale", &RtxOptions::skyIndirectRadianceScaleObject(), 0.01f, 0.0f, 20.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Sky Indirect Scale", &RtxAtmosphere::skyIndirectRadianceScaleObject(), 0.01f, 0.0f, 20.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Multiplier for sky radiance gathered by diffuse indirect bounces only. 1.0 = physical. "
               "Raise it to brighten diffuse sky fill (the distant-light sun out-radiates the sky, so indirect "
@@ -1349,10 +882,10 @@ namespace fork_hooks {
 
       // ----- Night Sky tree (fork, restructured) -----
       if (ImGui::TreeNode("Night Sky")) {
-        RemixGui::DragFloat("Night Sky Brightness", &RtxOptions::nightSkyBrightnessObject(),
+        RemixGui::DragFloat("Night Sky Brightness", &RtxAtmosphere::nightSkyBrightnessObject(),
                             0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Airglow / ambient night-sky brightness.");
-        RemixGui::ColorEdit3("Night Sky Color", &RtxOptions::nightSkyColorObject());
+        RemixGui::ColorEdit3("Night Sky Color", &RtxAtmosphere::nightSkyColorObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Tint of the ambient night-sky / airglow contribution. Magnitude is set by Night Sky Brightness above.");
 
@@ -1384,20 +917,20 @@ namespace fork_hooks {
       // in code and .conf-tunable — each removal site carries a dated
       // comment naming the option.
       if (ImGui::TreeNode("Clouds")) {
-        RemixGui::Checkbox("Enable Clouds", &RtxOptions::cloudEnabledObject());
+        RemixGui::Checkbox("Enable Clouds", &RtxAtmosphere::cloudEnabledObject());
 
         // Conditional-disable gates (fork — 2026-06-15, cloud UI rework). Controls
         // that the shader only consumes in a given mode are greyed (not hidden) so
         // they stay discoverable but can't be dragged when inert.
-        const bool layer2On  = RtxOptions::cloudLayer2Enable();
+        const bool layer2On  = RtxAtmosphere::cloudLayer2Enable();
 
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
         if (ImGui::TreeNode("Basic")) {
-          RemixGui::DragFloat("Coverage", &RtxOptions::cloudCoverageMeanObject(),
+          RemixGui::DragFloat("Coverage", &RtxAtmosphere::cloudCoverageMeanObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How much of the sky has clouds. 0 = clear, 1 = overcast.");
-          RemixGui::DragFloat("Cloud Type", &RtxOptions::cloudTypeMeanObject(),
+          RemixGui::DragFloat("Cloud Type", &RtxAtmosphere::cloudTypeMeanObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Erosion character of the clouds: 0 = wispy / stratiform "
@@ -1405,19 +938,19 @@ namespace fork_hooks {
               "model, vertical cloud shape comes from the baked bodies - this "
               "styles how they are carved, it no longer re-profiles "
               "stratus -> cumulus.)");
-          RemixGui::DragFloat("Density", &RtxOptions::cloudDensityObject(),
+          RemixGui::DragFloat("Density", &RtxAtmosphere::cloudDensityObject(),
                               0.05f, 0.0f, 4.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Cloud opacity. Higher = thicker / darker clouds.");
-          RemixGui::DragFloat("Altitude", &RtxOptions::cloudAltitudeObject(),
+          RemixGui::DragFloat("Altitude", &RtxAtmosphere::cloudAltitudeObject(),
                               0.1f, 0.5f, 12.0f, "%.1f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Cloud layer altitude (km above the ground).");
-          RemixGui::DragFloat("Depth", &RtxOptions::cloudThicknessObject(),
+          RemixGui::DragFloat("Depth", &RtxAtmosphere::cloudThicknessObject(),
                               0.05f, 0.1f, 5.0f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Vertical depth of the cloud layer in km.");
-          RemixGui::ColorEdit3("Color", &RtxOptions::cloudColorObject());
+          RemixGui::ColorEdit3("Color", &RtxAtmosphere::cloudColorObject());
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Base cloud albedo (RGB). Click the swatch for a color picker.");
           ImGui::TreePop();
@@ -1434,14 +967,14 @@ namespace fork_hooks {
         // (Interior Texture / HF Detail / Fine Detail were demoted earlier
         // the same day — ship-at-0 / unreachable-in-normal-play.)
         if (ImGui::TreeNode("Shape")) {
-          RemixGui::DragFloat("Shape Variety", &RtxOptions::nubis3ShapeVarietyKmObject(),
+          RemixGui::DragFloat("Shape Variety", &RtxAtmosphere::nubis3ShapeVarietyKmObject(),
                               0.01f, 0.0f, 1.5f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Mid-frequency (~2.4 km) push/pull of the whole body surface — "
               "lobes, notches and full splits that break round singular "
               "blobs into varied cloud clusters (the GT7 mid-band role). "
               "Live, no rebake. Higher costs some empty-space-skip perf.");
-          RemixGui::DragFloat("Lighting LOD", &RtxOptions::cloudLightingLodThresholdObject(),
+          RemixGui::DragFloat("Lighting LOD", &RtxAtmosphere::cloudLightingLodThresholdObject(),
                               0.002f, 0.0f, 0.25f, "%.3f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Skips the expensive Sun Shadow (Near) refinement and the moon "
@@ -1450,18 +983,18 @@ namespace fork_hooks {
               "Recovers most of Sun Shadow (Near)'s cost while keeping the "
               "lobe shading where it is actually visible. Raise until crevice "
               "contrast or edges visibly soften, then back off. 0 = off.");
-          RemixGui::DragFloat("Edge Wisp Cut", &RtxOptions::nubis3EdgeErosionObject(),
+          RemixGui::DragFloat("Edge Wisp Cut", &RtxAtmosphere::nubis3EdgeErosionObject(),
                               0.02f, 0.0f, 3.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Extra erosion shaped by the wispy noise, concentrated at the "
               "silhouette — cuts trailing wisp shapes out of cloud edges. "
               "Billowy cores keep rounded edges. 0 = off.");
-          RemixGui::DragFloat("Erosion Strength", &RtxOptions::nubis3ErosionStrengthObject(),
+          RemixGui::DragFloat("Erosion Strength", &RtxAtmosphere::nubis3ErosionStrengthObject(),
                               0.02f, 0.0f, 2.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Wispy/billowy erosion of the body profile. 0 = smooth SDF "
               "blobs; 1 = paper-faithful; higher = ragged carved clouds.");
-          RemixGui::DragFloat("Body Erosion", &RtxOptions::nvdfBodyErosionStrengthObject(),
+          RemixGui::DragFloat("Body Erosion", &RtxAtmosphere::nvdfBodyErosionStrengthObject(),
                               0.02f, 0.0f, 1.5f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "3D noise carve baked into the cloud BODIES (the anti-blobby "
@@ -1469,13 +1002,13 @@ namespace fork_hooks {
               "columns bake in overhangs, notches and lumps instead of "
               "convex blobs. 0 = smooth bodies. Re-bakes the SDF on change "
               "(amortized, ~6 frames).");
-          RemixGui::DragFloat("Cloud Cell Size", &RtxOptions::cloudCellSizeKmObject(),
+          RemixGui::DragFloat("Cloud Cell Size", &RtxAtmosphere::cloudCellSizeKmObject(),
                               0.05f, 0.5f, 6.0f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Average footprint of a cloud cluster in km. Smaller = many "
               "small clouds; larger = fewer, broader cloud banks. Re-bakes "
               "the placement map live on change.");
-          RemixGui::DragFloat("Profile Depth", &RtxOptions::nvdfProfileDepthKmObject(),
+          RemixGui::DragFloat("Profile Depth", &RtxAtmosphere::nvdfProfileDepthKmObject(),
                               0.02f, 0.1f, 3.0f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Depth into the body over which the dimensional profile ramps "
@@ -1502,7 +1035,7 @@ namespace fork_hooks {
         //    master stays in Lighting, and it remains a weather-preset
         //    field). Cloud Cell Size moved to Shape.
         if (ImGui::TreeNode("Detail")) {
-          RemixGui::DragFloat("Detail Shading", &RtxOptions::cloudMicroAoStrengthObject(),
+          RemixGui::DragFloat("Detail Shading", &RtxAtmosphere::cloudMicroAoStrengthObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Shades the carved detail: grown knuckles brighten, carved "
@@ -1513,7 +1046,7 @@ namespace fork_hooks {
         }
 
         if (ImGui::TreeNode("Lighting")) {
-          RemixGui::DragFloat("Forward Scatter", &RtxOptions::cloudPhaseG1Object(),
+          RemixGui::DragFloat("Forward Scatter", &RtxAtmosphere::cloudPhaseG1Object(),
                               0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Strength of the silver-lining glow when looking toward the sun. "
@@ -1521,19 +1054,19 @@ namespace fork_hooks {
           // Glow Spread (cloudPhaseG2, secondary HG lobe) demoted to
           // conf-only 2026-07-17 (preset-tunability pass): subtle envelope
           // shaping under the Forward Scatter master.
-          RemixGui::DragFloat("Multi-Scatter", &RtxOptions::cloudMsScaleObject(),
+          RemixGui::DragFloat("Multi-Scatter", &RtxAtmosphere::cloudMsScaleObject(),
                               0.05f, 0.0f, 2.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Extinction scale on the multi-scatter body lobe. 1.0 = Nubis "
               "Cubed paper baseline; HIGHER = darker sun-shadowed bulk (more "
               "shading contrast), LOWER = brighter, flatter body fill. (Tooltip "
               "direction fixed 2026-07-14.)");
-          RemixGui::DragFloat("Ground Shadow", &RtxOptions::cloudShadowStrengthObject(),
+          RemixGui::DragFloat("Ground Shadow", &RtxAtmosphere::cloudShadowStrengthObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How strongly clouds cast shadows on terrain. 0 = no cloud "
               "shadows, 1 = full voxel-grid cumulus-shaped shadow patches.");
-          RemixGui::DragFloat("Bottom Darkening", &RtxOptions::cloudBottomDarkeningObject(),
+          RemixGui::DragFloat("Bottom Darkening", &RtxAtmosphere::cloudBottomDarkeningObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Overall strength of the cloud-underside darkening. Scales the "
@@ -1546,7 +1079,7 @@ namespace fork_hooks {
               "(per-preset: Weather > Clouds > Lighting > Underside Shading).");
           // Dramatic-shading pass (fork — 2026-07-14): D_sun-keyed attenuation
           // of the sky-ambient fill, the contrast axis the flat ambient lacked.
-          RemixGui::DragFloat("Ambient Shadowing", &RtxOptions::cloudAmbientShadowStrengthObject(),
+          RemixGui::DragFloat("Ambient Shadowing", &RtxAtmosphere::cloudAmbientShadowStrengthObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How much sun-shadow depth darkens the cloud's ambient fill. The "
@@ -1556,7 +1089,7 @@ namespace fork_hooks {
               "ambient - the dramatic high-contrast cumulus read. Sky Fill is "
               "exempt (it is the underside floor). 0 = off (flat legacy "
               "ambient).");
-          RemixGui::DragFloat("Sky Fill", &RtxOptions::cloudSkyAmbientFillObject(),
+          RemixGui::DragFloat("Sky Fill", &RtxAtmosphere::cloudSkyAmbientFillObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How strongly cloud undersides pick up the open sky around them. "
@@ -1580,12 +1113,12 @@ namespace fork_hooks {
         // composes smoothly here rather than snapping the field. Rates are
         // independent (no cross-coupling). Any speed at 0 freezes that part.
         if (ImGui::TreeNode("Cloud Motion")) {
-          dragSpeedKmSAsMS("Wind Speed", &RtxOptions::cloudWindSpeedObject(),
+          dragSpeedKmSAsMS("Wind Speed", &RtxAtmosphere::cloudWindSpeedObject(),
                            0.5f, 0.0f, 1000.0f, sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How fast the whole cloud field drifts across the sky (m/s). "
               "Real decks drift ~5-30 m/s. (Stored as km/s in the conf.)");
-          RemixGui::DragFloat("Wind Direction", &RtxOptions::cloudWindDirectionObject(),
+          RemixGui::DragFloat("Wind Direction", &RtxAtmosphere::cloudWindDirectionObject(),
                               1.0f, 0.0f, 360.0f, "%.1f deg", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Compass direction the wind blows toward in degrees. "
@@ -1593,7 +1126,7 @@ namespace fork_hooks {
 
           ImGui::Separator();
 
-          dragSpeedKmSAsMS("Morph Speed", &RtxOptions::cloudEvolutionSpeedObject(),
+          dragSpeedKmSAsMS("Morph Speed", &RtxAtmosphere::cloudEvolutionSpeedObject(),
                            0.1f, 0.0f, 50.0f, sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How fast the carved cloud detail churns in place (m/s), "
@@ -1618,7 +1151,7 @@ namespace fork_hooks {
         // transient scene sphere light, driven by the RtxAtmosphere strike
         // scheduler.
         if (ImGui::TreeNode("Lightning")) {
-          RemixGui::Checkbox("Enable Lightning", &RtxOptions::lightningEnableObject());
+          RemixGui::Checkbox("Enable Lightning", &RtxAtmosphere::lightningEnableObject());
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Master switch (on by default). Lightning only actually fires "
               "when Strikes Per Minute > 0 - raised automatically by storm "
@@ -1632,32 +1165,32 @@ namespace fork_hooks {
               "Fire one strike right now (requires Enable Lightning; works "
               "at 0 strikes/min). Handy for tuning intensities without "
               "waiting on the random schedule.");
-          RemixGui::DragFloat("Strikes Per Minute", &RtxOptions::lightningStrikesPerMinuteObject(),
+          RemixGui::DragFloat("Strikes Per Minute", &RtxAtmosphere::lightningStrikesPerMinuteObject(),
                               0.1f, 0.0f, 60.0f, "%.1f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Mean strike rate. Gaps are randomized so strikes cluster and "
               "lull like a real storm. 0 = no automatic strikes. The weather "
               "presets drive this while active (thunderstorm 12, rainstorm "
               "4) - manual edits will be overridden during a preset blend.");
-          RemixGui::DragFloat("Cloud Flash Brightness", &RtxOptions::lightningFlashIntensityObject(),
+          RemixGui::DragFloat("Cloud Flash Brightness", &RtxAtmosphere::lightningFlashIntensityObject(),
                               1.0f, 0.0f, 1000.0f, "%.0f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Radiance of the glow inside the cloud deck. The flash competes "
               "with direct sunlight - day storms need much more than night "
               "ones.");
-          RemixGui::DragFloat("Scene Flash Brightness", &RtxOptions::lightningSceneLightIntensityObject(),
+          RemixGui::DragFloat("Scene Flash Brightness", &RtxAtmosphere::lightningSceneLightIntensityObject(),
                               10.0f, 0.0f, 100000.0f, "%.0f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Radiance of the transient light that flashes the ground / "
               "scene, independent of the in-cloud glow. 0 = cloud-only "
               "lightning.");
-          RemixGui::DragFloat("Max Strike Distance", &RtxOptions::lightningRangeKmObject(),
+          RemixGui::DragFloat("Max Strike Distance", &RtxAtmosphere::lightningRangeKmObject(),
                               0.1f, 1.5f, 30.0f, "%.1f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How far from the camera strikes may land. Distant strikes "
               "read as horizon sheet-lightning; near ones light the ground "
               "hard.");
-          RemixGui::ColorEdit3("Flash Color", &RtxOptions::lightningColorObject());
+          RemixGui::ColorEdit3("Flash Color", &RtxAtmosphere::lightningColorObject());
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Flash tint for both the in-cloud glow and the scene flash. "
               "Default is a cool blue-white.");
@@ -1666,33 +1199,33 @@ namespace fork_hooks {
 
         if (ImGui::TreeNode("Layer 2")) {
           RemixGui::Checkbox("Enable Layer 2",
-                             &RtxOptions::cloudLayer2EnableObject());
+                             &RtxAtmosphere::cloudLayer2EnableObject());
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Adds a second high-altitude cloud deck on top of the main "
               "layer. Off by default. Voxel-grid terrain shadows still come "
               "from layer 1 only.");
           ImGui::BeginDisabled(!layer2On);
-          RemixGui::DragFloat("Layer 2 Altitude", &RtxOptions::cloudLayer2AltitudeObject(),
+          RemixGui::DragFloat("Layer 2 Altitude", &RtxAtmosphere::cloudLayer2AltitudeObject(),
                               0.1f, 0.5f, 20.0f, "%.1f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Layer-2 altitude in km. Default 7.5 km targets the cirrus band.");
-          RemixGui::DragFloat("Layer 2 Depth", &RtxOptions::cloudLayer2ThicknessObject(),
+          RemixGui::DragFloat("Layer 2 Depth", &RtxAtmosphere::cloudLayer2ThicknessObject(),
                               0.05f, 0.05f, 3.0f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Vertical depth of the layer-2 slab. Cirrus is thin - default 0.5 km.");
-          RemixGui::DragFloat("Layer 2 Coverage", &RtxOptions::cloudLayer2CoverageMeanObject(),
+          RemixGui::DragFloat("Layer 2 Coverage", &RtxAtmosphere::cloudLayer2CoverageMeanObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How much of the sky has layer-2 clouds. Defaults sparser than "
               "layer 1 so cirrus reads as patches, not overcast.");
-          RemixGui::DragFloat("Layer 2 Cloud Type", &RtxOptions::cloudLayer2TypeMeanObject(),
+          RemixGui::DragFloat("Layer 2 Cloud Type", &RtxAtmosphere::cloudLayer2TypeMeanObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Cloud type for layer 2. Low values (~0.05) read as stratiform "
               "wisps - appropriate for cirrus.");
           // Layer 2 Type Spread (cloudLayer2TypeSpread) demoted to conf-only
           // 2026-07-17 (preset-tunability pass).
-          RemixGui::DragFloat("Layer 2 Density", &RtxOptions::cloudLayer2DensityScaleObject(),
+          RemixGui::DragFloat("Layer 2 Density", &RtxAtmosphere::cloudLayer2DensityScaleObject(),
                               0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Per-step density multiplier for layer 2 only. Lower values keep "
@@ -1700,7 +1233,7 @@ namespace fork_hooks {
           // Layer 2 Step Floor / Max Steps (cloudLayer2StepFloor /
           // cloudLayer2StepMax) demoted to conf-only 2026-07-17
           // (preset-tunability pass): march-quality internals.
-          RemixGui::ColorEdit3("Layer 2 Color", &RtxOptions::cloudLayer2ColorObject());
+          RemixGui::ColorEdit3("Layer 2 Color", &RtxAtmosphere::cloudLayer2ColorObject());
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Base color (albedo) of the echo deck, independent of the main "
               "cloud Color. Defaults to the same near-white; tint it to "
@@ -1711,20 +1244,20 @@ namespace fork_hooks {
         }
 
         if (ImGui::TreeNode("Performance")) {
-          RemixGui::Checkbox("Fast Cloud Reflections", &RtxOptions::cloudSecondaryLutEnableObject());
+          RemixGui::Checkbox("Fast Cloud Reflections", &RtxAtmosphere::cloudSecondaryLutEnableObject());
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Reflections and indirect light sample a small per-frame cloud "
               "lookup table instead of re-marching the cloud volume per ray. "
               "Large performance win on cloudy skies; reflected clouds also "
               "match the main sky exactly. Uncheck to restore the legacy "
               "per-ray cloud march for comparison.");
-          RemixGui::DragFloat("Cloud Render Scale", &RtxOptions::cloudRenderResolutionScaleObject(),
+          RemixGui::DragFloat("Cloud Render Scale", &RtxAtmosphere::cloudRenderResolutionScaleObject(),
                               0.05f, 0.25f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Resolution of the cloud render relative to the internal render "
               "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
               "slightly softer); 1.0 = native (legacy). Applies live.");
-          RemixGui::DragFloat("Temporal Smoothing", &RtxOptions::cloudHistoryWeightObject(),
+          RemixGui::DragFloat("Temporal Smoothing", &RtxAtmosphere::cloudHistoryWeightObject(),
                               0.005f, 0.0f, 0.98f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "EMA history weight of the cloud temporal smoother. Higher = "
@@ -1732,7 +1265,7 @@ namespace fork_hooks {
               "lower = crisper detail with more visible per-frame jitter. "
               "0 = raw jittered march (no temporal blend). 0.92 = previous "
               "hardcoded behavior. Applies live.");
-          RemixGui::DragFloat("Cloud Sample Spacing", &RtxOptions::cloudViewStepKmObject(),
+          RemixGui::DragFloat("Cloud Sample Spacing", &RtxAtmosphere::cloudViewStepKmObject(),
                               0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Distance between cloud samples along each view ray, in km. "
@@ -1747,7 +1280,7 @@ namespace fork_hooks {
               "to restore the legacy fixed march (banding returns). "
               "Cloud Render Scale above also directly offsets this cost. "
               "Applies live.");
-          RemixGui::DragInt("Max Cloud Samples", &RtxOptions::cloudViewSamplesMaxObject(),
+          RemixGui::DragInt("Max Cloud Samples", &RtxAtmosphere::cloudViewSamplesMaxObject(),
                             1.0f, 32, 256, "%d", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Hard cap on cloud samples per ray -- the performance governor "

@@ -2873,7 +2873,7 @@ namespace dxvk {
 
       if (RemixGui::CollapsingHeader("Sky Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
-        fork_hooks::showAtmosphereUI();
+        fork_hooks::showAtmosphereUI(ctx->getCommonObjects()->getSceneManager().getWeatherBlender());
         RemixGui::InputInt("First N Untextured Draw Calls", &RtxOptions::skyDrawcallIdThresholdObject(), 1, 1, 0);
         RemixGui::SliderFloat("Sky Min Z Threshold", &RtxOptions::skyMinZThresholdObject(), 0.0f, 1.0f);
         skyAutoDetectCombo.getKey(&RtxOptions::skyAutoDetectObject());

@@ -24,11 +24,12 @@
 // Precomputes transmittance from any point in atmosphere looking in any direction
 
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#include "rtx/pass/atmosphere/transmittance_lut_binding_indices.h"
 
-layout(binding = 0)
+layout(binding = TRANSMITTANCE_LUT_ATMOSPHERE_ARGS)
 ConstantBuffer<AtmosphereArgs> atmosphereArgs;
 
-layout(binding = 1, rgba16f)
+layout(binding = TRANSMITTANCE_LUT_OUTPUT, rgba16f)
 RWTexture2D<float4> transmittanceLutOutput;
 
 // Compute transmittance along a ray through the atmosphere

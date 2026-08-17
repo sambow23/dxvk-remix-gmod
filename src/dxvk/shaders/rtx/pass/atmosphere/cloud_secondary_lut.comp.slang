@@ -41,9 +41,7 @@
 // SAME clouds the primary rays see. rtx.atmosphere.cloudSecondaryLutEnable = 0
 // disables this branch, making secondary sky-miss rays cloudless.
 //
-// Jitter is per-texel and frame-constant (fastJitter at frame index 0) so
-// the LUT is temporally stable — secondary-ray consumers have no temporal
-// accumulation to hide refresh shimmer behind.
+// Jitter is per-texel and frame-constant so the LUT is temporally stable.
 
 #define ATMOSPHERE_AVAILABLE
 
@@ -67,7 +65,7 @@ layout(binding = 4)
 Texture3D<float> AtmosphereCloudDAmbient;
 
 layout(binding = 5)
-Texture2DArray<float2> AtmosphereFastNoise;
+Texture2DArray<float> BlueNoise;
 
 layout(binding = 6, rgba16f)
 RWTexture2D<float4> cloudSecondaryLutOutput;
