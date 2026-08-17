@@ -45,12 +45,8 @@ using remixapi_LightHandle = struct remixapi_LightHandle_T*;
 // Only the implementation files that call device-path hooks include it directly.
 namespace dxvk { class D3D9DeviceEx; }
 
-// RaytraceArgs (for updateAtmosphereConstants) and Resources::RaytracingOutput
-// (for dispatchScreenOverlay) both require the full type to appear in a function
-// declaration. rtx_resources.h is the canonical header for both; it is already
-// pulled transitively by most translation units that include rtx_fork_hooks.h.
+// Resources::RaytracingOutput is used by the screen-overlay hooks.
 #include "rtx_resources.h"
-#include "rtx/pass/raytrace_args.h"
 
 // Tonemap shader args structs (ToneMappingApplyToneMappingArgs)
 // needed by fork_hooks::populateTonemapOperatorArgs.
@@ -71,53 +67,9 @@ namespace dxvk {
   struct LegacyMaterialData;
   struct RtLight;
   struct TextureRef;
-  namespace fork_weather { class WeatherBlender; }
 
   namespace fork_hooks {
 
-    // Sets constants.skyMode, detects sky mode transitions (clearing skybox
-    // buffers when switching to Numos), and when Numos is active calls
-    // initialize / computeLuts and writes atmosphereArgs into the constant block.
-    // NOTE: requires RtxContext to declare this as a friend for access to private
-    // members m_lastSkyMode, m_skyColorFormat, and m_skyRtColorFormat.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants);
-
-    // Ensures the atmosphere is initialized (idempotent) and binds all
-    // atmosphere LUT textures unconditionally, because they are declared in
-    // common_bindings.slangh for all shader passes.
-    // No private-member access — uses public getCommonObjects() / getDevice().
-    // Implementation in rtx_fork_atmosphere.cpp.
-    void bindAtmosphereLuts(RtxContext& ctx);
-
-    // Returns true when the caller should skip rasterized sky rendering because
-    // Numos mode is active.
-    // No private-member access — uses only the public RtxOptions::skyMode() API.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    bool injectRtxAtmosphereSkySkip();
-
-    // Per-frame cloud-occluded sky-ambient transmittance LUT. Ensures the
-    // atmosphere is initialized (idempotent) so the resource is always valid
-    // after the call. Used by the debug view to bind the LUT for diagnostic
-    // passes. No private-member access.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    Resources::Resource getCloudSkyTransmittanceLut(RtxContext& ctx);
-
-    // Nubis Cubed cloud voxel grids (D_sun = sun optical depth, D_ambient =
-    // zenith optical depth). Same initialization contract as above.
-    // No private-member access. Implementation in rtx_fork_atmosphere.cpp.
-    Resources::Resource getCloudDSun(RtxContext& ctx);
-    Resources::Resource getCloudDAmbient(RtxContext& ctx);
-
-    // Published cloud NVDF body SDF (Nubis3 Phase A). Same initialization
-    // contract. No private-member access.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    Resources::Resource getCloudNvdfSdf(RtxContext& ctx);
-
-    // Per-frame Nubis Cubed screen-space cloud render RT. Valid only after
-    // the first updateAtmosphereConstants pass runs ensureCloudRenderRT.
-    // No private-member access. Implementation in rtx_fork_atmosphere.cpp.
-    Resources::Resource getCloudRenderRT(RtxContext& ctx);
 
     // Checks for a USD mesh/light replacement keyed on the API mesh handle hash.
     // Returns the replacement vector if one exists, null otherwise.
@@ -224,13 +176,6 @@ namespace dxvk {
       DxvkDevice* device,
       uint64_t externalId);
 
-    // Per-frame weather preset blender update. Reads __weather.target and
-    // __weather.blend_seconds from the GameStateStore and writes blended weather
-    // params to the Derived layer of their underlying RTX_OPTIONs. Dormant when
-    // no target is set — zero behavioural change vs upstream.
-    // No private-member access — reaches the blender via ctx.getSceneManager().getWeatherBlender().
-    // Implementation in rtx_fork_weather.cpp.
-    void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds);
 
     // Emplaces a new external light into m_externalLights and stamps
     // frameLastTouched. Called from the "new light" branch of addExternalLight.
@@ -279,13 +224,6 @@ namespace dxvk {
     // Implementation in rtx_fork_overlay.cpp.
     void imguiContextPin(struct ImGuiContext* ctx, struct ImPlotContext* plotCtx);
 
-    // Renders the atmosphere preset buttons and parameter tree inside the
-    // "Sky Tuning" collapsing header. Owns the skyModeCombo static and branches
-    // on SkyMode::Numos vs SkyboxRasterization. Passes blender through to
-    // showWeatherUI so the weather panel can reach the per-scene instance.
-    // No private-member access — uses only public RtxOptions and ImGui APIs.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    void showAtmosphereUI(fork_weather::WeatherBlender* blender);
 
     // Invokes the registered plugin draw callback for the Plugin tab in the dev
     // menu. Called from the kTab_Wrapper switch case in ImGUI::showMainMenu.
@@ -492,12 +430,6 @@ namespace dxvk {
     // Implementation in rtx_fork_tonemap.cpp.
     void showTonemapOperatorUI();
 
-    // Renders the weather preset UI inside the existing atmosphere ImGui tree.
-    // Includes preset dropdown, blend duration slider, current/target/progress
-    // display, "Pause Weather Blender" toggle, and per-preset slider sub-trees.
-    // No private-member access.
-    // Implementation in rtx_fork_weather.cpp.
-    void showWeatherUI(fork_weather::WeatherBlender* blender);
 
     // --- FSR 3.1 upscaling, RCAS sharpening and frame generation -------------
     //
@@ -593,20 +525,6 @@ namespace dxvk {
     // upscaler; the option itself lives at rtx.sharpening.sharpness.
     // Implementation in rtx_fork_upscaler_ui.cpp.
     void showSharedSharpnessSlider();
-    // Submits the weather precipitation emitter (rain / snow / blowing sand) for
-    // this frame. Called from RtxContext::injectRTX immediately BEFORE
-    // SceneManager::prepareSceneData, which is where the particle simulation
-    // runs — submitting after it would lose this frame's spawn contexts.
-    // Dormant unless rtx.weather.precipitation.intensity is non-zero, which the
-    // weather blender drives from the per-preset precipitation fields.
-    // No private-member access. Implementation in rtx_fork_precipitation.cpp.
-    void submitPrecipitation(class RtxContext& ctx);
-
-    // Renders the global (non-per-preset) precipitation controls — budget, spawn
-    // volume, collision. The per-preset look values are generated into the
-    // weather preset editor automatically by WEATHER_PRESET_FIELD_LIST.
-    // No private-member access. Implementation in rtx_fork_precipitation.cpp.
-    void showPrecipitationUI();
 
   } // namespace fork_hooks
 

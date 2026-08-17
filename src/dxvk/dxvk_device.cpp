@@ -541,8 +541,10 @@ namespace dxvk {
     m_textureManager { std::make_unique<RtxTextureManager>(device) },
     m_imgui(device),
     m_dummyResources(device),
+    // NV-DXVK start: Numos atmosphere and precipitation subsystems
     m_atmosphere(device),
-    m_precipitation(),
+    m_precipitation(device),
+    // NV-DXVK end
     m_globalVolumetrics(device),
     m_sparseRendering(device),
     m_pathtracerGbuffer(device),

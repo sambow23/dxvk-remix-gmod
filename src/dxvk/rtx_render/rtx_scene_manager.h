@@ -61,7 +61,7 @@ struct AssetReplacement;
 struct AssetReplacer;
 class OpacityMicromapManager;
 class TerrainBaker;
-namespace fork_weather { class WeatherBlender; }
+class WeatherBlender;
 
 // The resource cache can be *searched* by other users
 class ResourceCache {
@@ -195,7 +195,7 @@ public:
   std::unique_ptr<AssetReplacer>& getAssetReplacer() { return m_pReplacer; }
   TerrainBaker& getTerrainBaker() { return *m_terrainBaker.get(); }
 
-  fork_weather::WeatherBlender* getWeatherBlender() const { return m_weatherBlender.get(); }
+  WeatherBlender* getWeatherBlender() const { return m_weatherBlender.get(); }
 
   // Scene utility functions
   static Vector3 getSceneUp();
@@ -453,7 +453,7 @@ private:
 
   DrawCallTracker m_drawCallTracker;
 
-  std::unique_ptr<fork_weather::WeatherBlender> m_weatherBlender;
+  std::unique_ptr<WeatherBlender> m_weatherBlender;
 };
 
 }  // namespace nvvk

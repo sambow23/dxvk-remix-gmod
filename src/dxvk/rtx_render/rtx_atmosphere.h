@@ -31,12 +31,13 @@
 
 namespace dxvk {
 
-// Forward declaration for the weather override pointer (full definition in
-// rtx_fork_weather.h, included only by rtx_atmosphere.cpp).
-namespace fork_weather { struct WeatherSnapshot; }
+// Weather is scene-local transient state; the full types live in rtx_weather.h.
+struct WeatherSnapshot;
+class WeatherBlender;
 
 class DxvkContext;
 class DxvkDevice;
+class RtxContext;
 struct RtLight;
 struct LightManager;
 
@@ -48,7 +49,19 @@ public:
 
   void initialize(Rc<DxvkContext> ctx);
   void computeLuts(Rc<DxvkContext> ctx);
-  void bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipelineBindPoint);
+
+  // Advances Numos atmosphere state once for the current frame and returns the
+  // effective shader constants. Weather remains transient scene state and is
+  // never written back into RtxOptions.
+  AtmosphereArgs updateFrame(RtxContext& ctx, const WeatherSnapshot* weather, float deltaTimeSeconds);
+
+  // Binds all atmosphere/cloud resources used by ray-tracing shaders.
+  void bindResources(RtxContext& ctx);
+
+  // Sky Tuning UI. Weather-owned controls display the effective snapshot value
+  // read-only while authored RtxOptions remain untouched.
+  void showImguiSettings(WeatherBlender* blender);
+
   bool needsLutRecompute() const;
 
   Resources::Resource getTransmittanceLut() const { return m_transmittanceLut; }
@@ -114,13 +127,6 @@ public:
 
   // Inject/update sun+moon distant lights when Numos is active; drop them otherwise. Call after getAtmosphereArgs.
   void syncDistantLights(LightManager& lm, const AtmosphereArgs& args);
-
-  // Set per-frame weather override. When non-null, getAtmosphereArgs reads blended values from the snapshot.
-  // Pointer is frame-local: call before computeLuts/getAtmosphereArgs and do NOT cache across frames.
-
-  void applyWeatherOverride(const dxvk::fork_weather::WeatherSnapshot* wx) {
-    m_weatherOverride = wx;
-  }
 
     RTX_OPTION("rtx.atmosphere", float, sunSize, 0.545f, "Size of sun disc in degrees.");
     RTX_OPTION("rtx.atmosphere", float, sunShadowSoftnessDeg, 0.0f,
@@ -684,13 +690,13 @@ public:
 
     RTX_OPTION("rtx.atmosphere", float, cloudAerialHazePerKm, 0.05f,
                "Per-km haze extinction applied to cloud RADIANCE (effect A of "
-               "the aerial-perspective fork). Dims distant cloud samples "
+               "the aerial-perspective path). Dims distant cloud samples "
                "toward atmospheric color so they read as 'softer / duller "
                "with distance.' Visual softness control - does NOT prevent "
                "the horizon white wall by itself. 0 = no haze. Default 0.05.");
     RTX_OPTION("rtx.atmosphere", float, cloudAerialFadePerKm, 0.15f,
                "Per-km fade extinction applied to cloud ALPHA accumulation "
-               "(effect B of the aerial-perspective fork). Distant samples "
+               "(effect B of the aerial-perspective path). Distant samples "
                "stop piling up extinction so horizon-grazing rays don't form "
                "a solid white wall. Does NOT affect cloud appearance close to "
                "camera. 0 = no fade (legacy white-wall behavior). Default 0.05.");
@@ -893,6 +899,25 @@ public:
                "knobs with layer 1 (phase, multi-scatter, detail, etc.).");
 
 private:
+  struct ChromaticityUiState {
+    Vector3 chromaticity { 1.0f, 1.0f, 1.0f };
+    float magnitude = 0.0f;
+    Vector3 lastWrittenOpt { 0.0f, 0.0f, 0.0f };
+    bool initialized = false;
+  };
+
+  void renderChromaticityWidget(
+    const char* colorLabel,
+    const char* magLabel,
+    RtxOption<Vector3>* opt,
+    float magSpeed,
+    float magMax,
+    const char* magFormat,
+    const char* colorTooltip,
+    const char* magTooltip,
+    ChromaticityUiState& state,
+    const Vector3* weatherOverride = nullptr);
+
   void dropDistantLights();
   void createLutResources(Rc<DxvkContext> ctx);
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
@@ -1032,8 +1057,14 @@ private:
   bool m_initialized = false;
   bool m_lutsNeedRecompute = true;
 
-  // Set once per frame by applyWeatherOverride() before computeLuts; nullptr when blender is dormant.
-  const dxvk::fork_weather::WeatherSnapshot* m_weatherOverride = nullptr;
+  // Per-instance UI cache keeps transient widget state with the subsystem.
+  ChromaticityUiState m_sunIlluminanceUiState;
+  ChromaticityUiState m_rayleighScatteringUiState;
+  ChromaticityUiState m_mieScatteringUiState;
+  ChromaticityUiState m_ozoneAbsorptionUiState;
+
+  // Set by updateFrame before any atmosphere consumer runs; nullptr when the blender is dormant.
+  const WeatherSnapshot* m_weatherOverride = nullptr;
 
   RtLight* m_sunLight       = nullptr;
   RtLight* m_moonLights[MAX_MOONS] = {};

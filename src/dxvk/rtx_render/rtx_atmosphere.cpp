@@ -20,7 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx_atmosphere.h"
-#include "rtx_fork_weather.h"  // fork_weather::WeatherSnapshot — weather override pointer
+#include "rtx_weather.h"  // WeatherSnapshot — weather override pointer
 #include "rtx_utils.h"
 #include "dxvk_device.h"
 #include "dxvk_context.h"
@@ -777,7 +777,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   }
 
   // Cloud render camera basis (fork — 2026-05-12, C4). Pushed from
-  // updateAtmosphereConstants via setCloudRenderCameraBasis() before
+  // RtxAtmosphere::updateFrame via setCloudRenderCameraBasis() before
   // computeLuts runs, so the values here are this-frame-fresh. The Right /
   // Up vectors are pre-scaled by tan(halfFovX/Y) and aspect ratio so the
   // shader does just a weighted sum.
@@ -1864,11 +1864,10 @@ void RtxAtmosphere::setCloudShadowCameraPosition(const Vector3& cameraWorldPosYU
 }
 
 // Unified cloud-motion integrator (fork — 2026-06-21). Called exactly once per
-// frame from updateAtmosphereConstants. Integrates all three cloud-motion sources
+// frame from RtxAtmosphere::updateFrame. Integrates all three cloud-motion sources
 // as offset += velocity * dt into persistent members that the const
-// getAtmosphereArgs() reads. Wind velocity comes from the LIVE cloudWindSpeed /
-// cloudWindDirection — which already carry the slow weather drift (written to the
-// Derived config layer by the weather blender) — so the drift now composes
+// getAtmosphereArgs() reads. Wind velocity comes from the active WeatherSnapshot
+// when weather is running (otherwise the live RTX options), so preset drift composes
 // smoothly: a varying wind velocity eases the field instead of re-scaling/rotating
 // the whole accumulated offset the way the old `speed * timeSeconds` did. Morph
 // and boil stay independent absolute rates (no cross-coupling, by design).
@@ -1882,9 +1881,12 @@ void RtxAtmosphere::advanceCloudMotion(float dt) {
     return;
   }
 
-  // Wind advection — drift-modulated speed/direction, integrated.
-  const float windAngle = RtxAtmosphere::cloudWindDirection() * dxvk::kDegreesToRadians;
-  const float windSpeed = RtxAtmosphere::cloudWindSpeed();  // km/s
+  // Wind advection — use the active weather snapshot when present so preset
+  // values and slow drift feed the persistent cloud-motion integrator.
+  const auto* wx = m_weatherOverride;
+  const float windDirection = wx ? wx->cloudWindDirection : RtxAtmosphere::cloudWindDirection();
+  const float windAngle = windDirection * dxvk::kDegreesToRadians;
+  const float windSpeed = wx ? wx->cloudWindSpeed : RtxAtmosphere::cloudWindSpeed();  // km/s
   m_cloudAdvectOffset.x += std::cos(windAngle) * windSpeed * dt;
   m_cloudAdvectOffset.y += std::sin(windAngle) * windSpeed * dt;
 
@@ -1902,7 +1904,7 @@ void RtxAtmosphere::advanceCloudMotion(float dt) {
 }
 
 // Lightning strike scheduler (fork — 2026-07-14). Called exactly once per
-// frame from updateAtmosphereConstants (after the camera position push, so
+// frame from RtxAtmosphere::updateFrame (after the camera position push, so
 // strike placement uses this frame's camera). Owns the flicker envelope +
 // strike position that getAtmosphereArgs publishes.
 //
@@ -1965,7 +1967,7 @@ void RtxAtmosphere::advanceLightning(float dt) {
   // thunderstorm 12/min), and an armed countdown drawn at a low mid-blend
   // rate would sit on a minutes-long gap after the storm fully arrived.
   // rate 0 = manual-only (Test Strike).
-  const float rate = std::max(RtxAtmosphere::lightningStrikesPerMinute(), 0.0f);
+  const float rate = std::max(m_weatherOverride ? m_weatherOverride->lightningStrikesPerMinute : RtxAtmosphere::lightningStrikesPerMinute(), 0.0f);
   bool fire = s_lightningStrikeRequested.exchange(false);
   if (rate > 0.0f && rand01() < (rate / 60.0f) * dt) {
     fire = true;
@@ -1983,7 +1985,8 @@ void RtxAtmosphere::advanceLightning(float dt) {
     const float r = std::sqrt(kMinStrikeKm * kMinStrikeKm
                               + (maxR * maxR - kMinStrikeKm * kMinStrikeKm) * rand01());
     const float ang = rand01() * 2.0f * 3.14159265358979323846f;
-    const float strikeY = RtxAtmosphere::cloudAltitude() + 0.15f * RtxAtmosphere::cloudThickness();
+    const float cloudThicknessKm = m_weatherOverride ? m_weatherOverride->cloudThickness : RtxAtmosphere::cloudThickness();
+    const float strikeY = RtxAtmosphere::cloudAltitude() + 0.15f * cloudThicknessKm;
     m_lightningStrikePosKm = Vector3(m_cameraWorldPosYUpKm.x + std::cos(ang) * r,
                                      strikeY,
                                      m_cameraWorldPosYUpKm.z + std::sin(ang) * r);
@@ -2146,7 +2149,7 @@ void RtxAtmosphere::dispatchCloudSecondaryLut(Rc<DxvkContext> ctx) {
   // Blur mip 0 down the chain so the sky<-clouds bleed can sample a coarse
   // (wide-blurred) level (fork — 2026-06-19). Barrier mip-0 write -> mip-gen
   // read first; updateMipmap needs an RtxContext (ctx is always one here —
-  // computeLuts is called with the RtxContext, see rtx_fork_atmosphere.cpp).
+  // computeLuts is called with the RtxContext by RtxAtmosphere::updateFrame.
   ctx->emitMemoryBarrier(0,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -2262,37 +2265,140 @@ void RtxAtmosphere::ensureCloudHistoryResources(Rc<DxvkContext> ctx, const VkExt
   m_cloudHistoryExtent = extent;
 }
 
-void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipelineBindPoint) {
-  // Bind atmosphere LUT resources to the pipeline.
-  // Note: The active call site for runtime binding is bindAtmosphereLuts in
-  // rtx_fork_atmosphere.cpp; this method is available for direct use if needed.
+AtmosphereArgs RtxAtmosphere::updateFrame(RtxContext& ctx,
+                                          const WeatherSnapshot* weather,
+                                          float deltaTimeSeconds) {
+  m_weatherOverride = weather;
+
+  AtmosphereArgs args{};
+  if (RtxOptions::skyMode() != SkyMode::Numos) {
+    syncDistantLights(ctx.getSceneManager().getLightManager(), args);
+    return args;
+  }
+
+  initialize(&ctx);
+
+  // Integrators are frame state, so advance them exactly once before any LUT
+  // generation or AtmosphereArgs reads.
+  advanceCloudMotion(deltaTimeSeconds);
+
+  const RtCamera& camera = ctx.getSceneManager().getCamera();
+  const Vector3 forward = camera.getDirection(/*freecam=*/true);
+  const Vector3 right   = camera.getRight(/*freecam=*/true);
+  const Vector3 up      = camera.getUp(/*freecam=*/true);
+
+  const bool isZUp = RtxOptions::zUp();
+  auto toYUp = [isZUp](const Vector3& v) -> Vector3 {
+    return isZUp ? Vector3(v.x, v.z, v.y) : v;
+  };
+
+  const Vector3 forwardYUp = toYUp(forward);
+  const Vector3 rightYUp   = toYUp(right);
+  const Vector3 upYUp      = toYUp(up);
+
+  const float halfFovY = 0.5f * camera.getFov();
+  const float tanHalfFovY = std::tan(halfFovY);
+  const float tanHalfFovX = tanHalfFovY * camera.getAspectRatio();
+  setCloudRenderCameraBasis(
+    forwardYUp,
+    rightYUp * tanHalfFovX,
+    upYUp * tanHalfFovY,
+    static_cast<uint32_t>(ctx.getDevice()->getCurrentFrameId()));
+
+  const Vector3 cameraPosWorldUnitsYUp = toYUp(camera.getPosition(/*freecam=*/false));
+  const float sceneScaleSafe = std::max(RtxOptions::sceneScale(), 1e-5f);
+  const float kmPerWorldUnit = 1.0f / (100000.0f * sceneScaleSafe);
+  setCloudShadowCameraPosition(cameraPosWorldUnitsYUp * kmPerWorldUnit);
+
+  // Placement uses this frame's camera position and the active weather snapshot.
+  advanceLightning(deltaTimeSeconds);
+
+  const VkExtent3D downscaledExtent3D = ctx.getResourceManager().getDownscaleDimensions();
+  ensureCloudRenderRT(&ctx, VkExtent2D { downscaledExtent3D.width, downscaledExtent3D.height });
+
+  computeLuts(&ctx);
+  args = getAtmosphereArgs();
+  syncDistantLights(ctx.getSceneManager().getLightManager(), args);
+  return args;
+}
+
+void RtxAtmosphere::bindResources(RtxContext& ctx) {
+  initialize(&ctx);
+
   if (m_transmittanceLut.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_TRANSMITTANCE_LUT, m_transmittanceLut.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_TRANSMITTANCE_LUT, m_transmittanceLut.view, nullptr);
   }
   if (m_multiscatteringLut.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_MULTISCATTERING_LUT, m_multiscatteringLut.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_MULTISCATTERING_LUT, m_multiscatteringLut.view, nullptr);
   }
   if (m_skyViewLut.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, m_skyViewLut.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, m_skyViewLut.view, nullptr);
   }
   if (m_cloudSkyTransmittanceLut.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT, m_cloudSkyTransmittanceLut.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT, m_cloudSkyTransmittanceLut.view, nullptr);
   }
   if (m_cloudDSun.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_SUN, m_cloudDSun.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_SUN, m_cloudDSun.view, nullptr);
   }
   if (m_cloudDAmbient.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT, m_cloudDAmbient.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT, m_cloudDAmbient.view, nullptr);
   }
   if (m_cloudRenderRT.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_RENDER_RT, m_cloudRenderRT.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_RENDER_RT, m_cloudRenderRT.view, nullptr);
   }
   if (m_cloudSecondaryLut.isValid()) {
-    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, m_cloudSecondaryLut.view, nullptr);
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, m_cloudSecondaryLut.view, nullptr);
   }
-  // Cloud history bindings are wired in fork_hooks::bindAtmosphereLuts (the
-  // active call site) and depend on the downscaled-extent ensure step. Left
-  // unbound here to keep this method's contract minimal.
+
+  onFrameAdvanceForCloudHistory(static_cast<uint32_t>(ctx.getDevice()->getCurrentFrameId()));
+  const VkExtent3D downscaledExtent = ctx.getResourceManager().getDownscaleDimensions();
+  ensureCloudHistoryResources(&ctx, downscaledExtent);
+
+  const auto& cloudPrev = getPreviousCloudHistory();
+  const auto& cloudCurr = getCurrentCloudHistory();
+  if (cloudPrev.isValid()) {
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV, cloudPrev.view, nullptr);
+  }
+  if (cloudCurr.isValid()) {
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR, cloudCurr.view, nullptr);
+  }
+
+  const auto& cloudFrameIdPrev = getPreviousCloudHistoryFrameId();
+  const auto& cloudFrameIdCurr = getCurrentCloudHistoryFrameId();
+  if (cloudFrameIdPrev.isValid()) {
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV, cloudFrameIdPrev.view, nullptr);
+  }
+  if (cloudFrameIdCurr.isValid()) {
+    ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_CURR, cloudFrameIdCurr.view, nullptr);
+  }
+
+  // REPEAT wrapping matches the shader's frac-based tilable texcoords.
+  {
+    DxvkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.magFilter    = VK_FILTER_LINEAR;
+    samplerInfo.minFilter    = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    Rc<DxvkSampler> cloudNoiseSampler = ctx.getDevice()->createSampler(samplerInfo);
+    ctx.bindResourceSampler(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER, cloudNoiseSampler);
+  }
+
+  // REPEAT-U for azimuth wraparound; CLAMP-V prevents pole rows mixing into
+  // zenith/nadir. The secondary cloud LUT is mipmapped.
+  {
+    DxvkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.magFilter    = VK_FILTER_LINEAR;
+    samplerInfo.minFilter    = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.mipmapLodMax = VK_LOD_CLAMP_NONE;
+    Rc<DxvkSampler> skyViewSampler = ctx.getDevice()->createSampler(samplerInfo);
+    ctx.bindResourceSampler(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER, skyViewSampler);
+  }
 }
 
 namespace {

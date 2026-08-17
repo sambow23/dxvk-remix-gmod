@@ -1,13 +1,16 @@
 #pragma once
 
-// rtx_fork_weather.h — 756 RTX_OPTIONs (12 presets x 63 fields) under rtx.weather.preset.*
+// rtx_weather.h — 756 RTX_OPTIONs (12 presets x 63 fields) under rtx.weather.preset.*
 // Adding a field to WEATHER_PRESET_FIELD_LIST automatically propagates it everywhere.
+
+#include <mutex>
+#include <string>
+#include <unordered_set>
 
 #include "rtx_option.h"
 #include "../../util/util_vector.h"
 
-namespace dxvk { class ImGUI; }
-namespace dxvk { namespace fork_weather {
+namespace dxvk {
   enum WeatherFieldKind {
     WK_Scalar,      // plain float, linear lerp
     WK_Angle,       // degrees, shortest-path angular lerp
@@ -15,14 +18,14 @@ namespace dxvk { namespace fork_weather {
     WK_Color,       // Vector3 tint; componentwise lerp
     WK_Vec3,        // Vector3 radiometric; componentwise lerp
     WK_Step,        // non-interpolated (bool/enum); switch at blend midpoint
-    // Display-transform kinds (fork - 2026-07-02, UI usability). Blend math is
+    // Display-transform kinds (2026-07-02, UI usability). Blend math is
     // plain linear on the STORED value; only the widget converts units, so the
     // conf/API/shader-facing value is unchanged. For these kinds the table's
     // min/max/step/fmt columns are in DISPLAY units (they feed only the widget).
     WK_SpeedKmS,    // stored km/s; widget shows m/s
     WK_PatchPerKm,  // stored 1/km; widget shows km
   };
-} }
+}
 
 // X(type, name, defaultValue, kind, group, section, label, min, max, step, fmt)
 #define WEATHER_PRESET_FIELD_LIST(X) \
@@ -59,7 +62,7 @@ namespace dxvk { namespace fork_weather {
   X(Vector3, transmittanceColor,                 Vector3(0.999f, 0.999f, 0.999f), WK_Color,      "Volumetric Fog", "Medium",           "Transmittance Color",        0.0f,    1.0f,    0.005f,  "%.3f") \
   X(float,   transmittanceMeasurementDistanceMeters, 200.0f,                      WK_Extinction, "Volumetric Fog", "Medium",           "Transmittance Measurement Distance", 1.0f, 2000.0f, 5.0f,  "%.0f") \
   X(Vector3, singleScatteringAlbedo,             Vector3(0.999f, 0.999f, 0.999f), WK_Color,      "Volumetric Fog", "Medium",           "Single Scattering Albedo",   0.0f,    1.0f,    0.005f,  "%.3f") \
-  /* Volumetric appearance (fork - full set) */ \
+  /* Volumetric appearance (full set) */ \
   X(float, fogSunVisibilityGain, 1.0f, WK_Scalar, "Volumetric Fog", "Medium", "Fog Sun Visibility Gain", 0.0f, 4.0f, 0.05f, "%.2f") \
   X(float, volumetricConsumerGain, 0.008f, WK_Scalar, "Volumetric Fog", "Medium", "Fog Brightness Gain", 0.0f, 0.05f, 0.0005f, "%.4f") \
   X(bool, enableHeterogeneousFog, false, WK_Step, "Volumetric Fog", "Heterogeneous", "Enable Heterogeneous Fog", 0.0f, 1.0f, 1.0f, "%.0f") \
@@ -83,10 +86,10 @@ namespace dxvk { namespace fork_weather {
   X(float, depthOffset,              0.5f,  WK_Scalar, "Volumetric Fog", "Medium",        "Depth Offset",        0.0f, 1.0f,  0.01f, "%.2f") \
   X(float, noiseFieldOctaves,        2.0f,  WK_Scalar, "Volumetric Fog", "Heterogeneous", "Noise Field Number of Octaves", 1.0f, 8.0f,  1.0f,  "%.0f") \
   X(float,   volumetricAnisotropy,               0.0f,                            WK_Scalar,     "Volumetric Fog", "Medium",           "Anisotropy",                -1.0f,    1.0f,    0.01f,   "%.2f") \
-  /* Precipitation (10) — rain / snow / blowing sand particles. Drives the       */ \
-  /* rtx.weather.precipitation.* live options consumed by PrecipitationSystem    */ \
-  /* (rtx_fork_precipitation.cpp). Intensity 0 means "this weather has no        */ \
-  /* precipitation" and costs nothing.                                           */ \
+  /* Precipitation (11) — rain / snow / blowing sand particles.                  */ \
+  /* PrecipitationSystem consumes these from the effective WeatherSnapshot;      */ \
+  /* rtx.weather.precipitation.* remains the dormant/base fallback. Intensity 0  */ \
+  /* means this weather has no precipitation and costs nothing.                  */ \
   X(float,   precipitationIntensity,    0.0f,                          WK_Scalar, "Precipitation", "Amount", "Intensity",      0.0f,  1.0f,  0.01f, "%.2f") \
   X(float,   precipitationFallSpeed,    8.0f,                          WK_Scalar, "Precipitation", "Motion", "Fall Speed",     0.1f,  40.0f, 0.1f,  "%.1f m/s") \
   X(float,   precipitationWindResponse, 0.04f,                          WK_Scalar, "Precipitation", "Motion", "Wind Response",  0.0f,  4.0f,  0.02f, "%.2f") \
@@ -937,21 +940,31 @@ namespace dxvk { namespace fork_weather {
   DECLARE_WEATHER_PRESET(sandstorm)     \
   DECLARE_WEATHER_PRESET(smoggy)
 
-#include <mutex>
-#include <string>
+namespace dxvk {
 
-namespace dxvk { namespace fork_weather {
+  // Per-field ownership for the active weather snapshot. This mirrors the old
+  // Derived-layer write gates without putting transient weather state back into
+  // RtxOptions: true means weather currently owns the effective value; false
+  // means the underlying live option is authoritative.
+  struct WeatherOwnershipMask {
+#define WEATHER_PRESET_FIELD_AS_OWNERSHIP_(type, name, defaultValue, kind, group, section, label, mn, mx, step, fmt) bool name = true;
+    WEATHER_PRESET_FIELD_LIST(WEATHER_PRESET_FIELD_AS_OWNERSHIP_)
+#undef WEATHER_PRESET_FIELD_AS_OWNERSHIP_
+  };
 
-  // Plain-value copy of all 63 weather params; members auto-generated from WEATHER_PRESET_FIELD_LIST.
+  // Plain-value copy of all 63 effective weather params, plus ownership metadata
+  // for UI/debug consumers. Renderers consume only the values; ImGui can use the
+  // mask to decide whether to show a read-only weather value or the editable base
+  // RtxOption without reintroducing transient Derived-layer writes.
   struct WeatherSnapshot {
 #define WEATHER_PRESET_FIELD_AS_MEMBER_(type, name, defaultValue, kind, group, section, label, mn, mx, step, fmt) type name = defaultValue;
     WEATHER_PRESET_FIELD_LIST(WEATHER_PRESET_FIELD_AS_MEMBER_)
 #undef WEATHER_PRESET_FIELD_AS_MEMBER_
+    WeatherOwnershipMask ownership;
   };
 
   // Per-frame lerp pipeline. Setters are thread-safe (protected by m_ioMutex). Dormant when no target is set.
   class WeatherBlender {
-    friend class dxvk::ImGUI;
   public:
     WeatherBlender();
     ~WeatherBlender();
@@ -977,25 +990,14 @@ namespace dxvk { namespace fork_weather {
 #undef WEATHER_PRESET_BIND_blizzard
 #undef WEATHER_PRESET_BIND_sandstorm
 #undef WEATHER_PRESET_BIND_smoggy
-    // NOTE: WEATHER_PRESET_FIELD_LIST is intentionally NOT undef'd here — WeatherSnapshot uses it.
+    // NOTE: WEATHER_PRESET_FIELD_LIST is intentionally NOT undef'd here — snapshot/ownership structs use it.
 
-    // Setters — safe to call from any thread.
-    void setTargetPreset(const std::string& name) {
-      std::lock_guard<std::mutex> lock{ m_ioMutex };
-      m_inputTarget = name;
-    }
-    void setBlendSeconds(float seconds) {
-      std::lock_guard<std::mutex> lock{ m_ioMutex };
-      m_inputBlendSeconds = std::max(0.0f, seconds);
-    }
-    void setDriftSpeed(float speed) {
-      std::lock_guard<std::mutex> lock{ m_ioMutex };
-      m_inputDriftSpeed = std::max(0.0f, speed);
-    }
-    void setDriftIntensity(float intensity) {
-      std::lock_guard<std::mutex> lock{ m_ioMutex };
-      m_inputDriftIntensity = std::max(0.0f, intensity);
-    }
+    // Setters are safe to call from any thread. External APIs adapt into these
+    // typed methods at their boundary; the subsystem itself has no untyped KV dependency.
+    void setTargetPreset(const std::string& name);
+    void setBlendSeconds(float seconds);
+    void setDriftSpeed(float speed);
+    void setDriftIntensity(float intensity);
 
     // Getters — safe to call from any thread.
     std::string getTargetPreset()   const { std::lock_guard<std::mutex> lock{ m_ioMutex }; return m_inputTarget; }
@@ -1022,8 +1024,17 @@ namespace dxvk { namespace fork_weather {
 
     bool m_paused = false;
     bool m_editorWindowOpen = false;
-    bool  m_pinnedForTuning   = false;
+    bool m_pinnedForTuning = false;
     float m_savedDriftIntensity = 1.0f;
+
+    // Per-scene UI/runtime bookkeeping belongs to the blender, not process-global statics.
+    int   m_uiSelectedPresetIndex = 0;
+    float m_uiBlendDuration = 30.0f;
+    int   m_uiEditPresetIndex = 0;
+    char  m_uiFilter[64] = {};
+    int   m_uiAppliedPinIndex = -1;
+    int   m_uiCopyFromIndex = 0;
+    std::unordered_set<std::string> m_warnedUnknownPresets;
 
     // Drift phase advanced each frame by dt * m_driftSpeedSmoothed; smoothed values one-pole filtered (tau 1s).
     double m_driftPhaseSeconds     = 0.0;
@@ -1049,4 +1060,4 @@ namespace dxvk { namespace fork_weather {
     std::string m_outputPrevious;
   };
 
-} }  // namespace dxvk::fork_weather
+}  // namespace dxvk

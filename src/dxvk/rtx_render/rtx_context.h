@@ -61,7 +61,6 @@ namespace dxvk {
   // before the class definition is encountered.
   class RtxContext;
   namespace fork_hooks {
-    void updateAtmosphereConstants(RtxContext&, RaytraceArgs&);
     void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
     bool isFsrUpscalerActive(RtxContext&);
     void dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);
@@ -339,7 +338,6 @@ namespace dxvk {
     // Each friend corresponds to a hook that was lifted out of this class's
     // method bodies during the 2026-04-18 fork touchpoint-pattern refactor.
     // See docs/fork-touchpoints.md and rtx_fork_hooks.h for the catalogue.
-    friend void fork_hooks::updateAtmosphereConstants(RtxContext&, RaytraceArgs&);
     friend void fork_hooks::dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
     friend bool fork_hooks::isFsrUpscalerActive(RtxContext&);
     friend void fork_hooks::dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);

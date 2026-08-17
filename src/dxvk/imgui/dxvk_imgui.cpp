@@ -52,6 +52,9 @@
 #include "rtx_render/rtx_ray_reconstruction.h"
 #include "rtx_render/rtx_xess.h"
 #include "rtx_render/rtx_fork_hooks.h"
+// NV-DXVK start: Numos native weather UI
+#include "rtx_render/rtx_weather.h"
+// NV-DXVK end
 #include "rtx_render/rtx_rtxdi_rayquery.h"
 #include "rtx_render/rtx_restir_gi_rayquery.h"
 #include "rtx_render/rtx_debug_view.h"
@@ -2873,7 +2876,10 @@ namespace dxvk {
 
       if (RemixGui::CollapsingHeader("Sky Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
-        fork_hooks::showAtmosphereUI(ctx->getCommonObjects()->getSceneManager().getWeatherBlender());
+        // NV-DXVK start: Numos native atmosphere UI
+        ctx->getCommonObjects()->metaAtmosphere().showImguiSettings(
+          ctx->getCommonObjects()->getSceneManager().getWeatherBlender());
+        // NV-DXVK end
         RemixGui::InputInt("First N Untextured Draw Calls", &RtxOptions::skyDrawcallIdThresholdObject(), 1, 1, 0);
         RemixGui::SliderFloat("Sky Min Z Threshold", &RtxOptions::skyMinZThresholdObject(), 0.0f, 1.0f);
         skyAutoDetectCombo.getKey(&RtxOptions::skyAutoDetectObject());
@@ -3822,7 +3828,11 @@ namespace dxvk {
     if (RemixGui::CollapsingHeader("RTX Volumetrics (Global)", collapsingHeaderClosedFlags)) {
       ImGui::Indent();
 
-      common->metaGlobalVolumetrics().showImguiSettings();
+      // NV-DXVK start: Numos weather-aware volumetrics UI
+      const WeatherBlender* weatherBlender = common->getSceneManager().getWeatherBlender();
+      common->metaGlobalVolumetrics().showImguiSettings(
+        weatherBlender ? weatherBlender->getBlendedSnapshot() : nullptr);
+      // NV-DXVK end
 
       common->metaDustParticles().showImguiSettings();
 

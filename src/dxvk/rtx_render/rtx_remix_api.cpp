@@ -31,7 +31,8 @@
 #include "rtx_globals.h"
 #include "rtx_options.h"
 #include "rtx_debug_view.h"
-#include "rtx_fork_weather.h"
+#include "rtx_fork_game_state.h"
+#include "rtx_weather.h"
 
 #include "../dxvk_device.h"
 #include "../dxvk_objects.h"
@@ -66,6 +67,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -167,6 +171,95 @@ namespace {
 
   dxvk::D3D9DeviceEx* tryAsDxvk() {
     return s_dxvkDevice;
+  }
+
+  dxvk::WeatherBlender* getWeatherBlender(dxvk::D3D9DeviceEx* device) {
+    return device
+      ? device->GetDXVKDevice()->getCommon()->getSceneManager().getWeatherBlender()
+      : nullptr;
+  }
+
+  void applyWeatherGameValue(dxvk::WeatherBlender* blender, const char* key, const char* value) {
+    if (!blender || std::strncmp(key, "__weather.", 10) != 0) {
+      return;
+    }
+
+    const char* sub = key + 10;
+    if (std::strcmp(sub, "target") == 0) {
+      blender->setTargetPreset(value);
+      return;
+    }
+
+    char* end = nullptr;
+    const float parsed = std::strtof(value, &end);
+    if (end == value) {
+      return;
+    }
+
+    if (std::strcmp(sub, "blend_seconds") == 0) {
+      blender->setBlendSeconds(parsed);
+    } else if (std::strcmp(sub, "drift_speed") == 0) {
+      blender->setDriftSpeed(parsed);
+    } else if (std::strcmp(sub, "drift_intensity") == 0) {
+      blender->setDriftIntensity(parsed);
+    }
+  }
+
+  void applyStoredWeatherGameValues(dxvk::D3D9DeviceEx* device) {
+    dxvk::WeatherBlender* blender = getWeatherBlender(device);
+    if (!blender) {
+      return;
+    }
+
+    auto& store = dxvk::fork_game_state::GameStateStore::get();
+    const char* keys[] = {
+      "__weather.target",
+      "__weather.blend_seconds",
+      "__weather.drift_speed",
+      "__weather.drift_intensity",
+    };
+
+    for (const char* key : keys) {
+      std::string value;
+      if (store.tryGet(key, value)) {
+        applyWeatherGameValue(blender, key, value.c_str());
+      }
+    }
+  }
+
+  bool getWeatherGameValue(dxvk::D3D9DeviceEx* device, const char* key, std::string& value) {
+    dxvk::WeatherBlender* blender = getWeatherBlender(device);
+    if (!blender || std::strncmp(key, "__weather.", 10) != 0) {
+      return false;
+    }
+
+    const char* sub = key + 10;
+    if (std::strcmp(sub, "target") == 0) {
+      value = blender->getTargetPreset();
+    } else if (std::strcmp(sub, "current") == 0) {
+      value = blender->getCurrentPreset();
+    } else if (std::strcmp(sub, "previous") == 0) {
+      value = blender->getPreviousPreset();
+    } else if (std::strcmp(sub, "blend_progress") == 0) {
+      char buffer[32];
+      std::snprintf(buffer, sizeof(buffer), "%.4f", blender->getBlendProgress());
+      value = buffer;
+    } else if (std::strcmp(sub, "blend_seconds") == 0) {
+      char buffer[32];
+      std::snprintf(buffer, sizeof(buffer), "%.6f", blender->getBlendSeconds());
+      value = buffer;
+    } else if (std::strcmp(sub, "drift_speed") == 0) {
+      char buffer[32];
+      std::snprintf(buffer, sizeof(buffer), "%.6f", blender->getDriftSpeed());
+      value = buffer;
+    } else if (std::strcmp(sub, "drift_intensity") == 0) {
+      char buffer[32];
+      std::snprintf(buffer, sizeof(buffer), "%.6f", blender->getDriftIntensity());
+      value = buffer;
+    } else {
+      return false;
+    }
+    return true;
   }
 
 
@@ -1825,6 +1918,7 @@ namespace {
     }
     s_dxvkD3D9 = dxvkD3d9Ex;
     s_dxvkDevice = dxvkDevice;
+    applyStoredWeatherGameValues(dxvkDevice);
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -2514,35 +2608,13 @@ extern "C"
     if (!key || key[0] == '\0' || !value) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
-    if (strncmp(key, "__weather.", 10) != 0) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
 
-    // WeatherBlender owns its own mutex; s_mutex is deliberately NOT taken here
-    // to avoid contention on high-frequency plugin writes.
-    auto* device  = s_dxvkDevice;
-    auto* blender = device ? device->GetDXVKDevice()->getCommon()->getSceneManager().getWeatherBlender() : nullptr;
-    if (!blender) {
-      return REMIXAPI_ERROR_CODE_SUCCESS;  // device not ready; drop silently
-    }
-
-    const char* sub = key + 10;  // portion after "__weather."
-    if (strcmp(sub, "target") == 0) {
-      blender->setTargetPreset(value);
-    } else if (strcmp(sub, "blend_seconds") == 0) {
-      char* end = nullptr;
-      const float v = std::strtof(value, &end);
-      if (end != value) blender->setBlendSeconds(v);
-    } else if (strcmp(sub, "drift_speed") == 0) {
-      char* end = nullptr;
-      const float v = std::strtof(value, &end);
-      if (end != value) blender->setDriftSpeed(v);
-    } else if (strcmp(sub, "drift_intensity") == 0) {
-      char* end = nullptr;
-      const float v = std::strtof(value, &end);
-      if (end != value) blender->setDriftIntensity(v);
-    }
-    // Unrecognised sub-keys are silently dropped (forward-compat).
+    // Keep the generic Plus key/value contract intact, then adapt weather keys
+    // into the native typed subsystem when a device is available. The native
+    // WeatherBlender never depends on this untyped transport.
+    dxvk::fork_game_state::GameStateStore::get().set(
+      std::string{ key }, std::string{ value });
+    applyWeatherGameValue(getWeatherBlender(tryAsDxvk()), key, value);
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -2560,57 +2632,21 @@ extern "C"
     if (in_buffer_size > 0 && out_buffer == nullptr) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
-    if (strncmp(key, "__weather.", 10) != 0) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
 
-    // WeatherBlender owns its own mutex; s_mutex is deliberately NOT taken here
-    // to avoid contention on high-frequency reads from plugin threads.
-    auto* device  = s_dxvkDevice;
-    auto* blender = device ? device->GetDXVKDevice()->getCommon()->getSceneManager().getWeatherBlender() : nullptr;
-    if (!blender) {
-      *out_actual_size = 0;
-      return REMIXAPI_ERROR_CODE_SUCCESS;
-    }
-
-    const char* sub = key + 10;  // portion after "__weather."
     std::string value;
-    if (strcmp(sub, "target") == 0) {
-      value = blender->getTargetPreset();
-    } else if (strcmp(sub, "current") == 0) {
-      value = blender->getCurrentPreset();
-    } else if (strcmp(sub, "previous") == 0) {
-      value = blender->getPreviousPreset();
-    } else if (strcmp(sub, "blend_progress") == 0) {
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%.4f", blender->getBlendProgress());
-      value = buf;
-    } else if (strcmp(sub, "blend_seconds") == 0) {
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%.6f", blender->getBlendSeconds());
-      value = buf;
-    } else if (strcmp(sub, "drift_speed") == 0) {
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%.6f", blender->getDriftSpeed());
-      value = buf;
-    } else if (strcmp(sub, "drift_intensity") == 0) {
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%.6f", blender->getDriftIntensity());
-      value = buf;
-    } else {
-      // Unrecognised sub-key — return empty (not found).
+    const bool hasTypedWeatherValue = getWeatherGameValue(tryAsDxvk(), key, value);
+    if (!hasTypedWeatherValue
+        && !dxvk::fork_game_state::GameStateStore::get().tryGet(std::string{ key }, value)) {
       *out_actual_size = 0;
       return REMIXAPI_ERROR_CODE_SUCCESS;
     }
 
     const uint32_t needed = static_cast<uint32_t>(value.size()) + 1u;
     *out_actual_size = needed;
-
     if (in_buffer_size >= needed) {
-      memcpy(out_buffer, value.data(), value.size());
+      std::memcpy(out_buffer, value.data(), value.size());
       out_buffer[value.size()] = '\0';
     }
-
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 

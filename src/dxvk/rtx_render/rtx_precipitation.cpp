@@ -1,32 +1,4 @@
-// src/dxvk/rtx_render/rtx_fork_precipitation.cpp — weather-driven precipitation particle system.
-
-#include "rtx_fork_precipitation.h"
-#include "rtx_fork_weather.h"  // fork_weather::WeatherSnapshot — weather override pointer
-#include "rtx_atmosphere.h"
-#include "rtx_utils.h"
-#include "../../util/util_math.h"
-#include "../../util/util_vector.h"
-
-#include "rtx_fork_hooks.h"
-#include "rtx_context.h"
-#include "rtx_scene_manager.h"
-#include "rtx_asset_replacer.h"
-#include "rtx_camera.h"
-#include "rtx_options.h"
-#include "rtx_particle_system.h"
-#include "rtx_texture.h"
-#include "rtx_imgui.h"
-#include "imgui/imgui.h"
-
-#include "../dxvk_buffer.h"
-#include "../dxvk_device.h"
-#include "../dxvk_image.h"
-#include "../dxvk_util.h"
-
-#include "../../util/log/log.h"
-#include "../../util/util_global_time.h"
-#include "../../util/util_string.h"
-#include "../../util/xxHash/xxhash.h"
+// src/dxvk/rtx_render/rtx_precipitation.cpp — weather-driven precipitation particle system.
 
 #include <algorithm>
 #include <cmath>
@@ -35,7 +7,32 @@
 #include <string>
 #include <vector>
 
-namespace dxvk { namespace fork_precipitation {
+#include "imgui/imgui.h"
+
+#include "rtx_asset_replacer.h"
+#include "rtx_atmosphere.h"
+#include "rtx_camera.h"
+#include "rtx_context.h"
+#include "rtx_imgui.h"
+#include "rtx_options.h"
+#include "rtx_particle_system.h"
+#include "rtx_precipitation.h"
+#include "rtx_scene_manager.h"
+#include "rtx_texture.h"
+#include "rtx_utils.h"
+#include "rtx_weather.h"
+#include "../dxvk_buffer.h"
+#include "../dxvk_device.h"
+#include "../dxvk_image.h"
+#include "../dxvk_util.h"
+#include "../../util/log/log.h"
+#include "../../util/util_global_time.h"
+#include "../../util/util_math.h"
+#include "../../util/util_string.h"
+#include "../../util/util_vector.h"
+#include "../../util/xxHash/xxhash.h"
+
+namespace dxvk {
 
   namespace {
 
@@ -342,7 +339,7 @@ namespace dxvk { namespace fork_precipitation {
 
   // Wind borrows the atmosphere's cloud wind (same direction convention as advanceCloudMotion),
   // so rain slants the same way the sky is moving.
-  PrecipitationSystem::Params PrecipitationSystem::resolveParams(const fork_weather::WeatherSnapshot* wx) {
+  PrecipitationSystem::Params PrecipitationSystem::resolveParams(const WeatherSnapshot* wx) {
     Params params;
 
     const Vector3 up      = SceneManager::getSceneUp();
@@ -351,8 +348,10 @@ namespace dxvk { namespace fork_precipitation {
 
     const float fallSpeedMs = std::max(wx ? wx->precipitationFallSpeed : fallSpeed(), 0.05f);
 
-    const float windAngleRad = RtxAtmosphere::cloudWindDirection() * dxvk::kDegreesToRadians;
-    const float windSpeedMs  = std::max(RtxAtmosphere::cloudWindSpeed(), 0.0f) * 1000.0f;  // km/s -> m/s
+    const float windDirection = wx ? wx->cloudWindDirection : RtxAtmosphere::cloudWindDirection();
+    const float windSpeedKmS = wx ? wx->cloudWindSpeed : RtxAtmosphere::cloudWindSpeed();
+    const float windAngleRad = windDirection * dxvk::kDegreesToRadians;
+    const float windSpeedMs  = std::max(windSpeedKmS, 0.0f) * 1000.0f;  // km/s -> m/s
     const float horizontalMs = windSpeedMs * std::max(wx ? wx->precipitationWindResponse : windResponse(), 0.0f);
 
     const Vector3 windDir = right * std::cos(windAngleRad) + forward * std::sin(windAngleRad);
@@ -377,7 +376,7 @@ namespace dxvk { namespace fork_precipitation {
   // Velocities/forces in cm; positions in world units.
   // gravity = -fallSpeed * drag sets spawn velocity == terminal velocity; turbulence kicks decay back to it.
   // Drag also bleeds horizontal wind push (time constant 1/drag), so wind-driven presets use LOW drag.
-  RtxParticleSystemDesc PrecipitationSystem::buildDesc(const Params& params, const fork_weather::WeatherSnapshot* wx) {
+  RtxParticleSystemDesc PrecipitationSystem::buildDesc(const Params& params, const WeatherSnapshot* wx) {
     RtxParticleSystemDesc desc;
 
     const float speedCmS = params.speedMetersPerSec * 100.0f;
@@ -480,7 +479,7 @@ namespace dxvk { namespace fork_precipitation {
 
   // Dwell floor = maxTimeToLive/6 to bound orphan stack-up during continuous blends (otherwise slow-falling
   // snow at flat 750ms would stack ~27 systems = ~200 MB of transient VRAM). 0 disables floor (debug only).
-  const RtxParticleSystemDesc& PrecipitationSystem::refreshDesc(RtxContext& ctx, const Params& params, const fork_weather::WeatherSnapshot* wx) {
+  const RtxParticleSystemDesc& PrecipitationSystem::refreshDesc(RtxContext& ctx, const Params& params, const WeatherSnapshot* wx) {
     const uint64_t nowMs = GlobalTime::get().absoluteTimeMs();
     uint64_t intervalMs = static_cast<uint64_t>(std::max(descUpdateIntervalMs(), 0));
     if (intervalMs > 0 && m_activeDesc.has_value()) {
@@ -547,7 +546,7 @@ namespace dxvk { namespace fork_precipitation {
 
   void PrecipitationSystem::submit(RtxContext& ctx) {
     // Get blended snapshot (nullptr when blender is dormant).
-    const fork_weather::WeatherSnapshot* wx =
+    const WeatherSnapshot* wx =
       ctx.getSceneManager().getWeatherBlender()
       ? ctx.getSceneManager().getWeatherBlender()->getBlendedSnapshot()
       : nullptr;
@@ -567,19 +566,6 @@ namespace dxvk { namespace fork_precipitation {
       return;
     }
 
-    // Device recreation: drop everything so the next frame rebuilds against the new device.
-    // (Old device's Rc<>s plus "done" flags would make submitExternalDraw log errors every frame.)
-    if (m_resourceDevice != ctx.getDevice().ptr()) {
-      m_dropImage = nullptr;
-      m_dropImageView = nullptr;
-      m_quadVertexBuffer = nullptr;
-      m_quadIndexBuffer = nullptr;
-      m_materialRegistered = false;
-      m_meshRegistered = false;
-      m_activeDesc.reset();
-      m_resourceDevice = ctx.getDevice().ptr();
-    }
-
     if (!ensureResources(ctx)) {
       // ensureResources logs its own failure; don't spam per frame.
       return;
@@ -590,7 +576,32 @@ namespace dxvk { namespace fork_precipitation {
 
     DrawCallState drawCall {};
     drawCall.cameraType = CameraType::Main;
-    fork_hooks::precipitationEmitterDrawCall(drawCall, buildEmitterTransform(ctx, params));
+    DrawCallTransforms& transforms = drawCall.modifyTransformData();
+    transforms.objectToWorld = buildEmitterTransform(ctx, params);
+    transforms.textureTransform = Matrix4 {};
+    transforms.texgenMode = TexGenMode::None;
+
+    // Generated drops inherit this translucent material state from the emitter.
+    LegacyMaterialData& material = drawCall.modifyMaterialData();
+    material.alphaTestEnabled = false;
+    material.alphaTestReferenceValue = 0;
+    material.alphaTestCompareOp = VK_COMPARE_OP_ALWAYS;
+    material.blendMode.enableBlending = true;
+    material.blendMode.colorSrcFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    material.blendMode.colorDstFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    material.blendMode.colorBlendOp = VK_BLEND_OP_ADD;
+    material.blendMode.alphaSrcFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    material.blendMode.alphaDstFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    material.blendMode.alphaBlendOp = VK_BLEND_OP_ADD;
+    material.blendMode.writeMask =
+      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    material.textureColorArg1Source = RtTextureArgSource::Texture;
+    material.textureColorArg2Source = RtTextureArgSource::VertexColor0;
+    material.textureColorOperation = DxvkRtTextureOperation::Modulate;
+    material.textureAlphaArg1Source = RtTextureArgSource::Texture;
+    material.textureAlphaArg2Source = RtTextureArgSource::VertexColor0;
+    material.textureAlphaOperation = DxvkRtTextureOperation::Modulate;
+    material.isVertexColorBakedLighting = false;
     const CategoryFlags categories {};  // emitter is hidden; particle manager stamps Particle on its geometry
 
     // commitExternalGeometryToRT takes ownership via unique_ptr (upstream
@@ -632,13 +643,13 @@ namespace dxvk { namespace fork_precipitation {
     // Per-preset look values (intensity, fall speed, drop size, color, sky
     // light, ...) are edited in the Weather Preset Editor like every other
     // Numos weather field - the "Live values" tree that used to mirror them
-    // here was retired (fork - 2026-07-26) to keep this panel consistent with
+    // here was retired (2026-07-26) to keep this panel consistent with
     // how the other features present their controls: preset fields live in
     // the preset editor, only the shared non-weather knobs live here.
     ImGui::TextDisabled("Per-preset look values (amount, motion, drop look, sky\n"
                         "light) are edited in the Weather Preset Editor above.");
 
-    // Appearance overrides (fork - 2026-07-26). Unlike the tree above, these
+    // Appearance overrides (2026-07-26). Unlike the tree above, these
     // are NOT per-preset fields, so the weather blender never touches them:
     // they are the look knobs that actually stick while a preset is active.
     if (ImGui::TreeNode("Appearance overrides (stack on presets)")) {
@@ -695,7 +706,7 @@ namespace dxvk { namespace fork_precipitation {
     RemixGui::Checkbox("Stop Under Cover (ray traced)", &occludeUnderCoverObject());
     RemixGui::SetTooltipToLastWidgetOnHover(occludeUnderCoverObject().getDescription());
 
-    // Read-only occlusion diagnostics (fork - 2026-07-25). Added after the
+    // Read-only occlusion diagnostics (2026-07-25). Added after the
     // feature failed silently on its first in-game test: every CPU/GPU link
     // was provably correct from source, and what was actually wrong (the spawn
     // plane sitting BELOW the sheltering geometry because of the scene-scale /
@@ -766,46 +777,4 @@ namespace dxvk { namespace fork_precipitation {
     ImGui::TreePop();
   }
 
-} }  // namespace dxvk::fork_precipitation
-
-
-namespace dxvk { namespace fork_hooks {
-
-  void submitPrecipitation(class RtxContext& ctx) {
-    ctx.getCommonObjects()->metaPrecipitation().submit(ctx);
-  }
-
-  // Blend state here makes the DROPS translucent: submitDrawState copies this onto the generated
-  // particle geometry. Color/alpha modulated against VertexColor0 so per-particle tint and opacity reach the surface.
-  void precipitationEmitterDrawCall(DrawCallState& drawCall, const Matrix4& objectToWorld) {
-    drawCall.transformData.objectToWorld = objectToWorld;
-    drawCall.transformData.textureTransform = Matrix4 {};
-    drawCall.transformData.texgenMode = TexGenMode::None;
-
-    drawCall.materialData.alphaTestEnabled = false;
-    drawCall.materialData.alphaTestReferenceValue = 0;
-    drawCall.materialData.alphaTestCompareOp = VK_COMPARE_OP_ALWAYS;
-    drawCall.materialData.blendMode.enableBlending = true;
-    drawCall.materialData.blendMode.colorSrcFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    drawCall.materialData.blendMode.colorDstFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    drawCall.materialData.blendMode.colorBlendOp = VK_BLEND_OP_ADD;
-    drawCall.materialData.blendMode.alphaSrcFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    drawCall.materialData.blendMode.alphaDstFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    drawCall.materialData.blendMode.alphaBlendOp = VK_BLEND_OP_ADD;
-    drawCall.materialData.blendMode.writeMask =
-      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    drawCall.materialData.textureColorArg1Source = RtTextureArgSource::Texture;
-    drawCall.materialData.textureColorArg2Source = RtTextureArgSource::VertexColor0;
-    drawCall.materialData.textureColorOperation = DxvkRtTextureOperation::Modulate;
-    drawCall.materialData.textureAlphaArg1Source = RtTextureArgSource::Texture;
-    drawCall.materialData.textureAlphaArg2Source = RtTextureArgSource::VertexColor0;
-    drawCall.materialData.textureAlphaOperation = DxvkRtTextureOperation::Modulate;
-    drawCall.materialData.isVertexColorBakedLighting = false;
-  }
-
-  // Renders the global precipitation controls inside the weather panel.
-  void showPrecipitationUI() {
-    fork_precipitation::PrecipitationSystem::showImguiSettings();
-  }
-
-} }  // namespace dxvk::fork_hooks
+}  // namespace dxvk

@@ -30,8 +30,8 @@
 namespace dxvk {
 
 // Forward declaration for the weather override pointer (full definition in
-// rtx_fork_weather.h, included only by rtx_global_volumetrics.cpp).
-namespace fork_weather { struct WeatherSnapshot; }
+// rtx_weather.h, included only by rtx_global_volumetrics.cpp).
+struct WeatherSnapshot;
 
   class RtxGlobalVolumetrics : public CommonDeviceObject, public RtxPass {
 
@@ -262,14 +262,14 @@ namespace fork_weather { struct WeatherSnapshot; }
     VolumeArgs getVolumeArgs(CameraManager const& cameraManager, FogState const& fogState, bool enablePortalVolumes) const;
 
     /**
-     * \brief Set per-frame weather override (fork — snapshot pattern).
+     * \brief Set the per-frame weather snapshot override.
      *
      * When non-null, getVolumeArgs() reads blended volumetric weather values
      * from the snapshot instead of the RTX_OPTION getters for every field that
      * the WeatherBlender can drive. Frame-local: call once per frame before
      * getVolumeArgs() runs; do NOT cache the pointer across frames.
      */
-    void applyWeatherOverride(const dxvk::fork_weather::WeatherSnapshot* wx) {
+    void applyWeatherOverride(const dxvk::WeatherSnapshot* wx) {
       m_weatherOverride = wx;
     }
 
@@ -286,7 +286,7 @@ namespace fork_weather { struct WeatherSnapshot; }
 
     void showPresetMenu();
     void showImguiUserSettings();
-    void showImguiSettings();
+    void showImguiSettings(const WeatherSnapshot* weatherSnapshot = nullptr);
 
     void setQualityLevel(const QualityLevel desiredQualityLevel);
     void setPreset(const PresetType desiredPreset);
@@ -308,11 +308,11 @@ namespace fork_weather { struct WeatherSnapshot; }
     bool m_swapTextures = false;
     bool m_rebuildFroxels = false;
 
-    // Per-frame weather override (fork — snapshot pattern). Set once per frame
+    // Per-frame weather snapshot override. Set once per frame
     // by applyWeatherOverride() (called from rtx_context.cpp before
     // getVolumeArgs runs). getVolumeArgs() reads the snapshot's fields instead
     // of the RTX_OPTION getters for every weather-blendable volumetric param.
-    const dxvk::fork_weather::WeatherSnapshot* m_weatherOverride = nullptr;
+    const dxvk::WeatherSnapshot* m_weatherOverride = nullptr;
 
     DxvkRaytracingPipelineShaders getPipelineShaders(bool useRayQuery) const;
 

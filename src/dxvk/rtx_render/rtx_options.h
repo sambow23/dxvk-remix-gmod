@@ -47,7 +47,6 @@
 #include "rtx_option_manager.h"
 #include "rtx_hashing.h"
 #include "rtx_mod_manager.h"
-#include "rtx_fork_weather.h"
 
 enum _NV_GPU_ARCHITECTURE_ID;
 typedef enum _NV_GPU_ARCHITECTURE_ID NV_GPU_ARCHITECTURE_ID;

@@ -684,7 +684,7 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
 // `enableCloudTemporalSmoothing` (fork) — when true, the cloud layer alpha
 // blends against the previous frame's screen-space cloud history at the same
 // pixel coordinate before compositing. Kills the DLSS-perceived flatness that
-// the per-frame FAST-noise jitter (added in commits 148e3fa5 and d327f3d8)
+// the per-frame blue-noise jitter
 // otherwise produces. The blend uses a fixed history weight (0.92) which
 // matches the volumetric system's age-EMA settled state after ~10 frames.
 //
@@ -946,7 +946,7 @@ vec3 evalSkyRadiance(
     radiance += (args.cloudSkyBleedStrength * zenithFade) * bleedCloud.rgb;
   }
 
-  // Temporal cloud smoothing (fork). Per-frame FAST-noise jitter on the cloud
+  // Temporal cloud smoothing. Per-frame blue-noise jitter on the cloud
   // ray-march (commits 148e3fa5 / d327f3d8) creates brightness variance that
   // DLSS sees as noise and averages out, producing visible flatness. We blend
   // the raw current cloud against a screen-space history at the reprojected

@@ -33,8 +33,10 @@
 #include "dxvk_pipemanager.h"
 #include "dxvk_renderpass.h"
 #include "dxvk_unbound.h"
+// NV-DXVK start: Numos atmosphere and precipitation subsystems
 #include "rtx_render/rtx_atmosphere.h"
-#include "rtx_render/rtx_fork_precipitation.h"
+#include "rtx_render/rtx_precipitation.h"
+// NV-DXVK end
 #include "rtx_render/rtx_global_volumetrics.h"
 #include "rtx_render/rtx_pathtracer_gbuffer.h"
 #include "rtx_render/rtx_pathtracer_integrate_direct.h"
@@ -143,13 +145,15 @@ namespace dxvk {
       return m_metaPack.get(m_device);
     }
 
+    // NV-DXVK start: Numos atmosphere and precipitation subsystems
     RtxAtmosphere& metaAtmosphere() {
       return m_atmosphere.get();
     }
 
-    fork_precipitation::PrecipitationSystem& metaPrecipitation() {
+    PrecipitationSystem& metaPrecipitation() {
       return m_precipitation.get();
     }
+    // NV-DXVK end
 
     RtxGlobalVolumetrics& metaGlobalVolumetrics() {
       return m_globalVolumetrics.get();
@@ -390,8 +394,10 @@ namespace dxvk {
     Rc<GameCapturer>   m_capturer;
 
     // RTX Shaders
-    Active<RtxAtmosphere>                                  m_atmosphere;
-    Active<fork_precipitation::PrecipitationSystem>        m_precipitation;
+    // NV-DXVK start: Numos atmosphere and precipitation subsystems
+    Active<RtxAtmosphere>                   m_atmosphere;
+    Active<PrecipitationSystem>             m_precipitation;
+    // NV-DXVK end
     Active<RtxGlobalVolumetrics>            m_globalVolumetrics;
     Active<SparseRendering>                 m_sparseRendering;
     Active<DxvkPathtracerGbuffer>           m_pathtracerGbuffer;

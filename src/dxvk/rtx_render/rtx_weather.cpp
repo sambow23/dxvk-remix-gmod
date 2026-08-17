@@ -1,18 +1,4 @@
-// src/dxvk/rtx_render/rtx_fork_weather.cpp — WeatherBlender implementation.
-
-#include "rtx_fork_weather.h"
-#include "rtx_atmosphere.h"    // RtxAtmosphere:: live atmosphere option accessors
-#include "rtx_fork_hooks.h"
-#include "rtx_fork_precipitation.h"   // PrecipitationSystem — target of the precipitation* fields
-#include "rtx_context.h"
-#include "rtx_scene_manager.h"
-#include "rtx_options.h"
-#include "rtx_global_volumetrics.h"
-#include "imgui/imgui.h"
-#include "rtx_imgui.h"               // RemixGui::DragFloat, DragFloat3, SetTooltipToLastWidgetOnHover
-#include "../../util/log/log.h"     // Logger::warn for unknown-preset diagnostic
-#include "../../util/util_math.h"
-#include "../../util/util_string.h" // str::format
+// src/dxvk/rtx_render/rtx_weather.cpp — WeatherBlender implementation.
 
 #include <algorithm>
 #include <cctype>
@@ -23,7 +9,18 @@
 #include <string>
 #include <unordered_set>
 
-namespace dxvk { namespace fork_weather { namespace {
+#include "imgui/imgui.h"
+
+#include "rtx_atmosphere.h"
+#include "rtx_global_volumetrics.h"
+#include "rtx_imgui.h"
+#include "rtx_precipitation.h"
+#include "rtx_weather.h"
+#include "../../util/log/log.h"
+#include "../../util/util_math.h"
+#include "../../util/util_string.h"
+
+namespace dxvk { namespace {
 
   WeatherSnapshot snapshotRenderer();
 
@@ -132,7 +129,9 @@ namespace dxvk { namespace fork_weather { namespace {
           break;
         case DriftMode::AbsoluteDeg: {
           float w = std::fmod(v + driftScaled, 360.0f);
-          if (w < 0.0f) w += 360.0f;
+          if (w < 0.0f) {
+            w += 360.0f;
+          }
           vOut = w;
           break;
         }
@@ -141,8 +140,12 @@ namespace dxvk { namespace fork_weather { namespace {
           break;
       }
 
-      if (vOut < e.clampMin) vOut = e.clampMin;
-      if (vOut > e.clampMax) vOut = e.clampMax;
+      if (vOut < e.clampMin) {
+        vOut = e.clampMin;
+      }
+      if (vOut > e.clampMax) {
+        vOut = e.clampMax;
+      }
 
       e.setter(interp, vOut);
     }
@@ -182,7 +185,9 @@ namespace dxvk { namespace fork_weather { namespace {
   bool weatherDrag(const char* l, RtxOption<Vector3>* o, float st, float mn, float mx, const char* fmt, ImGuiSliderFlags fl, WeatherFieldKind kind) {
     if (kind == WK_Color) {
       ImGuiColorEditFlags cflags = 0;
-      if (mx > 1.5f)      cflags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR;
+      if (mx > 1.5f) {
+        cflags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR;
+      }
       else if (mx < 1.0f) cflags = ImGuiColorEditFlags_Float;
       return RemixGui::ColorEdit3(l, o, cflags);
     }
@@ -327,17 +332,23 @@ namespace dxvk { namespace fork_weather { namespace {
   }
 
   void copyPresetToPreset(int srcIdx, int dstIdx) {
-    if (srcIdx < 0 || dstIdx < 0 || srcIdx >= WP_COUNT || dstIdx >= WP_COUNT || srcIdx == dstIdx) return;
+    if (srcIdx < 0 || dstIdx < 0 || srcIdx >= WP_COUNT || dstIdx >= WP_COUNT || srcIdx == dstIdx) {
+      return;
+    }
     WeatherSnapshot s = kPresetDescs[srcIdx].read();
     for (const auto& d : kFieldDescs) { d.setPresetField(dstIdx, s); }
   }
   void snapshotLiveToPreset(int dstIdx) {
-    if (dstIdx < 0 || dstIdx >= WP_COUNT) return;
+    if (dstIdx < 0 || dstIdx >= WP_COUNT) {
+      return;
+    }
     WeatherSnapshot s = snapshotRenderer();
     for (const auto& d : kFieldDescs) { d.setPresetField(dstIdx, s); }
   }
   std::string exportPresetToConf(int idx) {
-    if (idx < 0 || idx >= WP_COUNT) return std::string();
+    if (idx < 0 || idx >= WP_COUNT) {
+      return std::string();
+    }
     WeatherSnapshot s = kPresetDescs[idx].read();
     const char* pname = kPresetDescs[idx].name;
     std::string out;
@@ -349,7 +360,9 @@ namespace dxvk { namespace fork_weather { namespace {
     return out;
   }
   bool matchesFilter(const char* label, const char* filter) {
-    if (!filter || !filter[0]) return true;
+    if (!filter || !filter[0]) {
+      return true;
+    }
     std::string l(label), f(filter);
     std::transform(l.begin(), l.end(), l.begin(), [](unsigned char ch){ return (char)std::tolower(ch); });
     std::transform(f.begin(), f.end(), f.begin(), [](unsigned char ch){ return (char)std::tolower(ch); });
@@ -358,78 +371,210 @@ namespace dxvk { namespace fork_weather { namespace {
 
   // Mirror the live RTX_OPTION description so tooltips stay in sync with no hand-copied strings.
   const char* weatherFieldTooltip(const char* name) {
-    if (std::strcmp(name, "cloudDensity") == 0) return RtxAtmosphere::cloudDensityObject().getDescription();
-    if (std::strcmp(name, "cloudCoverageMean") == 0) return RtxAtmosphere::cloudCoverageMeanObject().getDescription();
-    if (std::strcmp(name, "cloudCoverageSpread") == 0) return RtxAtmosphere::cloudCoverageSpreadObject().getDescription();
-    if (std::strcmp(name, "cloudCoverageNoiseScale") == 0) return RtxAtmosphere::cloudCoverageNoiseScaleObject().getDescription();
-    if (std::strcmp(name, "cloudTypeMean") == 0) return RtxAtmosphere::cloudTypeMeanObject().getDescription();
-    if (std::strcmp(name, "cloudTypeSpread") == 0) return RtxAtmosphere::cloudTypeSpreadObject().getDescription();
-    if (std::strcmp(name, "cloudTypeNoiseScale") == 0) return RtxAtmosphere::cloudTypeNoiseScaleObject().getDescription();
-    if (std::strcmp(name, "cloudColor") == 0) return RtxAtmosphere::cloudColorObject().getDescription();
-    if (std::strcmp(name, "cloudWindSpeed") == 0) return RtxAtmosphere::cloudWindSpeedObject().getDescription();
-    if (std::strcmp(name, "cloudWindDirection") == 0) return RtxAtmosphere::cloudWindDirectionObject().getDescription();
-    if (std::strcmp(name, "cloudShadowStrength") == 0) return RtxAtmosphere::cloudShadowStrengthObject().getDescription();
-    if (std::strcmp(name, "cloudThickness") == 0) return RtxAtmosphere::cloudThicknessObject().getDescription();
-    if (std::strcmp(name, "cloudUndersideLightSigma") == 0) return RtxAtmosphere::cloudUndersideLightSigmaObject().getDescription();
-    if (std::strcmp(name, "cloudBottomDarkening") == 0) return RtxAtmosphere::cloudBottomDarkeningObject().getDescription();
-    if (std::strcmp(name, "cloudAerialFadePerKm") == 0) return RtxAtmosphere::cloudAerialFadePerKmObject().getDescription();
-    if (std::strcmp(name, "cloudAerialHazePerKm") == 0) return RtxAtmosphere::cloudAerialHazePerKmObject().getDescription();
-    if (std::strcmp(name, "lightningStrikesPerMinute") == 0) return RtxAtmosphere::lightningStrikesPerMinuteObject().getDescription();
-    if (std::strcmp(name, "airDensity") == 0) return RtxAtmosphere::airDensityObject().getDescription();
-    if (std::strcmp(name, "aerosolDensity") == 0) return RtxAtmosphere::aerosolDensityObject().getDescription();
-    if (std::strcmp(name, "sunIlluminance") == 0) return RtxAtmosphere::sunIlluminanceObject().getDescription();
-    if (std::strcmp(name, "rayleighScattering") == 0) return RtxAtmosphere::rayleighScatteringObject().getDescription();
-    if (std::strcmp(name, "skyIndirectRadianceScale") == 0) return RtxAtmosphere::skyIndirectRadianceScaleObject().getDescription();
-    if (std::strcmp(name, "nightSkyBrightness") == 0) return RtxAtmosphere::nightSkyBrightnessObject().getDescription();
-    if (std::strcmp(name, "nightSkyColor") == 0) return RtxAtmosphere::nightSkyColorObject().getDescription();
-    if (std::strcmp(name, "moonNeeStrength") == 0) return RtxAtmosphere::moonNeeStrengthObject().getDescription();
-    if (std::strcmp(name, "moonAtmosphericCouplingStrength") == 0) return RtxAtmosphere::moonAtmosphericCouplingStrengthObject().getDescription();
-    if (std::strcmp(name, "transmittanceColor") == 0) return RtxGlobalVolumetrics::transmittanceColorObject().getDescription();
-    if (std::strcmp(name, "transmittanceMeasurementDistanceMeters") == 0) return RtxGlobalVolumetrics::transmittanceMeasurementDistanceMetersObject().getDescription();
-    if (std::strcmp(name, "singleScatteringAlbedo") == 0) return RtxGlobalVolumetrics::singleScatteringAlbedoObject().getDescription();
-    if (std::strcmp(name, "volumetricAnisotropy") == 0) return RtxGlobalVolumetrics::anisotropyObject().getDescription();
-    if (std::strcmp(name, "fogSunVisibilityGain") == 0) return RtxGlobalVolumetrics::fogSunVisibilityGainObject().getDescription();
-    if (std::strcmp(name, "volumetricConsumerGain") == 0) return RtxGlobalVolumetrics::volumetricConsumerGainObject().getDescription();
-    if (std::strcmp(name, "enableHeterogeneousFog") == 0) return RtxGlobalVolumetrics::enableHeterogeneousFogObject().getDescription();
-    if (std::strcmp(name, "noiseFieldDensityScale") == 0) return RtxGlobalVolumetrics::noiseFieldDensityScaleObject().getDescription();
-    if (std::strcmp(name, "noiseFieldDensityExponent") == 0) return RtxGlobalVolumetrics::noiseFieldDensityExponentObject().getDescription();
-    if (std::strcmp(name, "noiseFieldInitialFrequencyPerMeter") == 0) return RtxGlobalVolumetrics::noiseFieldInitialFrequencyPerMeterObject().getDescription();
-    if (std::strcmp(name, "noiseFieldLacunarity") == 0) return RtxGlobalVolumetrics::noiseFieldLacunarityObject().getDescription();
-    if (std::strcmp(name, "noiseFieldGain") == 0) return RtxGlobalVolumetrics::noiseFieldGainObject().getDescription();
-    if (std::strcmp(name, "noiseFieldTimeScale") == 0) return RtxGlobalVolumetrics::noiseFieldTimeScaleObject().getDescription();
-    if (std::strcmp(name, "noiseFieldSubStepSizeMeters") == 0) return RtxGlobalVolumetrics::noiseFieldSubStepSizeMetersObject().getDescription();
-    if (std::strcmp(name, "froxelMaxDistanceMeters") == 0) return RtxGlobalVolumetrics::froxelMaxDistanceMetersObject().getDescription();
-    if (std::strcmp(name, "enableFogRemap") == 0) return RtxGlobalVolumetrics::enableFogRemapObject().getDescription();
-    if (std::strcmp(name, "enableFogColorRemap") == 0) return RtxGlobalVolumetrics::enableFogColorRemapObject().getDescription();
-    if (std::strcmp(name, "enableFogMaxDistanceRemap") == 0) return RtxGlobalVolumetrics::enableFogMaxDistanceRemapObject().getDescription();
-    if (std::strcmp(name, "fogRemapMaxDistanceMinMeters") == 0) return RtxGlobalVolumetrics::fogRemapMaxDistanceMinMetersObject().getDescription();
-    if (std::strcmp(name, "fogRemapMaxDistanceMaxMeters") == 0) return RtxGlobalVolumetrics::fogRemapMaxDistanceMaxMetersObject().getDescription();
-    if (std::strcmp(name, "fogRemapTransmittanceMeasurementDistanceMinMeters") == 0) return RtxGlobalVolumetrics::fogRemapTransmittanceMeasurementDistanceMinMetersObject().getDescription();
-    if (std::strcmp(name, "fogRemapTransmittanceMeasurementDistanceMaxMeters") == 0) return RtxGlobalVolumetrics::fogRemapTransmittanceMeasurementDistanceMaxMetersObject().getDescription();
-    if (std::strcmp(name, "fogRemapColorMultiscatteringScale") == 0) return RtxGlobalVolumetrics::fogRemapColorMultiscatteringScaleObject().getDescription();
-    if (std::strcmp(name, "enableTranslucentShadows") == 0) return RtxGlobalVolumetrics::enableTranslucentShadowsObject().getDescription();
-    if (std::strcmp(name, "depthOffset") == 0) return RtxGlobalVolumetrics::depthOffsetObject().getDescription();
-    if (std::strcmp(name, "noiseFieldOctaves") == 0) return RtxGlobalVolumetrics::noiseFieldOctavesObject().getDescription();
-    if (std::strcmp(name, "precipitationIntensity") == 0)    return fork_precipitation::PrecipitationSystem::intensityObject().getDescription();
-    if (std::strcmp(name, "precipitationFallSpeed") == 0)    return fork_precipitation::PrecipitationSystem::fallSpeedObject().getDescription();
-    if (std::strcmp(name, "precipitationWindResponse") == 0) return fork_precipitation::PrecipitationSystem::windResponseObject().getDescription();
-    if (std::strcmp(name, "precipitationTurbulence") == 0)   return fork_precipitation::PrecipitationSystem::turbulenceObject().getDescription();
-    if (std::strcmp(name, "precipitationDrag") == 0)         return fork_precipitation::PrecipitationSystem::dragObject().getDescription();
-    if (std::strcmp(name, "precipitationStreak") == 0)       return fork_precipitation::PrecipitationSystem::streakObject().getDescription();
-    if (std::strcmp(name, "precipitationDropWidth") == 0)    return fork_precipitation::PrecipitationSystem::dropWidthObject().getDescription();
-    if (std::strcmp(name, "precipitationDropLength") == 0)   return fork_precipitation::PrecipitationSystem::dropLengthObject().getDescription();
-    if (std::strcmp(name, "precipitationOpacity") == 0)      return fork_precipitation::PrecipitationSystem::opacityObject().getDescription();
-    if (std::strcmp(name, "precipitationSkyLight") == 0)     return fork_precipitation::PrecipitationSystem::skyLightObject().getDescription();
-    if (std::strcmp(name, "precipitationColor") == 0)        return fork_precipitation::PrecipitationSystem::colorObject().getDescription();
+    if (std::strcmp(name, "cloudDensity") == 0) {
+      return RtxAtmosphere::cloudDensityObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudCoverageMean") == 0) {
+      return RtxAtmosphere::cloudCoverageMeanObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudCoverageSpread") == 0) {
+      return RtxAtmosphere::cloudCoverageSpreadObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudCoverageNoiseScale") == 0) {
+      return RtxAtmosphere::cloudCoverageNoiseScaleObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudTypeMean") == 0) {
+      return RtxAtmosphere::cloudTypeMeanObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudTypeSpread") == 0) {
+      return RtxAtmosphere::cloudTypeSpreadObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudTypeNoiseScale") == 0) {
+      return RtxAtmosphere::cloudTypeNoiseScaleObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudColor") == 0) {
+      return RtxAtmosphere::cloudColorObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudWindSpeed") == 0) {
+      return RtxAtmosphere::cloudWindSpeedObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudWindDirection") == 0) {
+      return RtxAtmosphere::cloudWindDirectionObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudShadowStrength") == 0) {
+      return RtxAtmosphere::cloudShadowStrengthObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudThickness") == 0) {
+      return RtxAtmosphere::cloudThicknessObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudUndersideLightSigma") == 0) {
+      return RtxAtmosphere::cloudUndersideLightSigmaObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudBottomDarkening") == 0) {
+      return RtxAtmosphere::cloudBottomDarkeningObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudAerialFadePerKm") == 0) {
+      return RtxAtmosphere::cloudAerialFadePerKmObject().getDescription();
+    }
+    if (std::strcmp(name, "cloudAerialHazePerKm") == 0) {
+      return RtxAtmosphere::cloudAerialHazePerKmObject().getDescription();
+    }
+    if (std::strcmp(name, "lightningStrikesPerMinute") == 0) {
+      return RtxAtmosphere::lightningStrikesPerMinuteObject().getDescription();
+    }
+    if (std::strcmp(name, "airDensity") == 0) {
+      return RtxAtmosphere::airDensityObject().getDescription();
+    }
+    if (std::strcmp(name, "aerosolDensity") == 0) {
+      return RtxAtmosphere::aerosolDensityObject().getDescription();
+    }
+    if (std::strcmp(name, "sunIlluminance") == 0) {
+      return RtxAtmosphere::sunIlluminanceObject().getDescription();
+    }
+    if (std::strcmp(name, "rayleighScattering") == 0) {
+      return RtxAtmosphere::rayleighScatteringObject().getDescription();
+    }
+    if (std::strcmp(name, "skyIndirectRadianceScale") == 0) {
+      return RtxAtmosphere::skyIndirectRadianceScaleObject().getDescription();
+    }
+    if (std::strcmp(name, "nightSkyBrightness") == 0) {
+      return RtxAtmosphere::nightSkyBrightnessObject().getDescription();
+    }
+    if (std::strcmp(name, "nightSkyColor") == 0) {
+      return RtxAtmosphere::nightSkyColorObject().getDescription();
+    }
+    if (std::strcmp(name, "moonNeeStrength") == 0) {
+      return RtxAtmosphere::moonNeeStrengthObject().getDescription();
+    }
+    if (std::strcmp(name, "moonAtmosphericCouplingStrength") == 0) {
+      return RtxAtmosphere::moonAtmosphericCouplingStrengthObject().getDescription();
+    }
+    if (std::strcmp(name, "transmittanceColor") == 0) {
+      return RtxGlobalVolumetrics::transmittanceColorObject().getDescription();
+    }
+    if (std::strcmp(name, "transmittanceMeasurementDistanceMeters") == 0) {
+      return RtxGlobalVolumetrics::transmittanceMeasurementDistanceMetersObject().getDescription();
+    }
+    if (std::strcmp(name, "singleScatteringAlbedo") == 0) {
+      return RtxGlobalVolumetrics::singleScatteringAlbedoObject().getDescription();
+    }
+    if (std::strcmp(name, "volumetricAnisotropy") == 0) {
+      return RtxGlobalVolumetrics::anisotropyObject().getDescription();
+    }
+    if (std::strcmp(name, "fogSunVisibilityGain") == 0) {
+      return RtxGlobalVolumetrics::fogSunVisibilityGainObject().getDescription();
+    }
+    if (std::strcmp(name, "volumetricConsumerGain") == 0) {
+      return RtxGlobalVolumetrics::volumetricConsumerGainObject().getDescription();
+    }
+    if (std::strcmp(name, "enableHeterogeneousFog") == 0) {
+      return RtxGlobalVolumetrics::enableHeterogeneousFogObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldDensityScale") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldDensityScaleObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldDensityExponent") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldDensityExponentObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldInitialFrequencyPerMeter") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldInitialFrequencyPerMeterObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldLacunarity") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldLacunarityObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldGain") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldGainObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldTimeScale") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldTimeScaleObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldSubStepSizeMeters") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldSubStepSizeMetersObject().getDescription();
+    }
+    if (std::strcmp(name, "froxelMaxDistanceMeters") == 0) {
+      return RtxGlobalVolumetrics::froxelMaxDistanceMetersObject().getDescription();
+    }
+    if (std::strcmp(name, "enableFogRemap") == 0) {
+      return RtxGlobalVolumetrics::enableFogRemapObject().getDescription();
+    }
+    if (std::strcmp(name, "enableFogColorRemap") == 0) {
+      return RtxGlobalVolumetrics::enableFogColorRemapObject().getDescription();
+    }
+    if (std::strcmp(name, "enableFogMaxDistanceRemap") == 0) {
+      return RtxGlobalVolumetrics::enableFogMaxDistanceRemapObject().getDescription();
+    }
+    if (std::strcmp(name, "fogRemapMaxDistanceMinMeters") == 0) {
+      return RtxGlobalVolumetrics::fogRemapMaxDistanceMinMetersObject().getDescription();
+    }
+    if (std::strcmp(name, "fogRemapMaxDistanceMaxMeters") == 0) {
+      return RtxGlobalVolumetrics::fogRemapMaxDistanceMaxMetersObject().getDescription();
+    }
+    if (std::strcmp(name, "fogRemapTransmittanceMeasurementDistanceMinMeters") == 0) {
+      return RtxGlobalVolumetrics::fogRemapTransmittanceMeasurementDistanceMinMetersObject().getDescription();
+    }
+    if (std::strcmp(name, "fogRemapTransmittanceMeasurementDistanceMaxMeters") == 0) {
+      return RtxGlobalVolumetrics::fogRemapTransmittanceMeasurementDistanceMaxMetersObject().getDescription();
+    }
+    if (std::strcmp(name, "fogRemapColorMultiscatteringScale") == 0) {
+      return RtxGlobalVolumetrics::fogRemapColorMultiscatteringScaleObject().getDescription();
+    }
+    if (std::strcmp(name, "enableTranslucentShadows") == 0) {
+      return RtxGlobalVolumetrics::enableTranslucentShadowsObject().getDescription();
+    }
+    if (std::strcmp(name, "depthOffset") == 0) {
+      return RtxGlobalVolumetrics::depthOffsetObject().getDescription();
+    }
+    if (std::strcmp(name, "noiseFieldOctaves") == 0) {
+      return RtxGlobalVolumetrics::noiseFieldOctavesObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationIntensity") == 0) {
+      return PrecipitationSystem::intensityObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationFallSpeed") == 0) {
+      return PrecipitationSystem::fallSpeedObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationWindResponse") == 0) {
+      return PrecipitationSystem::windResponseObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationTurbulence") == 0) {
+      return PrecipitationSystem::turbulenceObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationDrag") == 0) {
+      return PrecipitationSystem::dragObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationStreak") == 0) {
+      return PrecipitationSystem::streakObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationDropWidth") == 0) {
+      return PrecipitationSystem::dropWidthObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationDropLength") == 0) {
+      return PrecipitationSystem::dropLengthObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationOpacity") == 0) {
+      return PrecipitationSystem::opacityObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationSkyLight") == 0) {
+      return PrecipitationSystem::skyLightObject().getDescription();
+    }
+    if (std::strcmp(name, "precipitationColor") == 0) {
+      return PrecipitationSystem::colorObject().getDescription();
+    }
     return "";
   }
   // True if any field in this (group[, section]) matches the filter.
   bool sectionHasMatch(const char* group, const char* section, const char* filter) {
     for (int k = 0; k < kFieldCount; ++k) {
       const WeatherFieldDesc& d = kFieldDescs[k];
-      if (std::strcmp(d.group, group) != 0) continue;
-      if (section && std::strcmp(d.section, section) != 0) continue;
-      if (matchesFilter(d.label, filter)) return true;
+      if (std::strcmp(d.group, group) != 0) {
+        continue;
+      }
+      if (section && std::strcmp(d.section, section) != 0) {
+        continue;
+      }
+      if (matchesFilter(d.label, filter)) {
+        return true;
+      }
     }
     return false;
   }
@@ -506,25 +651,39 @@ namespace dxvk { namespace fork_weather { namespace {
       for (int k = 0; k < gi; ++k) {
         if (std::strcmp(kFieldDescs[k].group, group) == 0) { groupSeen = true; break; }
       }
-      if (groupSeen) continue;
-      if (!sectionHasMatch(group, nullptr, filter)) continue;
+      if (groupSeen) {
+        continue;
+      }
+      if (!sectionHasMatch(group, nullptr, filter)) {
+        continue;
+      }
 
       ImGui::SetNextItemOpen(true, filtering ? ImGuiCond_Always : ImGuiCond_Once);
-      if (!ImGui::TreeNode(group)) continue;
+      if (!ImGui::TreeNode(group)) {
+        continue;
+      }
 
       for (int si = 0; si < kFieldCount; ++si) {
-        if (std::strcmp(kFieldDescs[si].group, group) != 0) continue;
+        if (std::strcmp(kFieldDescs[si].group, group) != 0) {
+          continue;
+        }
         const char* section = kFieldDescs[si].section;
         bool sectionSeen = false;
         for (int k = 0; k < si; ++k) {
           if (std::strcmp(kFieldDescs[k].group, group) == 0 &&
               std::strcmp(kFieldDescs[k].section, section) == 0) { sectionSeen = true; break; }
         }
-        if (sectionSeen) continue;
-        if (!sectionHasMatch(group, section, filter)) continue;
+        if (sectionSeen) {
+          continue;
+        }
+        if (!sectionHasMatch(group, section, filter)) {
+          continue;
+        }
 
         ImGui::SetNextItemOpen(true, filtering ? ImGuiCond_Always : ImGuiCond_Once);
-        if (!ImGui::TreeNode(section)) continue;
+        if (!ImGui::TreeNode(section)) {
+          continue;
+        }
         if (std::strcmp(group, "Volumetric Fog") == 0 && std::strcmp(section, "Medium") == 0) {
           if (renderDerivedFogControls(presetIdx, filter)) {
             ImGui::Separator();
@@ -532,8 +691,12 @@ namespace dxvk { namespace fork_weather { namespace {
         }
         for (int fi = 0; fi < kFieldCount; ++fi) {
           const WeatherFieldDesc& d = kFieldDescs[fi];
-          if (std::strcmp(d.group, group) != 0 || std::strcmp(d.section, section) != 0) continue;
-          if (!matchesFilter(d.label, filter)) continue;
+          if (std::strcmp(d.group, group) != 0 || std::strcmp(d.section, section) != 0) {
+            continue;
+          }
+          if (!matchesFilter(d.label, filter)) {
+            continue;
+          }
           ImGui::PushID(fi);
           d.renderSlider(presetIdx, fl);
           const char* tip = weatherFieldTooltip(d.name);
@@ -600,29 +763,181 @@ namespace dxvk { namespace fork_weather { namespace {
     s.enableTranslucentShadows = RtxGlobalVolumetrics::enableTranslucentShadows();
     s.depthOffset              = RtxGlobalVolumetrics::depthOffset();
     s.noiseFieldOctaves        = static_cast<float>(RtxGlobalVolumetrics::noiseFieldOctaves());
-    s.precipitationIntensity    = fork_precipitation::PrecipitationSystem::intensity();
-    s.precipitationFallSpeed    = fork_precipitation::PrecipitationSystem::fallSpeed();
-    s.precipitationWindResponse = fork_precipitation::PrecipitationSystem::windResponse();
-    s.precipitationTurbulence   = fork_precipitation::PrecipitationSystem::turbulence();
-    s.precipitationDrag         = fork_precipitation::PrecipitationSystem::drag();
-    s.precipitationStreak       = fork_precipitation::PrecipitationSystem::streak();
-    s.precipitationDropWidth    = fork_precipitation::PrecipitationSystem::dropWidth();
-    s.precipitationDropLength   = fork_precipitation::PrecipitationSystem::dropLength();
-    s.precipitationOpacity      = fork_precipitation::PrecipitationSystem::opacity();
-    s.precipitationSkyLight     = fork_precipitation::PrecipitationSystem::skyLight();
-    s.precipitationColor        = fork_precipitation::PrecipitationSystem::color();
+    s.precipitationIntensity    = PrecipitationSystem::intensity();
+    s.precipitationFallSpeed    = PrecipitationSystem::fallSpeed();
+    s.precipitationWindResponse = PrecipitationSystem::windResponse();
+    s.precipitationTurbulence   = PrecipitationSystem::turbulence();
+    s.precipitationDrag         = PrecipitationSystem::drag();
+    s.precipitationStreak       = PrecipitationSystem::streak();
+    s.precipitationDropWidth    = PrecipitationSystem::dropWidth();
+    s.precipitationDropLength   = PrecipitationSystem::dropLength();
+    s.precipitationOpacity      = PrecipitationSystem::opacity();
+    s.precipitationSkyLight     = PrecipitationSystem::skyLight();
+    s.precipitationColor        = PrecipitationSystem::color();
     return s;
   }
 
-} } }  // namespace dxvk::fork_weather::(anonymous)
+  // Preserve the pre-refactor write-gate semantics without mutating RTX_OPTION
+  // layers. A field that was conditionally written before must fall back to the
+  // live renderer value when all presets agree on it. Core weather fields remain
+  // weather-owned exactly as before.
+  bool weatherNeq(float a, float b) { return a != b; }
+  bool weatherNeq(bool a, bool b)   { return a != b; }
+  bool weatherNeq(const Vector3& a, const Vector3& b) {
+    return a.x != b.x || a.y != b.y || a.z != b.z;
+  }
+#define WVARIES(name)                                                 \
+  bool weatherVaries_##name() {                                       \
+    const auto v0 = WeatherBlender::clear_##name();                   \
+    return weatherNeq(WeatherBlender::partlyCloudy_##name(), v0)      \
+        || weatherNeq(WeatherBlender::overcast_##name(),     v0)      \
+        || weatherNeq(WeatherBlender::hazy_##name(),         v0)      \
+        || weatherNeq(WeatherBlender::foggy_##name(),        v0)      \
+        || weatherNeq(WeatherBlender::drizzle_##name(),      v0)      \
+        || weatherNeq(WeatherBlender::rainstorm_##name(),    v0)      \
+        || weatherNeq(WeatherBlender::thunderstorm_##name(), v0)      \
+        || weatherNeq(WeatherBlender::snow_##name(),         v0)      \
+        || weatherNeq(WeatherBlender::blizzard_##name(),     v0)      \
+        || weatherNeq(WeatherBlender::sandstorm_##name(),    v0)      \
+        || weatherNeq(WeatherBlender::smoggy_##name(),       v0);     \
+  }
+  WVARIES(fogSunVisibilityGain)
+  WVARIES(volumetricConsumerGain)
+  WVARIES(enableHeterogeneousFog)
+  WVARIES(noiseFieldDensityScale)
+  WVARIES(noiseFieldDensityExponent)
+  WVARIES(noiseFieldInitialFrequencyPerMeter)
+  WVARIES(noiseFieldLacunarity)
+  WVARIES(noiseFieldGain)
+  WVARIES(noiseFieldTimeScale)
+  WVARIES(noiseFieldSubStepSizeMeters)
+  WVARIES(froxelMaxDistanceMeters)
+  WVARIES(enableFogRemap)
+  WVARIES(enableFogColorRemap)
+  WVARIES(enableFogMaxDistanceRemap)
+  WVARIES(fogRemapMaxDistanceMinMeters)
+  WVARIES(fogRemapMaxDistanceMaxMeters)
+  WVARIES(fogRemapTransmittanceMeasurementDistanceMinMeters)
+  WVARIES(fogRemapTransmittanceMeasurementDistanceMaxMeters)
+  WVARIES(fogRemapColorMultiscatteringScale)
+  WVARIES(enableTranslucentShadows)
+  WVARIES(depthOffset)
+  WVARIES(noiseFieldOctaves)
+  WVARIES(cloudUndersideLightSigma)
+  WVARIES(cloudBottomDarkening)
+  WVARIES(cloudAerialFadePerKm)
+  WVARIES(cloudAerialHazePerKm)
+  WVARIES(lightningStrikesPerMinute)
+  WVARIES(moonNeeStrength)
+  WVARIES(moonAtmosphericCouplingStrength)
+  WVARIES(rayleighScattering)
+  WVARIES(nightSkyColor)
+  WVARIES(skyIndirectRadianceScale)
+  WVARIES(precipitationIntensity)
+#undef WVARIES
+
+  void resolveLegacyWeatherOwnership(WeatherSnapshot& s) {
+    const WeatherSnapshot live = snapshotRenderer();
+    s.ownership = WeatherOwnershipMask{};
+#define FALLBACK_IF_INVARIANT(name)                       \
+    if (!weatherVaries_##name()) {                         \
+      s.name = live.name;                                   \
+      s.ownership.name = false;                             \
+    }
+    FALLBACK_IF_INVARIANT(fogSunVisibilityGain);
+    FALLBACK_IF_INVARIANT(volumetricConsumerGain);
+    FALLBACK_IF_INVARIANT(enableHeterogeneousFog);
+    FALLBACK_IF_INVARIANT(noiseFieldDensityScale);
+    FALLBACK_IF_INVARIANT(noiseFieldDensityExponent);
+    FALLBACK_IF_INVARIANT(noiseFieldInitialFrequencyPerMeter);
+    FALLBACK_IF_INVARIANT(noiseFieldLacunarity);
+    FALLBACK_IF_INVARIANT(noiseFieldGain);
+    FALLBACK_IF_INVARIANT(noiseFieldTimeScale);
+    FALLBACK_IF_INVARIANT(noiseFieldSubStepSizeMeters);
+    FALLBACK_IF_INVARIANT(froxelMaxDistanceMeters);
+    FALLBACK_IF_INVARIANT(enableFogRemap);
+    FALLBACK_IF_INVARIANT(enableFogColorRemap);
+    FALLBACK_IF_INVARIANT(enableFogMaxDistanceRemap);
+    FALLBACK_IF_INVARIANT(fogRemapMaxDistanceMinMeters);
+    FALLBACK_IF_INVARIANT(fogRemapMaxDistanceMaxMeters);
+    FALLBACK_IF_INVARIANT(fogRemapTransmittanceMeasurementDistanceMinMeters);
+    FALLBACK_IF_INVARIANT(fogRemapTransmittanceMeasurementDistanceMaxMeters);
+    FALLBACK_IF_INVARIANT(fogRemapColorMultiscatteringScale);
+    FALLBACK_IF_INVARIANT(enableTranslucentShadows);
+    FALLBACK_IF_INVARIANT(depthOffset);
+    FALLBACK_IF_INVARIANT(noiseFieldOctaves);
+    FALLBACK_IF_INVARIANT(cloudUndersideLightSigma);
+    FALLBACK_IF_INVARIANT(cloudBottomDarkening);
+    FALLBACK_IF_INVARIANT(cloudAerialFadePerKm);
+    FALLBACK_IF_INVARIANT(cloudAerialHazePerKm);
+    FALLBACK_IF_INVARIANT(lightningStrikesPerMinute);
+    FALLBACK_IF_INVARIANT(moonNeeStrength);
+    FALLBACK_IF_INVARIANT(moonAtmosphericCouplingStrength);
+    FALLBACK_IF_INVARIANT(rayleighScattering);
+    FALLBACK_IF_INVARIANT(nightSkyColor);
+    FALLBACK_IF_INVARIANT(skyIndirectRadianceScale);
+#undef FALLBACK_IF_INVARIANT
+
+    // Precipitation was historically gated as one block. All-equal zero means
+    // weather does not own any precipitation look field; equal nonzero still does.
+    const bool weatherOwnsPrecipitation =
+      weatherVaries_precipitationIntensity() ||
+      WeatherBlender::clear_precipitationIntensity() != 0.0f;
+    if (!weatherOwnsPrecipitation) {
+      s.precipitationIntensity    = live.precipitationIntensity;
+      s.precipitationFallSpeed    = live.precipitationFallSpeed;
+      s.precipitationWindResponse = live.precipitationWindResponse;
+      s.precipitationTurbulence   = live.precipitationTurbulence;
+      s.precipitationDrag         = live.precipitationDrag;
+      s.precipitationStreak       = live.precipitationStreak;
+      s.precipitationDropWidth    = live.precipitationDropWidth;
+      s.precipitationDropLength   = live.precipitationDropLength;
+      s.precipitationOpacity      = live.precipitationOpacity;
+      s.precipitationSkyLight     = live.precipitationSkyLight;
+      s.precipitationColor        = live.precipitationColor;
+
+      s.ownership.precipitationIntensity    = false;
+      s.ownership.precipitationFallSpeed    = false;
+      s.ownership.precipitationWindResponse = false;
+      s.ownership.precipitationTurbulence   = false;
+      s.ownership.precipitationDrag         = false;
+      s.ownership.precipitationStreak       = false;
+      s.ownership.precipitationDropWidth    = false;
+      s.ownership.precipitationDropLength   = false;
+      s.ownership.precipitationOpacity      = false;
+      s.ownership.precipitationSkyLight     = false;
+      s.ownership.precipitationColor        = false;
+    }
+  }
+} }  // namespace dxvk::(anonymous)
 
 
-namespace dxvk { namespace fork_weather {
+namespace dxvk {
 
   WeatherBlender::WeatherBlender() {
   }
 
   WeatherBlender::~WeatherBlender() {
+  }
+
+  void WeatherBlender::setTargetPreset(const std::string& name) {
+    std::lock_guard<std::mutex> lock{ m_ioMutex };
+    m_inputTarget = name;
+  }
+
+  void WeatherBlender::setBlendSeconds(float seconds) {
+    std::lock_guard<std::mutex> lock{ m_ioMutex };
+    m_inputBlendSeconds = std::max(0.0f, seconds);
+  }
+
+  void WeatherBlender::setDriftSpeed(float speed) {
+    std::lock_guard<std::mutex> lock{ m_ioMutex };
+    m_inputDriftSpeed = std::max(0.0f, speed);
+  }
+
+  void WeatherBlender::setDriftIntensity(float intensity) {
+    std::lock_guard<std::mutex> lock{ m_ioMutex };
+    m_inputDriftIntensity = std::max(0.0f, intensity);
   }
 
   void WeatherBlender::update(float deltaTimeSeconds) {
@@ -665,12 +980,11 @@ namespace dxvk { namespace fork_weather {
       return;
     }
     if (!isKnownPresetName(newTarget)) {
-      // Warn once per distinct unknown name; subsequent writes stay quiet to avoid log spam.
-      static std::unordered_set<std::string> s_warned;
-      if (s_warned.insert(newTarget).second) {
+      // Warn once per distinct unknown name for this scene; subsequent writes stay quiet to avoid log spam.
+      if (m_warnedUnknownPresets.insert(newTarget).second) {
         Logger::warn(str::format(
           "WeatherBlender: unknown preset name '", newTarget,
-          "' in __weather.target -- known names are clear, partlyCloudy, "
+          "' -- known names are clear, partlyCloudy, "
           "overcast, hazy, foggy, drizzle, rainstorm, thunderstorm, snow, "
           "blizzard, sandstorm, smoggy. Treating as dormant."));
       }
@@ -685,12 +999,9 @@ namespace dxvk { namespace fork_weather {
         m_previousSnapshot    = snapshotCurrentValues();
         m_previousPresetName  = "(initial)";
       } else {
-        float currentT = dxvk::fclamp(static_cast<float>(
-          (m_currentTimeSec - m_blendStartTimeSec) / std::max(0.001f, m_blendDurationSec)), 0.0f, 1.0f);
-
-        WeatherSnapshot oldTargetValues;
-        readPresetValues(m_targetPresetName, oldTargetValues);
-        m_previousSnapshot   = lerpSnapshot(m_previousSnapshot, oldTargetValues, currentT);
+        // Capture exactly what consumers saw this frame. Reconstructing the lerp
+        // from endpoints loses drift and can visibly jump on a mid-blend retarget.
+        m_previousSnapshot   = snapshotCurrentValues();
         m_previousPresetName = m_targetPresetName;
       }
 
@@ -721,13 +1032,11 @@ namespace dxvk { namespace fork_weather {
     };
     constexpr int kPresetCountUI = static_cast<int>(IM_ARRAYSIZE(kPresetNamesUI));
 
-    static int s_selectedIndex = 0;
-    ImGui::Combo("Target Preset", &s_selectedIndex, kPresetNamesUI, kPresetCountUI);
-    static float s_blendDuration = 30.0f;
-    ImGui::SliderFloat("Blend Duration (sec)", &s_blendDuration, 0.0f, 600.0f, "%.1f");
+    ImGui::Combo("Target Preset", &m_uiSelectedPresetIndex, kPresetNamesUI, kPresetCountUI);
+    ImGui::SliderFloat("Blend Duration (sec)", &m_uiBlendDuration, 0.0f, 600.0f, "%.1f");
     if (ImGui::Button("Apply Preset")) {
-      setBlendSeconds(s_blendDuration);
-      const char* targetName = (s_selectedIndex == 0) ? "" : kPresetNamesUI[s_selectedIndex];
+      setBlendSeconds(m_uiBlendDuration);
+      const char* targetName = (m_uiSelectedPresetIndex == 0) ? "" : kPresetNamesUI[m_uiSelectedPresetIndex];
       setTargetPreset(targetName);
     }
 
@@ -754,18 +1063,18 @@ namespace dxvk { namespace fork_weather {
 
     ImGui::Separator();
     if (ImGui::TreeNode("Weather Variation")) {
-      float driftSpeed     = m_inputDriftSpeed;
-      float driftIntensity = m_inputDriftIntensity;
+      float driftSpeed     = getDriftSpeed();
+      float driftIntensity = getDriftIntensity();
 
       bool changedSpeed     = ImGui::SliderFloat("Variation speed",     &driftSpeed,     0.0f, 4.0f, "%.2f");
       RemixGui::SetTooltipToLastWidgetOnHover(
         "Scales how fast the weather variation evolves. 0 = frozen. Smoothed with "
-        "tau = 1.0s. (API key: __weather.drift_speed.)");
+        "tau = 1.0s.");
 
       bool changedIntensity = ImGui::SliderFloat("Variation intensity", &driftIntensity, 0.0f, 3.0f, "%.2f");
       RemixGui::SetTooltipToLastWidgetOnHover(
         "Scales how big the variation swings are around the preset midpoint. "
-        "0 = fully off. (API key: __weather.drift_intensity.)");
+        "0 = fully off.");
 
       if (changedSpeed) {
         setDriftSpeed(driftSpeed);
@@ -793,7 +1102,7 @@ namespace dxvk { namespace fork_weather {
     // Precipitation's global knobs (budget / spawn volume / collision) used to
     // hang off the bottom of this panel. They are system and performance
     // controls rather than weather-authoring ones, so they now sit as their own
-    // top-level tree next to Clouds in showAtmosphereUI. The per-preset look
+    // top-level tree next to Clouds in RtxAtmosphere::showImguiSettings. The per-preset look
     // values still live in the preset editor, generated from the field table.
   }
   void WeatherBlender::renderEditorWindow() {
@@ -813,29 +1122,26 @@ namespace dxvk { namespace fork_weather {
       "rainstorm", "thunderstorm", "snow", "blizzard", "sandstorm", "smoggy"
     };
     constexpr int kEditCount = static_cast<int>(IM_ARRAYSIZE(kEditNames));
-    static int s_editIndex = 0;
-
     ImGui::SetNextItemWidth(180.0f);
-    ImGui::Combo("Editing Preset", &s_editIndex, kEditNames, kEditCount);
+    ImGui::Combo("Editing Preset", &m_uiEditPresetIndex, kEditNames, kEditCount);
     ImGui::SameLine();
     if (ImGui::SmallButton("Use Active")) {
       int idx = presetIndexForName(m_targetPresetName);
-      if (idx >= 0) { s_editIndex = idx; }
+      if (idx >= 0) { m_uiEditPresetIndex = idx; }
     }
     RemixGui::SetTooltipToLastWidgetOnHover(
       "Point the editor at whatever preset the blender is currently targeting.");
 
-    static char s_filter[64] = "";
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##weatherFilter", "filter settings by name...", s_filter, sizeof(s_filter));
+    ImGui::InputTextWithHint("##weatherFilter", "filter settings by name...", m_uiFilter, sizeof(m_uiFilter));
 
     if (ImGui::TreeNode("Authoring tools")) {
       bool pinned = m_pinnedForTuning;
       if (ImGui::Checkbox("Pin & Freeze for Tuning", &pinned)) {
         if (pinned) {
-          m_savedDriftIntensity = m_inputDriftIntensity;
+          m_savedDriftIntensity = getDriftIntensity();
           setBlendSeconds(0.0f);
-          setTargetPreset(kEditNames[s_editIndex]);
+          setTargetPreset(kEditNames[m_uiEditPresetIndex]);
           setDriftIntensity(0.0f);
         } else {
           setDriftIntensity(m_savedDriftIntensity);
@@ -849,31 +1155,29 @@ namespace dxvk { namespace fork_weather {
       // While pinned, keep the held image on whatever preset is being edited, so
       // changing the Editing Preset combo above re-snaps the frozen view to it
       // (blend is already 0 s, so the switch is instant).
-      static int s_appliedPinIndex = -1;
       if (m_pinnedForTuning) {
-        if (s_editIndex != s_appliedPinIndex) {
-          setTargetPreset(kEditNames[s_editIndex]);
-          s_appliedPinIndex = s_editIndex;
+        if (m_uiEditPresetIndex != m_uiAppliedPinIndex) {
+          setTargetPreset(kEditNames[m_uiEditPresetIndex]);
+          m_uiAppliedPinIndex = m_uiEditPresetIndex;
         }
       } else {
-        s_appliedPinIndex = -1;
+        m_uiAppliedPinIndex = -1;
       }
 
-      static int s_copyFrom = 0;
       ImGui::SetNextItemWidth(160.0f);
-      ImGui::Combo("##copyFrom", &s_copyFrom, kEditNames, kEditCount);
+      ImGui::Combo("##copyFrom", &m_uiCopyFromIndex, kEditNames, kEditCount);
       ImGui::SameLine();
-      if (ImGui::Button("Copy Into Edited")) { copyPresetToPreset(s_copyFrom, s_editIndex); }
+      if (ImGui::Button("Copy Into Edited")) { copyPresetToPreset(m_uiCopyFromIndex, m_uiEditPresetIndex); }
       RemixGui::SetTooltipToLastWidgetOnHover(
         "Copy every value from the chosen preset into the one being edited.");
 
-      if (ImGui::Button("Snapshot Live -> Preset")) { snapshotLiveToPreset(s_editIndex); }
+      if (ImGui::Button("Snapshot Live -> Preset")) { snapshotLiveToPreset(m_uiEditPresetIndex); }
       RemixGui::SetTooltipToLastWidgetOnHover(
         "Capture the current live renderer values into this preset. Tune the real "
         "atmosphere/volumetrics with the blender dormant, then capture.");
 
       if (ImGui::Button("Copy as user.conf lines")) {
-        ImGui::SetClipboardText(exportPresetToConf(s_editIndex).c_str());
+        ImGui::SetClipboardText(exportPresetToConf(m_uiEditPresetIndex).c_str());
       }
       RemixGui::SetTooltipToLastWidgetOnHover(
         "Optional: copies this preset as rtx.weather.preset.* lines to the clipboard. "
@@ -884,7 +1188,7 @@ namespace dxvk { namespace fork_weather {
     }
 
     ImGui::Separator();
-    renderPresetEditor(s_editIndex, s_filter, sliderFlags);
+    renderPresetEditor(m_uiEditPresetIndex, m_uiFilter, sliderFlags);
 
     ImGui::End();
   }
@@ -904,28 +1208,8 @@ namespace dxvk { namespace fork_weather {
     }
     m_blendedSnapshot = lerpSnapshot(m_previousSnapshot, targetValues, t);
     applyDriftToSnapshot(m_blendedSnapshot, m_driftPhaseSeconds, m_driftIntensitySmoothed);
+    resolveLegacyWeatherOwnership(m_blendedSnapshot);
     m_blendActive = true;
   }
 
-} }  // namespace dxvk::fork_weather
-
-
-namespace dxvk { namespace fork_hooks {
-
-  void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds) {
-    if (auto* blender = ctx.getSceneManager().getWeatherBlender()) {
-      blender->update(deltaTimeSeconds);
-    }
-  }
-
-  void showWeatherUI(fork_weather::WeatherBlender* blender) {
-    if (blender) {
-      if (ImGui::TreeNode("Weather Presets")) {
-        blender->showImguiSettings();
-        ImGui::TreePop();
-      }
-      blender->renderEditorWindow();
-    }
-  }
-
-} }  // namespace dxvk::fork_hooks
+}  // namespace dxvk

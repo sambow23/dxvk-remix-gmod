@@ -79,7 +79,9 @@
 #include "../util/util_fastops.h"
 
 #include "rtx_fork_hooks.h"
-#include "rtx_fork_weather.h"
+#include "rtx_weather.h"
+#include "rtx_atmosphere.h"
+#include "rtx_precipitation.h"
 
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
@@ -650,10 +652,9 @@ namespace dxvk {
       m_submitContainsInjectRtx = true;
       m_cachedReflexFrameId = cachedReflexFrameId;
 
-      // Fork: submit the weather precipitation emitter. Must precede
-      // prepareSceneData -- that is where RtxParticleSystemManager::simulate
-      // consumes this frame's spawn contexts.
-      fork_hooks::submitPrecipitation(*this);
+      // Submit weather precipitation before prepareSceneData; particle
+      // simulation consumes this frame's spawn contexts there.
+      getCommonObjects()->metaPrecipitation().submit(*this);
 
       // Update all the GPU buffers needed to describe the scene
       getSceneManager().prepareSceneData(this, m_execBarriers);
@@ -875,7 +876,9 @@ namespace dxvk {
 
     // Update time on the frame end so all other systems can benefit from a global time
     GlobalTime::get().update();
-    fork_hooks::updateWeatherBlender(*this, GlobalTime::get().deltaTime());
+    if (WeatherBlender* weather = getSceneManager().getWeatherBlender()) {
+      weather->update(GlobalTime::get().deltaTime());
+    }
   }
 
   // Called right before D3D9 present
@@ -1385,14 +1388,14 @@ namespace dxvk {
     constants.viewModelRayTMax = RtxOptions::ViewModel::rangeMeters() * RtxOptions::getMeterToWorldUnitScale();
     constants.roughnessDemodulationOffset = m_common->metaDemodulate().demodulateRoughnessOffset();
     
-    RtxGlobalVolumetrics& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
-    // Set per-frame weather override so getVolumeArgs() reads blended values
-    // instead of RTX_OPTION defaults for every weather-blendable volumetric
-    // field. Must be set BEFORE getVolumeArgs() is called (below).
-    globalVolumetrics.applyWeatherOverride(
-      getSceneManager().getWeatherBlender()
+    const WeatherSnapshot* weatherSnapshot = getSceneManager().getWeatherBlender()
       ? getSceneManager().getWeatherBlender()->getBlendedSnapshot()
-      : nullptr);
+      : nullptr;
+
+    RtxGlobalVolumetrics& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
+    // Weather is transient frame state. Volumetrics and atmosphere consume the
+    // same immutable snapshot; authored RtxOptions remain untouched.
+    globalVolumetrics.applyWeatherOverride(weatherSnapshot);
     constants.volumeArgs = globalVolumetrics.getVolumeArgs(cameraManager, getSceneManager().getFogState(), enablePortalVolumes);
     constants.startInMediumMaterialIndex = getSceneManager().getStartInMediumMaterialIndex();
     OpaqueMaterialOptions::fillShaderParams(constants.opaqueMaterialArgs);
@@ -1418,7 +1421,35 @@ namespace dxvk {
     constants.resolveStochasticAlphaBlendThreshold = m_common->metaComposite().stochasticAlphaBlendOpacityThreshold();
 
     constants.skyBrightness = RtxOptions::skyBrightness();
-    fork_hooks::updateAtmosphereConstants(*this, constants);
+
+    constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
+    constants.particleSkyAmbientScale = std::max(
+      weatherSnapshot ? weatherSnapshot->precipitationSkyLight : PrecipitationSystem::skyLight(),
+      0.0f);
+
+    const SkyMode currentSkyMode = RtxOptions::skyMode();
+    if (currentSkyMode != m_lastSkyMode) {
+      if (currentSkyMode == SkyMode::Numos) {
+        auto skyProbe = getResourceManager().getSkyProbe(this, m_skyColorFormat);
+        auto skyMatte = getResourceManager().getSkyMatte(this, m_skyRtColorFormat);
+
+        VkClearValue clearValue = {};
+        if (skyProbe.view != nullptr) {
+          DxvkContext::clearRenderTarget(skyProbe.view, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
+        }
+        if (skyMatte.view != nullptr) {
+          DxvkContext::clearRenderTarget(skyMatte.view, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
+        }
+      }
+      m_lastSkyMode = currentSkyMode;
+    }
+
+    RtxAtmosphere& atmosphere = getCommonObjects()->metaAtmosphere();
+    const AtmosphereArgs atmosphereArgs = atmosphere.updateFrame(
+      *this, weatherSnapshot, GlobalTime::get().deltaTime());
+    if (currentSkyMode == SkyMode::Numos) {
+      constants.atmosphereArgs = atmosphereArgs;
+    }
 
     constants.isLastCompositeOutputValid = restirGI.isActive() && restirGI.getLastCompositeOutput().matchesWriteFrameIdx(frameIdx - 1);
     constants.isZUp = RtxOptions::zUp();
@@ -1511,7 +1542,7 @@ namespace dxvk {
     bindResourceSampler(BINDING_VALUE_NOISE_SAMPLER, linearSampler);
     bindResourceBuffer(BINDING_SAMPLER_READBACK_BUFFER, DxvkBufferSlice(samplerFeedbackBuffer, 0, samplerFeedbackBuffer.ptr() ? samplerFeedbackBuffer->info().size : 0));
 
-    fork_hooks::bindAtmosphereLuts(*this);
+    getCommonObjects()->metaAtmosphere().bindResources(*this);
   }
 
   void RtxContext::bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView)
@@ -2719,7 +2750,7 @@ namespace dxvk {
   }
 
   void RtxContext::rasterizeSky(const DrawParameters& params, const DrawCallState& drawCallState) {
-    if (fork_hooks::injectRtxAtmosphereSkySkip()) {
+    if (RtxOptions::skyMode() == SkyMode::Numos) {
       return;
     }
 
