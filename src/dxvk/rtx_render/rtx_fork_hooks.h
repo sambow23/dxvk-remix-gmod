@@ -64,11 +64,17 @@ namespace dxvk {
   class RtInstance;
   class RtxContext;
   class SceneManager;
+  class WeatherBlender;
   struct LegacyMaterialData;
   struct RtLight;
   struct TextureRef;
 
   namespace fork_hooks {
+
+    // Publishes __weather.current / .previous / .blend_progress for the
+    // GameValueRead* components. Call once per frame after WeatherBlender::update.
+    // Implementation in rtx_fork_weather_game_values.cpp.
+    void publishWeatherGameValues(const WeatherBlender& blender);
 
 
     // Checks for a USD mesh/light replacement keyed on the API mesh handle hash.

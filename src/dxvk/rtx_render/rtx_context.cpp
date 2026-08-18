@@ -878,6 +878,8 @@ namespace dxvk {
     GlobalTime::get().update();
     if (WeatherBlender* weather = getSceneManager().getWeatherBlender()) {
       weather->update(GlobalTime::get().deltaTime());
+      // Remix Plus only; drop this line when cherry-picking upstream.
+      fork_hooks::publishWeatherGameValues(*weather);
     }
   }
 
