@@ -70,18 +70,18 @@
 // sigma_s yields that light's complete multiple scattering contribution (Equation 11). Neither the
 // illuminance nor sigma_s is baked in here, so callers must apply each exactly once.
 //
-// Fork history (2026-08-18). This bake previously accumulated `scattering * sunTransmittance * dt *
-// sinZenith` and added two bolt-on terms. Three things were wrong with it:
-//   - the isotropic phase p_u = 1/4pi was never applied;
-//   - scattering orders three and above were absent entirely (no f_ms series), which is also why
-//     dense atmospheres — the Mars and heavy-dust presets — lost energy and went dark rather than
-//     milky as density rose;
-//   - the ground bounce was a solid-angle approximation that never looked at the sky above the
-//     ground point, and on top of it sat a hard-coded 0.01 * (0.35, 0.38, 0.45) fit that pinned the
-//     fill term to a fixed pale blue regardless of the atmosphere's actual composition.
-// That fixed blue is what multiScatterStrength and sunsetSaturation were introduced to fight. With
-// the fill's colour now derived rather than assumed, both remain available as style controls but
-// are no longer required as corrections — expect to retune presets that lean on them.
+// The cheaper formulation — accumulating `scattering * sunTransmittance * dt * sinZenith` plus two
+// bolt-on terms — is deliberately not used here. Three things are wrong with it:
+//   - the isotropic phase p_u = 1/4pi is never applied;
+//   - scattering orders three and above are absent entirely (no f_ms series), which is also why
+//     dense atmospheres — the Mars and heavy-dust presets — lose energy and go dark rather than
+//     milky as density rises;
+//   - the ground bounce is a solid-angle approximation that never looks at the sky above the ground
+//     point, and on top of it sits a hard-coded 0.01 * (0.35, 0.38, 0.45) fit that pins the fill
+//     term to a fixed pale blue regardless of the atmosphere's actual composition.
+// That fixed blue is what multiScatterStrength and sunsetSaturation exist to fight. With the fill's
+// colour derived rather than assumed, both remain available as style controls but are not required
+// as corrections — expect to retune presets that lean on them.
 //
 // Cost is unchanged: same 64-direction x 20-step budget, and this is a bake that only re-runs when
 // the atmosphere parameters change.

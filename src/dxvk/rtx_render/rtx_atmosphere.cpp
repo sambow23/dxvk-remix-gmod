@@ -953,7 +953,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudUndersideLightSigma = wx ? wx->cloudUndersideLightSigma : RtxAtmosphere::cloudUndersideLightSigma();
   }
 
-  // Aerial perspective (fork — 2026-08-18). The camera basis is filled in per frame by
+  // Aerial perspective. The camera basis is filled in per frame by
   // fillAerialPerspectiveArgs(); only the camera-independent scalars are set here.
   {
     const float worldUnitsPerMeter = RtxOptions::getMeterToWorldUnitScale();
@@ -1740,7 +1740,7 @@ void RtxAtmosphere::dispatchAerialPerspectiveLut(Rc<DxvkContext> ctx) {
 
   AtmosphereArgs args = getAtmosphereArgs();
 
-  // Sun occlusion of the marched column (fork — 2026-08-18). This dispatch runs from
+  // Sun occlusion of the marched column. This dispatch runs from
   // updateRaytraceArgsConstantBuffer, which RtxContext calls AFTER SceneManager::prepareSceneData
   // has built and swapped this frame's TLAS, so the structure below is current rather than stale.
   // It is null for the first frames of a scene though, and DxvkContext writes VK_NULL_HANDLE into
@@ -2745,11 +2745,11 @@ namespace {
   // bakes, with the same tent ozone profile and the same Mie scattering + absorption extinction — so
   // the distant sun/moon lights this feeds agree with the LUT-lit sky.
   //
-  // Fork history (2026-08-18): this was a plane-parallel Kasten-Young air mass with the ozone term
-  // reduced to `airMass * 0.15`, giving an ozone optical depth of ~7.5e-4 at zenith against a
-  // physical ~0.028 — effectively no ozone at all, while the sky had it. It also needed an ad-hoc
-  // exp(-15 * |cos|) twilight fade below the horizon; the spherical march needs none, because it
-  // returns zero as soon as the planet occludes the body.
+  // The cheap alternative — a plane-parallel Kasten-Young air mass with the ozone term reduced
+  // to `airMass * 0.15` — is deliberately not used here. It gives an ozone optical depth of
+  // ~7.5e-4 at zenith against a physical ~0.028, i.e. effectively no ozone at all while the sky has
+  // it, and it needs an ad-hoc exp(-15 * |cos|) twilight fade below the horizon. The spherical
+  // march needs none, because it returns zero as soon as the planet occludes the body.
   //
   // dirYUp must be normalized and in Y-up space. Cost is 40 steps once per body per frame.
   Vector3 fhAtmTransmittanceYUp(const AtmosphereArgs& a, const Vector3& dirYUp) {

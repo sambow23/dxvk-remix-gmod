@@ -600,7 +600,7 @@ void applySkyContribution(
   radianceOutput += skyContribution;
 }
 
-// Aerial perspective (Hillaire EGSR 2020, Section 5.4 — fork 2026-08-18): the atmosphere's
+// Aerial perspective (Hillaire EGSR 2020, Section 5.4): the atmosphere's
 // extinction and in-scatter between the camera and the shaded surface, which is what makes distant
 // geometry hazy and desaturated.
 //

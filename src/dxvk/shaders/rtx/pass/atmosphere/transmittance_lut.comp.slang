@@ -34,11 +34,11 @@ RWTexture2D<float4> transmittanceLutOutput;
 
 // Transmittance from (altitude, viewZenithCosAngle) to the atmosphere's top boundary.
 //
-// The planet is deliberately NOT tested here (fork — 2026-08-18, EGSR 2020 pass). This bake used to
-// return a hard vec3(0) for every entry whose ray passes through the ground, and the LUT is read
-// through a linear sampler — so texels adjacent to that region were averaged against zero and the
-// sun's transmittance came back artificially dark for exactly the near-horizon angles where it
-// matters most, dimming and reddening the sun too early and non-smoothly through sunset.
+// The planet is deliberately NOT tested here. Returning a hard vec3(0) for every entry whose ray
+// passes through the ground does not survive the LUT being read through a linear sampler: texels
+// adjacent to that region get averaged against zero and the sun's transmittance comes back
+// artificially dark for exactly the near-horizon angles where it matters most, dimming and
+// reddening the sun too early and non-smoothly through sunset.
 //
 // Instead those rays still get a real entry, integrated with the density clamped at ground level,
 // and occlusion by the planet is handled as a separate visibility term at the point of use

@@ -63,9 +63,9 @@ struct AtmosphereArgs {
   float sunRayBrightness;  // Multiplier for direct sun ray brightness
 
   // Aerosols absorb as well as scatter (Hillaire EGSR 2020, Table 1), so Mie extinction is
-  // scattering + absorption. Before this row existed the fork modelled only the scattering half,
-  // which left aerosol extinction at roughly half its physical value: haze brightened as it
-  // thickened instead of also darkening, and could not be tinted. Raising this relative to
+  // scattering + absorption. Modelling only the scattering half leaves aerosol extinction at
+  // roughly half its physical value: haze brightens as it thickens instead of also darkening, and
+  // cannot be tinted. Raising this relative to
   // mieScattering is what makes dust brown-and-dim rather than grey-and-bright.
   vec3 mieAbsorption;  // Absorption coefficients (km^-1)
   uint flipUpAxis;  // Negate the world up axis when converting into the atmosphere's Y-up frame
@@ -661,7 +661,7 @@ struct AtmosphereArgs {
   // Rebuilt every frame (unlike the parameter-only transmittance / multiscattering / sky-view
   // bakes), so none of it may invalidate those bakes.
   //
-  // Grouping them last is only for readability - it is NOT what protects the cache. This fork's
+  // Grouping them last is only for readability - it is NOT what protects the cache. The
   // bake-invalidation memcmp covers the WHOLE struct; what actually protects it is
   // normalizeForSkyLutCache() explicitly zeroing every field here. Any field added below this
   // point must be zeroed there too, or the entire LUT cascade re-bakes on every camera movement.

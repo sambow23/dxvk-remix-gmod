@@ -20,7 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 
-// Aerial perspective volume bake (Hillaire EGSR 2020, Section 5.4 — fork 2026-08-18).
+// Aerial perspective volume bake (Hillaire EGSR 2020, Section 5.4).
 //
 // See the block comment above evalAtmosphereInScatterSegment in atmosphere_common.slangh for what
 // this volume is and why the march starts past the global volumetrics froxel grid.
@@ -50,7 +50,7 @@ RWTexture3D<float4> aerialPerspectiveLutOutput;
 layout(binding = AERIAL_PERSPECTIVE_LUT_ACCELERATION_STRUCTURE)
 RaytracingAccelerationStructure sceneTlas;
 
-// Sun occlusion by scene geometry, for the column this volume integrates (fork — 2026-08-18).
+// Sun occlusion by scene geometry, for the column this volume integrates.
 //
 // Without it the bake treats the air in front of a surface as fully sunlit even when that surface
 // is precisely what is hiding the sun, and the forward-scatter lobe peaks in exactly that
@@ -67,14 +67,15 @@ RaytracingAccelerationStructure sceneTlas;
 // decals and alpha-blended particles carry their own bits and are left out - they should not cast
 // a hard sun shadow.
 //
-// Deliberately NOT RAY_FLAG_CULL_NON_OPAQUE (fork — 2026-08-18, second pass; the first attempt at
-// this trace had it and did nothing). Mask membership is not the same thing as the geometry-level
+// Deliberately NOT RAY_FLAG_CULL_NON_OPAQUE: with that flag set this trace does nothing at all.
+// Mask membership is not the same thing as the geometry-level
 // opaque bit: rtx_instance_manager.cpp gives alpha-TESTED geometry m_geometryFlags = 0, and adds
 // VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR to anything with a clip plane. Both stay in
 // OBJECT_MASK_OPAQUE, and both are culled by that flag - so a plank wall or a clip-planed interior
 // would be traced straight through and reported sunlit, which is precisely the halo this is here
-// to remove. Copying the flag from the precipitation spawn trace was wrong: not stopping a
-// raindrop is a deliberate choice for an alpha-tested card, not stopping sunlight is not.
+// to remove. The precipitation spawn trace does set the flag, but that choice does not carry over
+// here: not stopping a raindrop is defensible for an alpha-tested card, not stopping sunlight is
+// not.
 //
 // Every candidate is therefore committed as a full occluder. Resolving real alpha would need the
 // surface, material and bindless texture bindings this pass deliberately does not carry, and for a
@@ -198,12 +199,12 @@ static const int kStepsPerSlice = 6;
 
 // One thread per screen column, marching outward once and writing each slice as it passes it.
 //
-// The previous shape was a thread per froxel, each re-marching from the near bound to its own
-// distance (fork — 2026-08-18, second pass). That is 32x the work for a strictly worse result: the
-// slices along a column were independent integrations, so nothing forced slice i+1 to actually
-// equal slice i plus the segment between them, and the composite interpolates between exactly those
-// neighbours. Accumulating along the ray makes that identity hold by construction, and buys enough
-// budget to raise the sample count while still costing less than before.
+// The obvious alternative — a thread per froxel, each re-marching from the near bound to its own
+// distance — is 32x the work for a strictly worse result: the slices along a column are then
+// independent integrations, so nothing forces slice i+1 to actually equal slice i plus the segment
+// between them, and the composite interpolates between exactly those neighbours. Accumulating along
+// the ray makes that identity hold by construction, and buys enough budget to raise the sample
+// count while still costing less.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void main(uint3 threadId : SV_DispatchThreadID) {

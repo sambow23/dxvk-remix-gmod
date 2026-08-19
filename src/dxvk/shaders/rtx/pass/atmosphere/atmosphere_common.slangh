@@ -111,11 +111,11 @@ float mieDensity(float altitude, AtmosphereArgs args) {
 // Earth. The vertical ozone column is then exactly ozoneLayerWidth km, which is what makes the
 // Table 1 coefficients land on the correct sunset blue.
 //
-// Fork history: this was a Gaussian with sigma = 0.4 * ozoneLayerWidth, which has meaningful
-// support far outside the stated layer and a different column than the tent. That mismatch was
-// being compensated by 3x-oversized ozone coefficients plus a 0.15 fudge in the analytical
-// sun-transmittance path only, so the sky bake and the CPU-side sun light disagreed about ozone
-// and ozoneDensity was not a predictable slider. Both compensations are removed alongside this.
+// A Gaussian with sigma = 0.4 * ozoneLayerWidth is the tempting alternative, but it has meaningful
+// support far outside the stated layer and a different column than the tent. Compensating for that
+// mismatch takes 3x-oversized ozone coefficients plus a 0.15 fudge in the analytical
+// sun-transmittance path only, which leaves the sky bake and the CPU-side sun light disagreeing
+// about ozone, and ozoneDensity behaving as anything but a predictable slider.
 float ozoneDensity(float altitude, AtmosphereArgs args) {
   const float halfWidth = max(args.ozoneLayerWidth, kAtmosphereEpsilon);
   return max(0.0f, 1.0f - abs(altitude - args.ozoneLayerAltitude) / halfWidth);
@@ -834,10 +834,10 @@ vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
   float rayleighOpticalDepthToSun = H * airMass;
   float mieOpticalDepthToSun      = args.mieScaleHeight * airMass;
 
-  // Ozone (fork — 2026-08-18, EGSR 2020 pass). Previously this was
-  // `ozoneDensity(ozoneLayerAltitude) * airMass * 0.15`, i.e. a dimensionless peak density times
-  // the Rayleigh air mass times a fudge — an optical depth of ~7.5e-4 at zenith against a physical
-  // ~0.028, so the cloud and moon paths had effectively no ozone at all while the LUT-lit sky did.
+  // Ozone. The cheaper form `ozoneDensity(ozoneLayerAltitude) * airMass * 0.15` — a dimensionless
+  // peak density times the Rayleigh air mass times a fudge — is not used here: it gives an optical
+  // depth of ~7.5e-4 at zenith against a physical ~0.028, which would leave the cloud and moon
+  // paths with effectively no ozone at all while the LUT-lit sky has it.
   //
   // The tent profile integrates to exactly ozoneLayerWidth km of vertical column, and ozone sits
   // high enough that it does NOT follow the near-ground Rayleigh air mass: the standard Chapman
@@ -2021,7 +2021,7 @@ float sampleCloudGroundShadow_OptionB_explicit(vec3 worldPos, vec3 sunDir,
 
 
 // ============================================================================
-// Aerial perspective froxel volume (Hillaire EGSR 2020, Section 5.4 — fork 2026-08-18)
+// Aerial perspective froxel volume (Hillaire EGSR 2020, Section 5.4)
 // ============================================================================
 // A camera-frustum-fitted volume holding, per froxel, the atmospheric in-scattered luminance toward
 // the camera in RGB and the mean transmittance in A. Applying it to a shaded pixel is then a single
@@ -2105,7 +2105,7 @@ vec3 evalAtmosphereInScatterSegment<TSunOccluder : IAtmosphereSunOccluder>(
   const float cosTheta = dot(rayDir, sunDir);
   const float phaseR = rayleighPhase(cosTheta);
 
-  // Forward-scatter cap, this volume only (fork — 2026-08-18).
+  // Forward-scatter cap, this volume only.
   //
   // The air this volume integrates is the air BETWEEN the camera and a surface, so when that
   // surface is what stands between the camera and the sun, the whole column sits inside that
@@ -2115,8 +2115,8 @@ vec3 evalAtmosphereInScatterSegment<TSunOccluder : IAtmosphereSunOccluder>(
   // a unit of radiance gathered across a couple of hundred metres of air, against a shadowed wall
   // sitting nearer 0.1: a bright halo painted over whatever the sun is hiding behind.
   //
-  // sunOccluder is what actually removes that halo (fork — 2026-08-18, second pass) by tracing the
-  // column against the scene. The cap stays as a second, cheaper line of defence for the samples
+  // sunOccluder is what actually removes that halo, by tracing the column against the scene. The
+  // cap stays as a second, cheaper line of defence for the samples
   // the trace cannot reach: it is bounded to aerialPerspectiveSceneShadowRange, and past that the
   // march is back to knowing nothing about the scene. Note the sky path deliberately keeps the
   // uncapped anisotropy: its aureole is a primary-miss term that geometry occludes correctly, and
@@ -2157,8 +2157,8 @@ vec3 evalAtmosphereInScatterSegment<TSunOccluder : IAtmosphereSunOccluder>(
     // Every higher scattering order, via Psi_ms. sigma_s and the illuminance are each applied
     // exactly once, here — matching the convention in evalAtmosphereRadiance.
     //
-    // skyVisibility is how much of the sky this segment can actually see (fork — 2026-08-18, third
-    // pass). The paper drops visibility from this term outright — Section 5.5.1, "Visibility Vis is
+    // skyVisibility is how much of the sky this segment can actually see. The paper drops
+    // visibility from this term outright — Section 5.5.1, "Visibility Vis is
     // ignored when evaluating multiple scattering. This relies on the fact that light will scatter
     // around mountains anyway, e.g. the impact of visibility is low for natural atmospheres with a
     // large mean free path." That reasoning is about mountains standing in open air, where light
@@ -2214,19 +2214,19 @@ vec3 aerialPerspectiveViewRayDirection(vec2 screenUv, AtmosphereArgs args) {
 // slices from 20 m to 32 km that is ~26% per slice, so the step is ~6 m at 25 m and ~250 m at 1 km
 // - fine where a room is, coarse where only haze lives.
 //
-// This replaces a quadratic split over [0, depthRange] (fork — 2026-08-18, second pass). Two things
-// were wrong with it, and together they are what let the sun's halo survive onto interior walls
-// even once the column was correctly shadowed:
+// The simpler option is a quadratic split over [0, depthRange]. Two things are wrong with it, and
+// together they are what lets the sun's halo survive onto interior walls even once the column is
+// correctly shadowed:
 //
-//   * It spent slices on ground it does not own. The volume starts at the global volumetrics
+//   * It spends slices on ground it does not own. The volume starts at the global volumetrics
 //     handoff, so every slice inside that radius bakes an empty column - at the 32 km default the
-//     first slice carrying anything at all sat at 70 m, leaving a 50 m interpolation gap over
+//     first slice carrying anything at all sits at 70 m, leaving a 50 m interpolation gap over
 //     exactly the range an interior occupies.
-//   * Worse, that put a kink in the stored function: zero out to the handoff, then rising. Linear
+//   * Worse, that puts a kink in the stored function: zero out to the handoff, then rising. Linear
 //     interpolation across a kink is badly wrong in one direction, and the direction here is
-//     over-integration - a surface at 25 m read a blend dominated by a froxel holding the whole
-//     20-70 m column, roughly 4x the in-scatter it should have received, gathered mostly from air
-//     on the far side of the wall it was being applied to.
+//     over-integration - a surface at 25 m reads a blend dominated by a froxel holding the whole
+//     20-70 m column, roughly 4x the in-scatter it should receive, gathered mostly from air on the
+//     far side of the wall it is being applied to.
 //
 // Anchoring the near end at the handoff removes both: no slice is wasted, the function is smooth
 // across the whole axis, and the column a pixel reads is the length of the column in front of it.
