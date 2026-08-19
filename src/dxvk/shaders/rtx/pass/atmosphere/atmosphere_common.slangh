@@ -2269,6 +2269,24 @@ vec3 aerialPerspectiveScreenUvToUvw(vec2 screenUv, float viewRayDistance, Atmosp
   return vec3(screenUv, aerialPerspectiveForwardDistanceToSlice(forwardDistance, args));
 }
 
+// Fraction of this volume's contribution a surface at `viewRayDistance` is allowed to receive.
+//
+// This is the aerial perspective's fogStart, and it is deliberately the same SHAPE as D3D9 fog's
+// near exclusion: a closed-form function of the shading pixel's own distance, evaluated at full
+// resolution in the composite. Fog cannot bleed through walls because it reads nothing but the
+// pixel it is shading; this fade inherits that property and lends it to the volume, which on its
+// own is a 32x32 screen grid whose scene-shadow term bleeds ~60 px at 1080p.
+//
+// smoothstep rather than a linear ramp so neither end leaves a visible band on a slowly receding
+// surface such as a floor or a road.
+float aerialPerspectiveNearFade(float viewRayDistance, AtmosphereArgs args) {
+  const float start = max(args.aerialPerspectiveNearFadeStart, 0.0f);
+  // Strictly increasing, so a start at or past the end degrades to a hard step instead of a NaN.
+  const float end = max(args.aerialPerspectiveNearFadeEnd, start + 1e-4f);
+
+  return smoothstep(start, end, viewRayDistance);
+}
+
 vec4 sampleAerialPerspectiveLut(Texture3D<float4> aerialPerspectiveLut, SamplerState lutSampler,
                                 vec3 uvw, AtmosphereArgs args) {
   return aerialPerspectiveLut.SampleLevel(lutSampler, clamp(uvw, vec3(0.0f), vec3(1.0f)), 0);

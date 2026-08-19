@@ -731,6 +731,29 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
             "Depth covered by the 32-slice aerial perspective volume. Reduce for denser atmospheres "
             "to spend the slices over a shorter, more accurate range.");
 
+        RemixGui::DragFloat("Aerial Perspective Near Fade Start",
+                            &RtxAtmosphere::aerialPerspectiveNearFadeStartMetersObject(),
+                            1.0f, 0.0f, 5000.0f, "%.0f m", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Distance below which this volume is not applied to a surface at all - its fogStart.\n\n"
+            "The volume starts integrating at the global volumetrics handoff (20 m by default), which "
+            "is the right bound for the physics but far too near to be the bound on what it may "
+            "paint. Its scene shadowing is resolved on a 32x32 screen grid, so a surface just past "
+            "the handoff reads a column blended from neighbours up to ~60 px away; where those look "
+            "past it into sunlit air, the forward-scatter lobe lands on it as a halo bleeding through "
+            "walls and terrain.\n\n"
+            "Raise this if halos still reach interior geometry, lower it if near-field haze is "
+            "visibly missing. Clear-air extinction over the first few hundred metres is negligible, "
+            "so there is very little real haze to lose here.");
+
+        RemixGui::DragFloat("Aerial Perspective Near Fade End",
+                            &RtxAtmosphere::aerialPerspectiveNearFadeEndMetersObject(),
+                            1.0f, 0.0f, 20000.0f, "%.0f m", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Distance at which this volume reaches full strength. Between the fade start and here it "
+            "ramps in smoothly, so a receding floor or road shows no band where the volume takes "
+            "over. At or below the start distance the transition becomes a hard step.");
+
         RemixGui::Checkbox("Aerial Perspective Scene Shadows",
                            &RtxAtmosphere::aerialPerspectiveSceneShadowObject());
         RemixGui::SetTooltipToLastWidgetOnHover(

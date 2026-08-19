@@ -639,12 +639,26 @@ void applyAerialPerspective(
     return;
   }
 
+  // Near-field exclusion, modelled on how fog holds off until fogStart. Driven by this pixel's own
+  // view distance, so unlike the volume it gates it carries no neighbourhood term and cannot bleed
+  // across a silhouette - see aerialPerspectiveNearFade.
+  const float nearFade = aerialPerspectiveNearFade(viewDistance, cb.atmosphereArgs);
+
+  if (nearFade <= 0.0f)
+  {
+    return;
+  }
+
   const vec4 aerialPerspective = sampleAerialPerspectiveLut(
     AtmosphereAerialPerspectiveLut, AtmosphereAerialPerspectiveSampler, uvw, cb.atmosphereArgs);
 
-  const vec3 inScatter = max(aerialPerspective.rgb, vec3(0.0f)) * volumeAttenuation;
+  const vec3 inScatter = max(aerialPerspective.rgb, vec3(0.0f)) * volumeAttenuation * nearFade;
 
-  radianceOutput = radianceOutput * saturate(aerialPerspective.a) + inScatter;
+  // Fade toward the identity transform, not toward zero: at nearFade 0 this has to leave the surface
+  // exactly as it found it, which means a transmittance of one rather than a black multiply.
+  const float transmittance = lerp(1.0f, saturate(aerialPerspective.a), nearFade);
+
+  radianceOutput = radianceOutput * transmittance + inScatter;
 }
 
 void applyFog(

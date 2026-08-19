@@ -165,6 +165,25 @@ public:
                "32 km is the value from Hillaire EGSR 2020 Section 5.4, sized for a 3 km world map. Because the "
                "distribution is relative, raising it costs near-field accuracy only logarithmically.",
                args.minValue = 100.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveNearFadeStartMeters, 50.0f,
+               "Distance in meters below which aerial perspective is not applied to a surface at all.\n"
+               "This is the aerial perspective's fogStart, and it exists for the reason D3D9 fog has one. The "
+               "volume's integration begins at the global volumetrics handoff - rtx.volumetrics."
+               "froxelMaxDistanceMeters, 20 m by default - which is the right bound for the physics but far too "
+               "near to be the bound on what the volume may paint. Scene shadowing of the column is resolved on a "
+               "32x32 screen grid, so a surface just past the handoff reads a column blended from neighbours up to "
+               "~60 px away; where those look past it into sunlit air, the forward-scatter lobe lands on it as a "
+               "halo bleeding through walls and terrain. Holding the volume off until it has real distance to "
+               "integrate removes that whole class of artifact and costs almost nothing physically - clear-air "
+               "extinction over the first few hundred metres is negligible.\n"
+               "Raise it if halos still reach interior geometry; lower it if near-field haze is visibly missing.",
+               args.minValue = 0.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveNearFadeEndMeters, 250.0f,
+               "Distance in meters at which aerial perspective reaches full strength. Across "
+               "[aerialPerspectiveNearFadeStartMeters, this] it ramps in smoothly, so a receding floor or road "
+               "shows no band where the volume takes over. A value at or below the start distance makes the "
+               "transition a hard step.",
+               args.minValue = 0.0f);
     RTX_OPTION("rtx.atmosphere", bool, aerialPerspectiveSceneShadow, true,
                "Trace the scene for sun occlusion of the air column the aerial perspective volume integrates.\n"
                "The volume covers the air BETWEEN the camera and a surface. Untraced, it treats that air as fully "

@@ -373,6 +373,9 @@ namespace {
     args.aerialPerspectiveMieAnisotropyMax = 0.0f;
     args.aerialPerspectiveSceneShadowRange = 0.0f;
     args.aerialPerspectiveSceneShadowMode = 0u;
+    // Composite-only, read after every bake has run, so it must not key the LUT cascade.
+    args.aerialPerspectiveNearFadeStart = 0.0f;
+    args.aerialPerspectiveNearFadeEnd = 0.0f;
     args.cameraPosition              = vec3(0.0f, 0.0f, 0.0f);
     args.cameraForward               = vec3(0.0f, 0.0f, 0.0f);
     args.cameraRight                 = vec3(0.0f, 0.0f, 0.0f);
@@ -958,6 +961,15 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
       RtxAtmosphere::aerialPerspectiveDepthRangeMeters() * worldUnitsPerMeter;
     args.aerialPerspectiveMieAnisotropyMax =
       std::min(std::max(RtxAtmosphere::aerialPerspectiveMieAnisotropyMax(), -1.0f), 1.0f);
+    // Near-field exclusion, applied per pixel by the composite. Deliberately independent of the
+    // volume's own near bound below: that one is where the froxel grid hands off (physics), this one
+    // is where the volume is allowed to start affecting a surface (artifact control). Collapsing the
+    // two is what lets the 32x32 shadow grid paint halos on interior walls - see
+    // aerialPerspectiveNearFadeStart in atmosphere_args.h.
+    args.aerialPerspectiveNearFadeStart =
+      std::max(RtxAtmosphere::aerialPerspectiveNearFadeStartMeters(), 0.0f) * worldUnitsPerMeter;
+    args.aerialPerspectiveNearFadeEnd =
+      std::max(RtxAtmosphere::aerialPerspectiveNearFadeEndMeters(), 0.0f) * worldUnitsPerMeter;
     // Sun occlusion of the marched column by scene geometry. The range is independent of the mode so
     // the no-trace diagnostic below still runs when the TLAS is missing; dispatchAerialPerspectiveLut
     // demotes only the tracing modes when no acceleration structure is bound.

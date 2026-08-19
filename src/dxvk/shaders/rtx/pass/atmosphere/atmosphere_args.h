@@ -717,5 +717,28 @@ struct AtmosphereArgs {
   //   3 = trace, but invert the result. Isolates whether the rays hit anything at all: the halo
   //       should survive ONLY where a ray found geometry.
   uint aerialPerspectiveSceneShadowMode;
+
+  // Per-pixel near-field fade, in world units, applied by the composite rather than by the bake.
+  //
+  // The volume's integration domain starts at the global volumetrics handoff, which is
+  // rtx.volumetrics.froxelMaxDistanceMeters - 20 m by default, and 1 m when volumetrics are off.
+  // That bound is correct for the PHYSICS (it is where the froxel grid stops integrating) but far
+  // too near to be the bound on what this volume may PAINT: its scene-shadow term is resolved on a
+  // 32x32 screen grid, so a surface just past the handoff reads a column bilinearly blended from
+  // neighbours up to ~60 px away at 1080p. Wherever those neighbours look past the surface into
+  // sunlit air, the forward-scatter lobe lands on it as a halo - the bleed-through this fade exists
+  // to remove.
+  //
+  // Modelled on how D3D9 fog excludes nearby geometry (calculateFog in composite.slangh): a
+  // closed-form ramp evaluated from the SHADING PIXEL'S OWN view distance, so it carries no
+  // neighbourhood term and cannot bleed across a silhouette however coarse the volume it gates is.
+  // Below start the volume contributes nothing, across [start, end] it ramps in, past end it is
+  // unattenuated. Physically this gives up almost nothing: clear-air extinction over the first few
+  // hundred metres is negligible, so what lives in that range is overwhelmingly the artifact.
+  float aerialPerspectiveNearFadeStart;
+
+  float aerialPerspectiveNearFadeEnd;
   float padAerial6;
+  float padAerial7;
+  float padAerial8;
 };
