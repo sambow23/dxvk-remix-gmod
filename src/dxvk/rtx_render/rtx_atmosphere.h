@@ -184,6 +184,19 @@ public:
                "shows no band where the volume takes over. A value at or below the start distance makes the "
                "transition a hard step.",
                args.minValue = 0.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", int, aerialPerspectiveLutResolution, 192,
+               "Screen-space resolution of the aerial perspective volume, on both axes.\n"
+               "This axis resolves how the haze varies with view DIRECTION. Most of that is smooth, but the Mie "
+               "aureole around the sun is not, and undersampling it shows as coarse banding in the haze near the "
+               "sun. At 32 one texel covers roughly 60x34 px at 1080p. Cost is quadratic in this value and is "
+               "arithmetic only - the bake traces no rays unless aerialPerspectiveSceneShadow is on.",
+               args.minValue = 8, args.maxValue = 256);
+    RTX_OPTION_ARGS("rtx.atmosphere", int, aerialPerspectiveLutDepthSlices, 32,
+               "Depth slices in the aerial perspective volume.\n"
+               "Kept separate from aerialPerspectiveLutResolution because this axis resolves how the haze varies "
+               "with DISTANCE, and the exponential slice distribution already gives every slice the same relative "
+               "depth resolution - so it needs far less than the screen axes do. Cost is linear in this value.",
+               args.minValue = 4, args.maxValue = 128);
     RTX_OPTION("rtx.atmosphere", bool, aerialPerspectiveSceneShadow, false,
                "Trace the scene for sun occlusion of the air column the aerial perspective volume integrates.\n"
                "Off by default, and the reason is structural rather than a matter of cost. This volume is applied "
@@ -1109,7 +1122,9 @@ private:
   static constexpr uint32_t kSkyViewLutHeight = 256;
   // Paper Section 5.4 uses 32^3 over the frustum, which is plenty for an effect this low frequency.
   // Keep in lockstep with the [numthreads(4,4,4)] dispatch in aerial_perspective_lut.comp.slang.
-  static constexpr uint32_t kAerialPerspectiveLutSize = 32;
+  // Aerial perspective volume dimensions are runtime options, so the resource is (re)created
+  // through this rather than pinned at initialize().
+  void createAerialPerspectiveLut(Rc<DxvkContext> ctx, uint32_t sizeXY, uint32_t sizeZ);
   // Keep in lockstep with kLutWidth/kLutHeight in cloud_sky_transmittance_lut.comp.slang.
   static constexpr uint32_t kCloudSkyTransmittanceLutWidth = 32;
   static constexpr uint32_t kCloudSkyTransmittanceLutHeight = 16;

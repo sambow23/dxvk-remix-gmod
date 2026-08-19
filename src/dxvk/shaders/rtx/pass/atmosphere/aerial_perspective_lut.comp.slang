@@ -210,6 +210,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   AtmosphereArgs args = atmosphereArgs;
 
   const uint size = args.aerialPerspectiveLutSize;
+  const uint depthSlices = max(args.aerialPerspectiveLutDepthSlices, 1u);
   if (size == 0u || any(threadId.xy >= uint2(size, size))) {
     return;
   }
@@ -222,7 +223,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   const vec3 rayVectorWorld = aerialPerspectiveViewRayDirection(uv, args);
   const float forwardToRayLength = length(rayVectorWorld);
   if (!(forwardToRayLength > 0.0f)) {
-    for (uint emptySlice = 0u; emptySlice < size; ++emptySlice) {
+    for (uint emptySlice = 0u; emptySlice < depthSlices; ++emptySlice) {
       aerialPerspectiveLutOutput[uint3(threadId.xy, emptySlice)] = float4(0.0f, 0.0f, 0.0f, 1.0f);
     }
     return;
@@ -263,8 +264,8 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   float segmentStartKm =
     aerialPerspectiveSliceNearDistance(args) * forwardToRayLength * kmPerWorldUnit;
 
-  for (uint slice = 0u; slice < size; ++slice) {
-    const float w = (float(slice) + 0.5f) / float(size);
+  for (uint slice = 0u; slice < depthSlices; ++slice) {
+    const float w = (float(slice) + 0.5f) / float(depthSlices);
     const float segmentEndKm =
       aerialPerspectiveSliceToForwardDistance(w, args) * forwardToRayLength * kmPerWorldUnit;
 

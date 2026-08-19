@@ -716,90 +716,115 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
       RemixGui::DragFloat("Ozone", &RtxAtmosphere::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
       RemixGui::SetTooltipToLastWidgetOnHover("Density of ozone layer");
 
-      RemixGui::Checkbox("Aerial Perspective", &RtxAtmosphere::aerialPerspectiveObject());
-      RemixGui::SetTooltipToLastWidgetOnHover(
-          "Apply the atmosphere's in-scatter and extinction to scene geometry, which is what gives "
-          "distant buildings and terrain their haze and desaturation - the strongest distance cue an "
-          "outdoor scene has. With this off, everything past the global volumetrics froxel range "
-          "renders at full saturation and contrast. Hands off to the volumetrics grid at its range so "
-          "the two do not double count.");
-
-      if (RtxAtmosphere::aerialPerspective()) {
-        RemixGui::DragFloat("Aerial Perspective Range", &RtxAtmosphere::aerialPerspectiveDepthRangeMetersObject(),
-                            100.0f, 100.0f, 200000.0f, "%.0f m", sliderFlags);
+      if (ImGui::TreeNode("Aerial Perspective")) {
+        RemixGui::Checkbox("Enable", &RtxAtmosphere::aerialPerspectiveObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
-            "Depth covered by the 32-slice aerial perspective volume. Reduce for denser atmospheres "
-            "to spend the slices over a shorter, more accurate range.");
+            "Apply the atmosphere's in-scatter and extinction to scene geometry, which is what gives "
+            "distant buildings and terrain their haze and desaturation - the strongest distance cue an "
+            "outdoor scene has. With this off, everything past the global volumetrics froxel range "
+            "renders at full saturation and contrast. Hands off to the volumetrics grid at its range so "
+            "the two do not double count.");
 
-        RemixGui::DragFloat("Aerial Perspective Near Fade Start",
-                            &RtxAtmosphere::aerialPerspectiveNearFadeStartMetersObject(),
-                            1.0f, 0.0f, 5000.0f, "%.0f m", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Distance below which this volume is not applied to a surface at all - its fogStart.\n\n"
-            "The volume starts integrating at the global volumetrics handoff (20 m by default), which "
-            "is the right bound for the physics but far too near to be the bound on what it may "
-            "paint. Its scene shadowing is resolved on a 32x32 screen grid, so a surface just past "
-            "the handoff reads a column blended from neighbours up to ~60 px away; where those look "
-            "past it into sunlit air, the forward-scatter lobe lands on it as a halo bleeding through "
-            "walls and terrain.\n\n"
-            "Raise this if halos still reach interior geometry, lower it if near-field haze is "
-            "visibly missing. Clear-air extinction over the first few hundred metres is negligible, "
-            "so there is very little real haze to lose here.");
-
-        RemixGui::DragFloat("Aerial Perspective Near Fade End",
-                            &RtxAtmosphere::aerialPerspectiveNearFadeEndMetersObject(),
-                            1.0f, 0.0f, 20000.0f, "%.0f m", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Distance at which this volume reaches full strength. Between the fade start and here it "
-            "ramps in smoothly, so a receding floor or road shows no band where the volume takes "
-            "over. At or below the start distance the transition becomes a hard step.");
-
-        RemixGui::Checkbox("Aerial Perspective Scene Shadows",
-                           &RtxAtmosphere::aerialPerspectiveSceneShadowObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-"Trace the scene for sun occlusion of the air column this volume integrates.\n\n"
-            "Off by default. This volume is applied only to pixels that hit geometry, so any shadowing of the column is clipped exactly to the occluder's silhouette - one pixel to the side the ray reaches sky, gets no aerial perspective, and so gets no darkening. It reads as the object's outline stamped on the haze rather than a shadow cast through it, and no resolution or sample count changes that.\n\n"
-            "Shadow shafts belong to the global volumetrics grid, which integrates for every pixel including sky misses and so carries shadows across silhouettes without a seam. This volume begins where rtx.volumetrics.froxelMaxDistanceMeters ends, so widening that range hands more of the shadowed near field to the system that resolves it correctly.");
-
-        if (RtxAtmosphere::aerialPerspectiveSceneShadow()) {
-          RemixGui::DragFloat("Aerial Perspective Shadow Range",
-                              &RtxAtmosphere::aerialPerspectiveSceneShadowRangeMetersObject(),
-                              10.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
+        if (RtxAtmosphere::aerialPerspective()) {
+          RemixGui::DragFloat("Range", &RtxAtmosphere::aerialPerspectiveDepthRangeMetersObject(),
+                              100.0f, 100.0f, 200000.0f, "%.0f m", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
-              "How far from the camera scene geometry may shadow the column. Samples past this "
-              "trace nothing and count as sunlit, which is what the air above the rooftops "
-              "actually is. Raise it for scenes with occluders far larger than a kilometre; lower "
-              "it to spend fewer rays.");
+              "Depth covered by the 32-slice aerial perspective volume. Reduce for denser atmospheres "
+              "to spend the slices over a shorter, more accurate range.");
 
-          const char* kShadowDebugModes[] = {
-            "Off (production)",
-            "1: Force occluded (no trace)",
-            "2: Trace, inverted",
-          };
-          RemixGui::Combo("Scene Shadow Diagnostic",
-                          &RtxAtmosphere::aerialPerspectiveSceneShadowDebugObject(),
-                          kShadowDebugModes, IM_ARRAYSIZE(kShadowDebugModes));
+          RemixGui::DragFloat("Near Fade Start",
+                              &RtxAtmosphere::aerialPerspectiveNearFadeStartMetersObject(),
+                              1.0f, 0.0f, 5000.0f, "%.0f m", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
-              "Takes apart the ways scene shadowing can silently do nothing - they all look the "
-              "same on screen otherwise.\n\n"
-              "1 occludes the column without consulting the scene: the halo MUST vanish. If it "
-              "does not, the constant or the dispatch is broken and the ray tracing is beside the "
-              "point.\n\n"
-              "2 traces and inverts: the halo must survive ONLY where a ray found geometry. A "
-              "screen that stays uniformly lit means the rays are hitting nothing.");
+              "Distance below which this volume is not applied to a surface at all - its fogStart.\n\n"
+              "The volume starts integrating at the global volumetrics handoff (20 m by default), which "
+              "is the right bound for the physics but far too near to be the bound on what it may "
+              "paint. Its scene shadowing is resolved on a 32x32 screen grid, so a surface just past "
+              "the handoff reads a column blended from neighbours up to ~60 px away; where those look "
+              "past it into sunlit air, the forward-scatter lobe lands on it as a halo bleeding through "
+              "walls and terrain.\n\n"
+              "Raise this if halos still reach interior geometry, lower it if near-field haze is "
+              "visibly missing. Clear-air extinction over the first few hundred metres is negligible, "
+              "so there is very little real haze to lose here.");
+
+          RemixGui::DragFloat("Near Fade End",
+                              &RtxAtmosphere::aerialPerspectiveNearFadeEndMetersObject(),
+                              1.0f, 0.0f, 20000.0f, "%.0f m", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Distance at which this volume reaches full strength. Between the fade start and here it "
+              "ramps in smoothly, so a receding floor or road shows no band where the volume takes "
+              "over. At or below the start distance the transition becomes a hard step.");
+
+          RemixGui::DragInt("Resolution",
+                            &RtxAtmosphere::aerialPerspectiveLutResolutionObject(),
+                            1.0f, 8, 256, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Screen-space resolution of this volume, on both axes.\n\n"
+              "Resolves how the haze varies with view DIRECTION. Most of that is smooth, but the Mie "
+              "aureole around the sun is not, and undersampling it reads as coarse banding in the "
+              "haze near the sun. At 32 one texel spans roughly 60x34 px at 1080p.\n\n"
+              "Cost is quadratic in this value, and arithmetic only - the bake traces no rays unless "
+              "scene shadows are enabled below.");
+
+          RemixGui::DragInt("Depth Slices",
+                            &RtxAtmosphere::aerialPerspectiveLutDepthSlicesObject(),
+                            1.0f, 4, 128, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Depth slices in this volume.\n\n"
+              "Separate from the resolution above because this axis resolves how the haze varies with "
+              "DISTANCE, and the exponential slice distribution already gives every slice the same "
+              "relative depth resolution - so it needs far fewer samples than the screen axes do. "
+              "Cost is linear in this value.");
+
+          RemixGui::Checkbox("Scene Shadows",
+                             &RtxAtmosphere::aerialPerspectiveSceneShadowObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+  "Trace the scene for sun occlusion of the air column this volume integrates.\n\n"
+              "Off by default. This volume is applied only to pixels that hit geometry, so any shadowing of the column is clipped exactly to the occluder's silhouette - one pixel to the side the ray reaches sky, gets no aerial perspective, and so gets no darkening. It reads as the object's outline stamped on the haze rather than a shadow cast through it, and no resolution or sample count changes that.\n\n"
+              "Shadow shafts belong to the global volumetrics grid, which integrates for every pixel including sky misses and so carries shadows across silhouettes without a seam. This volume begins where rtx.volumetrics.froxelMaxDistanceMeters ends, so widening that range hands more of the shadowed near field to the system that resolves it correctly.");
+
+          if (RtxAtmosphere::aerialPerspectiveSceneShadow()) {
+            RemixGui::DragFloat("Shadow Range",
+                                &RtxAtmosphere::aerialPerspectiveSceneShadowRangeMetersObject(),
+                                10.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How far from the camera scene geometry may shadow the column. Samples past this "
+                "trace nothing and count as sunlit, which is what the air above the rooftops "
+                "actually is. Raise it for scenes with occluders far larger than a kilometre; lower "
+                "it to spend fewer rays.");
+
+            const char* kShadowDebugModes[] = {
+              "Off (production)",
+              "1: Force occluded (no trace)",
+              "2: Trace, inverted",
+            };
+            RemixGui::Combo("Scene Shadow Diagnostic",
+                            &RtxAtmosphere::aerialPerspectiveSceneShadowDebugObject(),
+                            kShadowDebugModes, IM_ARRAYSIZE(kShadowDebugModes));
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Takes apart the ways scene shadowing can silently do nothing - they all look the "
+                "same on screen otherwise.\n\n"
+                "1 occludes the column without consulting the scene: the halo MUST vanish. If it "
+                "does not, the constant or the dispatch is broken and the ray tracing is beside the "
+                "point.\n\n"
+                "2 traces and inverts: the halo must survive ONLY where a ray found geometry. A "
+                "screen that stays uniformly lit means the rays are hitting nothing.");
+          }
+
+          RemixGui::DragFloat("Forward Scatter Cap",
+                              &RtxAtmosphere::aerialPerspectiveMieAnisotropyMaxObject(),
+                              0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Caps the Mie anisotropy the aerial perspective volume may use. The sky keeps the full "
+              "Mie Anisotropy under Advanced, so this does not touch the glow around the sun itself.\n\n"
+              "A strongly forward-scattering lobe is brightest looking straight into the sun, which is "
+              "also where the air in front of a surface is most likely to sit in that surface's own "
+              "shadow. Scene Shadows above is what removes the resulting halo; this cap is the second "
+              "line of defence for the column beyond Shadow Range, where nothing is traced. Raise it "
+              "toward Mie Anisotropy for a stronger sunward haze wash on distant geometry.");
         }
 
-        RemixGui::DragFloat("Aerial Perspective Forward Scatter Cap",
-                            &RtxAtmosphere::aerialPerspectiveMieAnisotropyMaxObject(),
-                            0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Caps the Mie anisotropy the aerial perspective volume may use. The sky keeps the full "
-            "Mie Anisotropy under Advanced, so this does not touch the glow around the sun itself.\n\n"
-            "A strongly forward-scattering lobe is brightest looking straight into the sun, which is "
-            "also where the air in front of a surface is most likely to sit in that surface's own "
-            "shadow. Scene Shadows above is what removes the resulting halo; this cap is the second "
-            "line of defence for the column beyond Shadow Range, where nothing is traced. Raise it "
-            "toward Mie Anisotropy for a stronger sunward haze wash on distant geometry.");
+        ImGui::TreePop();
       }
 
       if (ImGui::TreeNode("Advanced")) {

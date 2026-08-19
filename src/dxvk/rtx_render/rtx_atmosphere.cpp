@@ -368,6 +368,7 @@ namespace {
     // re-bake the entire LUT cascade on every camera movement (same class of bug as the starRotation
     // one noted below). Zeroed in the base so every derived key inherits it.
     args.aerialPerspectiveLutSize       = 0u;
+    args.aerialPerspectiveLutDepthSlices = 0u;
     args.aerialPerspectiveDepthRange    = 0.0f;
     args.aerialPerspectiveStartDistance = 0.0f;
     args.aerialPerspectiveMieAnisotropyMax = 0.0f;
@@ -956,7 +957,11 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // fillAerialPerspectiveArgs(); only the camera-independent scalars are set here.
   {
     const float worldUnitsPerMeter = RtxOptions::getMeterToWorldUnitScale();
-    args.aerialPerspectiveLutSize = RtxAtmosphere::aerialPerspective() ? kAerialPerspectiveLutSize : 0u;
+    args.aerialPerspectiveLutSize = RtxAtmosphere::aerialPerspective()
+      ? static_cast<uint32_t>(std::max(RtxAtmosphere::aerialPerspectiveLutResolution(), 1))
+      : 0u;
+    args.aerialPerspectiveLutDepthSlices =
+      static_cast<uint32_t>(std::max(RtxAtmosphere::aerialPerspectiveLutDepthSlices(), 1));
     args.aerialPerspectiveDepthRange =
       RtxAtmosphere::aerialPerspectiveDepthRangeMeters() * worldUnitsPerMeter;
     args.aerialPerspectiveMieAnisotropyMax =
@@ -1117,25 +1122,10 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     1 // mipLevels
   );
 
-  // Aerial perspective volume (3D RGBA16F, 32^3). In-scatter toward the camera in RGB, mean
-  // transmittance in A. Camera-frustum-fitted, so rebuilt every frame rather than on parameter
-  // change; consumed by the composite pass to haze distant geometry.
-  VkExtent3D aerialPerspectiveExtent = {
-    kAerialPerspectiveLutSize, kAerialPerspectiveLutSize, kAerialPerspectiveLutSize
-  };
-  m_aerialPerspectiveLut = Resources::createImageResource(
+  createAerialPerspectiveLut(
     ctx,
-    "Atmosphere Aerial Perspective LUT",
-    aerialPerspectiveExtent,
-    VK_FORMAT_R16G16B16A16_SFLOAT,
-    1, // numLayers
-    VK_IMAGE_TYPE_3D,
-    VK_IMAGE_VIEW_TYPE_3D,
-    0, // imageCreateFlags
-    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
-    VkClearColorValue{}, // clearValue
-    1 // mipLevels
-  );
+    static_cast<uint32_t>(std::max(RtxAtmosphere::aerialPerspectiveLutResolution(), 1)),
+    static_cast<uint32_t>(std::max(RtxAtmosphere::aerialPerspectiveLutDepthSlices(), 1)));
 
 
   // Fork: cloud-occluded sky-ambient transmittance LUT (2D R16F, 32x16).
@@ -1712,7 +1702,40 @@ void RtxAtmosphere::setAerialPerspectiveCamera(const RtCamera& camera) {
   m_apCameraUp = camera.getUp(/*freecam=*/true) * tanHalfFovY;
 }
 
+// In-scatter toward the camera in RGB, mean transmittance in A. Camera-frustum-fitted, so it is
+// rebuilt every frame rather than on parameter change; consumed by the composite to haze geometry.
+void RtxAtmosphere::createAerialPerspectiveLut(Rc<DxvkContext> ctx, uint32_t sizeXY, uint32_t sizeZ) {
+  VkExtent3D aerialPerspectiveExtent = { sizeXY, sizeXY, sizeZ };
+  m_aerialPerspectiveLut = Resources::createImageResource(
+    ctx,
+    "Atmosphere Aerial Perspective LUT",
+    aerialPerspectiveExtent,
+    VK_FORMAT_R16G16B16A16_SFLOAT,
+    1, // numLayers
+    VK_IMAGE_TYPE_3D,
+    VK_IMAGE_VIEW_TYPE_3D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+}
+
 void RtxAtmosphere::dispatchAerialPerspectiveLut(Rc<DxvkContext> ctx) {
+  // Both dimensions are runtime options, so honour a change by rebuilding the volume before writing
+  // to it. The old image stays alive as long as a command list still references it, so this is safe
+  // mid-frame; it only ever runs on an actual resize.
+  const uint32_t lutSizeXY =
+    static_cast<uint32_t>(std::max(RtxAtmosphere::aerialPerspectiveLutResolution(), 1));
+  const uint32_t lutSizeZ =
+    static_cast<uint32_t>(std::max(RtxAtmosphere::aerialPerspectiveLutDepthSlices(), 1));
+
+  if (!m_aerialPerspectiveLut.isValid()
+      || m_aerialPerspectiveLut.image->info().extent.width != lutSizeXY
+      || m_aerialPerspectiveLut.image->info().extent.depth != lutSizeZ) {
+    createAerialPerspectiveLut(ctx, lutSizeXY, lutSizeZ);
+  }
+
   ScopedGpuProfileZone(ctx, "Atmosphere Aerial Perspective LUT");
 
   AtmosphereArgs args = getAtmosphereArgs();
@@ -1761,7 +1784,7 @@ void RtxAtmosphere::dispatchAerialPerspectiveLut(Rc<DxvkContext> ctx) {
 
   // One thread per screen column; the shader walks that column's depth slices itself, so the
   // dispatch is 2D over the volume's face rather than 3D over its froxels.
-  const uint32_t groups = (kAerialPerspectiveLutSize + 7) / 8;
+  const uint32_t groups = (lutSizeXY + 7) / 8;
   ctx->dispatch(groups, groups, 1);
 }
 

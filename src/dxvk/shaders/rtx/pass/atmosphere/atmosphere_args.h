@@ -738,7 +738,13 @@ struct AtmosphereArgs {
   float aerialPerspectiveNearFadeStart;
 
   float aerialPerspectiveNearFadeEnd;
-  float padAerial6;
+
+  // Depth slices in the volume, kept separate from its screen resolution above. The two axes carry
+  // different content: XY resolves how the haze varies with view DIRECTION, which near the sun is
+  // the Mie aureole and wants resolution, while Z resolves how it varies with DISTANCE, which the
+  // exponential slice distribution already makes smooth. Tying them together would charge a square
+  // for an axis that does not need it.
+  uint aerialPerspectiveLutDepthSlices;
   float padAerial7;
   float padAerial8;
 };
