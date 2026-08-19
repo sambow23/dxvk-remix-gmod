@@ -757,14 +757,9 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
         RemixGui::Checkbox("Aerial Perspective Scene Shadows",
                            &RtxAtmosphere::aerialPerspectiveSceneShadowObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
-            "Trace the scene for sun occlusion of the air column this volume integrates.\n\n"
-            "The volume covers the air BETWEEN the camera and a surface. Untraced, it treats that "
-            "air as fully sunlit even when the surface is precisely what is hiding the sun - and "
-            "the forward-scatter lobe is brightest in exactly that direction, so a bright halo "
-            "bleeds through walls and terrain wherever the sun sits behind them. One opaque shadow "
-            "ray per march step removes it. Visibility is averaged along the column rather than "
-            "decided once, so a doorway reads correctly: indoors is shadowed, past the threshold "
-            "is not.");
+"Trace the scene for sun occlusion of the air column this volume integrates.\n\n"
+            "Off by default. This volume is applied only to pixels that hit geometry, so any shadowing of the column is clipped exactly to the occluder's silhouette - one pixel to the side the ray reaches sky, gets no aerial perspective, and so gets no darkening. It reads as the object's outline stamped on the haze rather than a shadow cast through it, and no resolution or sample count changes that.\n\n"
+            "Shadow shafts belong to the global volumetrics grid, which integrates for every pixel including sky misses and so carries shadows across silhouettes without a seam. This volume begins where rtx.volumetrics.froxelMaxDistanceMeters ends, so widening that range hands more of the shadowed near field to the system that resolves it correctly.");
 
         if (RtxAtmosphere::aerialPerspectiveSceneShadow()) {
           RemixGui::DragFloat("Aerial Perspective Shadow Range",
