@@ -755,7 +755,7 @@ struct AtmosphereArgs {
   float celestialTextureAngularRadius;
   uint celestialTextureFlags;
   float celestialTextureBrightness;
-  uint padCelestialTexture0; // pad to 16 bytes
+  float celestialTextureEdgeOpacity;
 
   // Final cloud presentation brightness (fork). Applied after temporal
   // smoothing so live changes do not contaminate or linger in cloud history.

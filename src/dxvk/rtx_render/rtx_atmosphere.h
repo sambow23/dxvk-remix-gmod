@@ -278,6 +278,11 @@ public:
                "Only affects visible texture sprites; sky scattering, clouds, NEE, and "
                "distant lights are unchanged.",
       args.minValue = 0.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, celestialTextureEdgeOpacity, 0.85f,
+               "Opacity retained by the full black-keyed transparency gradient around vanilla "
+               "sun/moon sprites. The solid center remains unchanged; lowering this value fades "
+               "the surrounding glow without changing physical lighting.",
+      args.minValue = 0.0f, args.maxValue = 1.0f);
     RTX_OPTION("rtx.atmosphere", bool, celestialTextureNearestFiltering, true,
                "Uses nearest filtering for vanilla sun/moon texture sprites when true, preserving pixel-art edges. "
                "Set to false to use linear filtering.");

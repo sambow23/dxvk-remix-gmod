@@ -114,6 +114,28 @@ float celestialTextureCoverage(vec4 texel, float edgeCoverage) {
   return saturate(texel.a * colorCoverage * edgeCoverage);
 }
 
+float celestialTextureEdgeOpacityScale(
+  vec4 texel,
+  vec2 spriteCoord,
+  float edgeCoverage,
+  float edgeOpacity
+) {
+  // The vanilla 32x32 celestial textures have opaque alpha channels. Their
+  // central 8x8 texels are the solid sprite, while the surrounding texels store
+  // a premultiplied black-to-color transparency gradient in RGB. Identify that
+  // solid core spatially so the control applies uniformly to the whole legacy
+  // gradient instead of fading out as its RGB-derived coverage increases.
+  const float legacySolidCoreExtent = 0.25f;
+  const float coreDistance = max(abs(spriteCoord.x), abs(spriteCoord.y));
+  const float legacySolidCore = 1.0f - step(legacySolidCoreExtent, coreDistance);
+  const float explicitAlphaSolid = step(1.0f - (0.5f / 255.0f), saturate(texel.a));
+  const float quadSolid = step(1.0f - 1e-5f, saturate(edgeCoverage));
+  const float solidTexel = legacySolidCore * explicitAlphaSolid * quadSolid;
+
+  edgeOpacity = saturate(edgeOpacity);
+  return lerp(edgeOpacity, 1.0f, solidTexel);
+}
+
 // ============================================================================
 // Night sky — stars, galactic band, shooting stars, airglow
 // ============================================================================
@@ -656,8 +678,7 @@ void computeVolcanicSurfaceDetail(float diskX, float diskY, MoonParams m,
   );
 }
 
-vec3 evalSunTextureSprite(vec3 viewDir, AtmosphereArgs args, out float spriteCoverage) {
-  spriteCoverage = 0.0f;
+vec3 evalSunTextureSprite(vec3 viewDir, AtmosphereArgs args) {
   if (!celestialTextureFlagEnabled(args.celestialTextureFlags, CELESTIAL_TEXTURE_FLAG_SUN)) {
     return vec3(0.0f);
   }
@@ -675,9 +696,16 @@ vec3 evalSunTextureSprite(vec3 viewDir, AtmosphereArgs args, out float spriteCov
   }
 
   vec4 texel = AtmosphereSunTexture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
-  spriteCoverage = celestialTextureCoverage(texel, edgeCoverage);
+  const float edgeOpacityScale = celestialTextureEdgeOpacityScale(
+    texel, spriteCoord, edgeCoverage, args.celestialTextureEdgeOpacity);
 
-  vec3 spriteColor = max(texel.rgb, vec3(0.0f));
+  // Vanilla's sun texture has an opaque alpha channel and stores its soft
+  // black-to-color fringe in RGB. Treat that RGB as premultiplied coverage:
+  // only explicit texture alpha and the geometric quad-edge feather still
+  // need to be applied here. Multiplying by spriteCoverage would apply the
+  // RGB-derived coverage a second time and darken the fringe.
+  vec3 spriteColor = max(texel.rgb, vec3(0.0f)) * texel.a * edgeCoverage
+                   * edgeOpacityScale;
   vec3 spriteRadiance = spriteColor * args.sunIlluminance * args.sunRayBrightness
                       * args.celestialTextureBrightness * 0.025f;
   return max(spriteRadiance, vec3(0.0f));
@@ -726,7 +754,10 @@ bool sampleMoon0TextureSprite(
   }
 
   vec4 texel = AtmosphereMoon0Texture.SampleLevel(AtmosphereCelestialTextureSampler, uv, 0.0f);
-  textureCoverage = celestialTextureCoverage(texel, edgeCoverage);
+  const float baseCoverage = celestialTextureCoverage(texel, edgeCoverage);
+  const float edgeOpacityScale = celestialTextureEdgeOpacityScale(
+    texel, spriteCoord, edgeCoverage, args.celestialTextureEdgeOpacity);
+  textureCoverage = baseCoverage * edgeOpacityScale;
   if (textureCoverage <= 0.001f) {
     return false;
   }
@@ -737,14 +768,16 @@ bool sampleMoon0TextureSprite(
   surfaceColor = max(texel.rgb, vec3(0.0f));
   surfaceDetail = max(max(surfaceColor.r, surfaceColor.g), surfaceColor.b);
   surfaceColor = surfaceDetail > 0.0001f ? surfaceColor / surfaceDetail : vec3(0.0f);
+  // As with the sun, vanilla moon RGB already carries its black-keyed edge
+  // gradient. Preserve that premultiplied signal while still honoring a real
+  // replacement-texture alpha channel and the sprite-quad edge feather.
+  surfaceDetail *= texel.a * edgeCoverage * edgeOpacityScale;
   return true;
 }
 
-// Render moon disk for moonIdx in args.moons[]. Returns radiance contribution
-// for this pixel and writes diskCoverage in [0,1] indicating disk opacity at
-// this view direction. Caller composites moons over the night sky using
-// `radiance = mix(radiance, moonContrib, coverage)` so opaque parts of the
-// disk replace the background (atmosphere + stars) cleanly.
+// Render a procedural moon disk for moonIdx in args.moons[]. Returns straight
+// radiance and writes diskCoverage in [0,1]. evalMoonDisk converts this result
+// to premultiplied form before handing it to the common moon compositor.
 vec3 evalMoonDiskLegacy(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float diskCoverage) {
   diskCoverage = 0.0f;
   if (moonIdx >= MAX_MOONS) return vec3(0.0f);
@@ -852,7 +885,8 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
   const bool useMoon0TextureSprite =
     moonIdx == 0u && celestialTextureFlagEnabled(args.celestialTextureFlags, CELESTIAL_TEXTURE_FLAG_MOON0);
   if (!useMoon0TextureSprite) {
-    return evalMoonDiskLegacy(viewDir, moonIdx, args, diskCoverage);
+    vec3 legacyRadiance = evalMoonDiskLegacy(viewDir, moonIdx, args, diskCoverage);
+    return legacyRadiance * diskCoverage;
   }
 
   MoonParams m = args.moons[moonIdx];
@@ -996,9 +1030,9 @@ vec3 evalSkyRadiance(
   //     using pow(cloud_T, starCloudExtinctionPower) so HDR point-stars die
   //     through cumulus cores instead of pinpointing through them.
   {
-    float sunCoverage = 0.0f;
-    vec3 sunSprite = evalSunTextureSprite(viewDirYUp, args, sunCoverage);
-    radiance += sunSprite * sunCoverage;
+    vec3 sunSprite = evalSunTextureSprite(viewDirYUp, args);
+    // sunSprite is already premultiplied by the texture's effective edge.
+    radiance += sunSprite;
   }
   vec3 starLayer    = vec3(0.0f);
   vec3 airglowLayer = vec3(0.0f);
@@ -1065,7 +1099,12 @@ vec3 evalSkyRadiance(
       float coverage = 0.0f;
       vec3 moonContrib = evalMoonDisk(viewDirYUp, i, args, coverage);
       coverage *= moonFade;
-      radiance = mix(radiance, moonContrib, coverage);
+      // The black-keyed moon texture carries its soft-edge weighting in RGB,
+      // so moonContrib is premultiplied. Fade both its radiance and coverage,
+      // then use the premultiplied "over" operation instead of mix(), which
+      // would multiply the edge gradient twice.
+      moonContrib *= moonFade;
+      radiance = radiance * (1.0f - coverage) + moonContrib;
       starThroughMoons *= (1.0f - coverage);
     }
   }

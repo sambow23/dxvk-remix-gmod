@@ -692,9 +692,30 @@ void applyFog(
     return; // Volumetric fog is applied in volume integration
   }
 
+  const vec3 primaryViewDirYUp = normalize(cb.isZUp != 0
+    ? vec3(primaryRayWorldDirection.x,
+           primaryRayWorldDirection.z,
+           primaryRayWorldDirection.y)
+    : primaryRayWorldDirection);
+
+  // Beta 1.7.3 applies fixed-function fog to a horizontal sky plane 16 blocks
+  // above the camera. Reconstruct the distance to that plane for upward Numos
+  // misses instead of assigning the same maximum distance to every sky pixel.
+  // The distance approaches infinity at the horizon, preserving the fog wall,
+  // while the short overhead distance leaves the upper sky visible. Skyless
+  // dimensions publish skyMode 0 and retain the original full-miss fog.
+  float fogDistance = primaryMiss ? cb.maxFogDistance : viewDistance;
+  if (primaryMiss && cb.skyMode == 1) {
+    const float kVanillaSkyPlaneHeight = 16.0f;
+    const float upwardView = primaryViewDirYUp.y;
+    if (upwardView > 1.0e-4f) {
+      fogDistance = min(cb.maxFogDistance,
+                        kVanillaSkyPlaneHeight / upwardView);
+    }
+  }
+
   // Todo: Using view distance is a bit of a hack here, the primary emissive contribution will not be fully weighted correctly
   // as emissive hits will be over-attenuated.
-  const float fogDistance = primaryMiss ? cb.maxFogDistance : viewDistance;
   vec4 fogColor = calculateFog(fogDistance);
 
   if (primaryMiss)
@@ -707,8 +728,51 @@ void applyFog(
     fogColor.xyz *= radianceScale;
   }
 
-  // Blend fog over output
+  const bool hasNumosCloudLayer = primaryMiss
+      && cb.skyMode == 1
+      && cb.atmosphereArgs.cloudEnabled > 0.0f
+      && cb.atmosphereArgs.cloudRenderRTEnable != 0u
+      && (cb.atmosphereArgs.debugSkyBisectFlags & 2u) == 0u;
+  const vec4 cloudLayer = hasNumosCloudLayer
+    ? AtmosphereCloudHistoryCurr[pixelCoordinate]
+    : vec4(0.0f);
+
+  // Blend fog over output.
   radianceOutput = lerp(radianceOutput, fogColor.rgb, fogColor.a);
+
+  // Vanilla disables fixed-function fog before drawing its textured sun and
+  // moon. Numos has already folded those sprites into the shared sky radiance,
+  // so restore the portion removed by the final depth-fog blend. Keep the
+  // correction behind the cloud layer, matching vanilla's draw order.
+  if (primaryMiss
+      && cb.skyMode == 1
+      && (cb.atmosphereArgs.debugSkyBisectFlags & 2u) == 0u)
+  {
+    vec3 celestialFogCorrection = evalSunTextureSprite(
+      primaryViewDirYUp, cb.atmosphereArgs);
+
+    if (celestialTextureFlagEnabled(
+          cb.atmosphereArgs.celestialTextureFlags,
+          CELESTIAL_TEXTURE_FLAG_MOON0))
+    {
+      float moonCoverage = 0.0f;
+      vec3 moonRadiance = evalMoonDisk(
+        primaryViewDirYUp, 0u, cb.atmosphereArgs, moonCoverage);
+      const float moonFade = smoothstep(
+        0.0f, -0.09f, cb.atmosphereArgs.sunDirection.y);
+      moonCoverage *= moonFade;
+      moonRadiance *= moonFade;
+
+      // The moon is premultiplied-over while the sun is additive beneath it.
+      celestialFogCorrection =
+        celestialFogCorrection * (1.0f - moonCoverage)
+        + moonRadiance
+        - fogColor.rgb * moonCoverage;
+    }
+
+    radianceOutput += fogColor.a * (1.0f - cloudLayer.a)
+                    * celestialFogCorrection;
+  }
 
   // Numos clouds are a foreground sky layer and should remain above the final
   // depth-fog blend. The current history stores the exact temporally-smoothed
@@ -719,23 +783,13 @@ void applyFog(
   // depth fog, while horizon-grazing clouds converge smoothly on the same fog
   // color instead of exposing a second sky-color band. Volumetric fog returns
   // above and therefore keeps attenuating clouds as before.
-  if (primaryMiss
-      && cb.skyMode == 1
-      && cb.atmosphereArgs.cloudEnabled > 0.0f
-      && cb.atmosphereArgs.cloudRenderRTEnable != 0u
-      && (cb.atmosphereArgs.debugSkyBisectFlags & 2u) == 0u)
+  if (hasNumosCloudLayer)
   {
-    const vec4 cloudLayer = AtmosphereCloudHistoryCurr[pixelCoordinate];
     const vec3 cloudRadiance = cloudLayer.rgb * cb.atmosphereArgs.cloudBrightness;
-    const vec3 viewDirYUp = cb.isZUp != 0
-      ? vec3(primaryRayWorldDirection.x,
-             primaryRayWorldDirection.z,
-             primaryRayWorldDirection.y)
-      : primaryRayWorldDirection;
     float cloudDistanceKm;
     vec3 cloudPointYUpKm;
     float cloudHorizonVisibility = 0.0f;
-    if (intersectCloudLayer(normalize(viewDirYUp), cb.atmosphereArgs,
+    if (intersectCloudLayer(primaryViewDirYUp, cb.atmosphereArgs,
                             cloudDistanceKm, cloudPointYUpKm)) {
       const float verticalDistanceKm = max(
         cb.atmosphereArgs.cloudAltitude - cb.atmosphereArgs.cameraWorldPosYUpKm.y,

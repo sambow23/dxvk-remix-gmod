@@ -495,9 +495,11 @@ namespace {
     args.milkyWayDustAmount          = 0.0f;
     args.milkyWayCoreColor           = vec3(0.0f, 0.0f, 0.0f);
     args.milkyWayDustColor           = vec3(0.0f, 0.0f, 0.0f);
-    args.celestialTextureFlags       = 0u;
-    args.celestialTextureAngularRadius = 0.0f;
-    args.celestialTextureBrightness  = 0.0f;
+  args.celestialTextureFlags       = 0u;
+  args.celestialTextureAngularRadius = 0.0f;
+  args.celestialTextureBrightness  = 0.0f;
+  args.celestialTextureEdgeOpacity = 0.0f;
+    args.celestialTextureEdgeOpacity = 0.0f;
   }
 
   float quantizeDirComponent(float v, float stepRad) {
@@ -861,6 +863,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.celestialTextureAngularRadius   =
     std::max(RtxOptions::celestialTextureSizeDeg(), 0.0f) * dxvk::kDegreesToRadians * 0.5f;
   args.celestialTextureBrightness      = std::max(RtxOptions::celestialTextureBrightness(), 0.0f);
+  args.celestialTextureEdgeOpacity     = std::min(std::max(RtxAtmosphere::celestialTextureEdgeOpacity(), 0.0f), 1.0f);
   // Perf-bisect shader gate (fork — 2026-06-11, diagnostic). Packed into the
   // former padMoonNee2 slot. Only bit 1 (= flat sky miss) remains; bit 0
   // (atmosphere NEE) and bit 2 (bespoke-NEE skip for directional lights) were

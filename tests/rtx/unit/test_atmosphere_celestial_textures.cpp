@@ -73,6 +73,7 @@ int main() {
   require(args.celestialTextureFlags == 0u, "celestial flags default to zero");
   require(args.celestialTextureAngularRadius == 0.0f, "celestial texture radius default");
   require(args.celestialTextureBrightness == 0.0f, "celestial texture brightness default");
+  require(args.celestialTextureEdgeOpacity == 0.0f, "celestial texture edge opacity default");
   require(sizeof(AtmosphereArgs) % 16u == 0u, "atmosphere args alignment");
 
   const std::string options = readFile("src/dxvk/rtx_render/rtx_options.h");
@@ -82,6 +83,9 @@ int main() {
   requireContains(options,
                   "RTX_OPTION_ARGS(\"rtx.atmosphere\", float, celestialTextureBrightness, 1.0f,",
                   "celestial texture brightness option");
+  requireContains(options,
+                  "RTX_OPTION_ARGS(\"rtx.atmosphere\", float, celestialTextureEdgeOpacity, 0.85f,",
+                  "celestial texture edge opacity option");
   requireContains(options,
                   "RTX_OPTION(\"rtx.atmosphere\", bool, celestialTextureNearestFiltering, true,",
                   "celestial texture nearest filtering option");
@@ -95,6 +99,10 @@ int main() {
   requireContains(atmosphereUi,
                   "&RtxOptions::celestialTextureBrightnessObject()",
                   "celestial texture brightness UI binding");
+  requireContains(atmosphereUi, "Texture Gradient Opacity", "celestial texture gradient opacity UI label");
+  requireContains(atmosphereUi,
+                  "&RtxOptions::celestialTextureEdgeOpacityObject()",
+                  "celestial texture edge opacity UI binding");
   requireContains(atmosphereUi, "Texture Nearest Filtering", "celestial texture filtering UI label");
   requireContains(atmosphereUi,
                   "&RtxOptions::celestialTextureNearestFilteringObject()",
@@ -127,6 +135,46 @@ int main() {
   requireContains(skyShader, "sampleMoon0TextureSprite", "sky shader moon texture sprite");
   requireContains(skyShader, "args.celestialTextureAngularRadius", "sky shader visual sprite radius");
   requireContains(skyShader, "args.celestialTextureBrightness", "sky shader texture brightness");
+  requireContains(skyShader, "args.celestialTextureEdgeOpacity", "sky shader texture edge opacity");
+  requireContains(skyShader,
+                  "const float legacySolidCoreExtent = 0.25f;",
+                  "celestial texture identifies the vanilla 8x8 solid core");
+  requireContains(skyShader,
+                  "const float solidTexel = legacySolidCore * explicitAlphaSolid * quadSolid;",
+                  "celestial texture solid core requires opaque texture and quad coverage");
+  requireContains(skyShader,
+                  "return lerp(edgeOpacity, 1.0f, solidTexel);",
+                  "solid celestial core remains unaffected by gradient opacity");
+  requireContains(skyShader,
+                  "texel, spriteCoord, edgeCoverage, args.celestialTextureEdgeOpacity",
+                  "celestial gradient opacity uses sampled texel and sprite position");
+  requireContains(skyShader,
+                  "max(texel.rgb, vec3(0.0f)) * texel.a * edgeCoverage",
+                  "sun texture preserves premultiplied RGB edge");
+  requireContains(skyShader,
+                  "surfaceDetail *= texel.a * edgeCoverage * edgeOpacityScale;",
+                  "moon texture preserves premultiplied RGB edge");
+  requireContains(skyShader,
+                  "textureCoverage = baseCoverage * edgeOpacityScale;",
+                  "moon edge opacity scales background coverage");
+  requireNotContains(skyShader,
+                     "* args.celestialTextureEdgeOpacity;",
+                     "edge opacity must not globally scale solid texels");
+  requireContains(skyShader,
+                  "radiance += sunSprite;",
+                  "sun sprite is not coverage-multiplied twice");
+  requireNotContains(skyShader,
+                     "sunSprite * sunCoverage",
+                     "sun sprite double coverage multiplication");
+  requireContains(skyShader,
+                  "radiance = radiance * (1.0f - coverage) + moonContrib;",
+                  "moon sprite uses premultiplied over compositing");
+  requireContains(skyShader,
+                  "return legacyRadiance * diskCoverage;",
+                  "procedural moons honor the premultiplied compositor contract");
+  requireNotContains(skyShader,
+                     "radiance = mix(radiance, moonContrib, coverage);",
+                     "moon sprite double coverage multiplication");
   requireNotContains(skyShader,
                      "computeCelestialDiskUv(viewDir, sunDir, args.sunAngularRadius",
                      "sun texture path should not use physical sun radius");

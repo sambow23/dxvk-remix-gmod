@@ -22,6 +22,7 @@
 
 #include "../../../src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -73,6 +74,23 @@ Color compositeCloud(const Color& background,
                      float cloudBrightness) {
   return add(multiply(background, 1.0f - cloudOpacity),
              multiply(cloudPremultiplied, cloudBrightness));
+}
+
+Color compositeMoon(const Color& background,
+                    const Color& moonPremultiplied,
+                    float moonOpacity) {
+  return add(multiply(background, 1.0f - moonOpacity),
+             moonPremultiplied);
+}
+
+float vanillaSkyFogDistance(float upwardView,
+                            float maxFogDistance,
+                            bool numosSky = true) {
+  if (!numosSky || upwardView <= 1.0e-4f) {
+    return maxFogDistance;
+  }
+
+  return std::min(maxFogDistance, 16.0f / upwardView);
 }
 
 Color restoreCloudAboveFog(const Color& foggedCloudComposite,
@@ -172,6 +190,55 @@ void testFogCorrectionMath() {
               "opaque cloud radiance must be independent of depth fog");
 }
 
+void testVanillaSkyFogDistance() {
+  require(std::fabs(vanillaSkyFogDistance(1.0f, 512.0f) - 16.0f) < 0.0001f,
+          "zenith sky fog distance must equal the vanilla sky-plane height");
+  require(std::fabs(vanillaSkyFogDistance(0.5f, 512.0f) - 32.0f) < 0.0001f,
+          "slanted sky fog distance must follow the virtual sky plane");
+  require(std::fabs(vanillaSkyFogDistance(0.01f, 512.0f) - 512.0f) < 0.0001f,
+          "near-horizon sky fog distance must clamp to the miss distance");
+  require(std::fabs(vanillaSkyFogDistance(0.0f, 512.0f) - 512.0f) < 0.0001f,
+          "horizon sky fog must retain the full miss distance");
+  require(std::fabs(vanillaSkyFogDistance(-0.5f, 512.0f) - 512.0f) < 0.0001f,
+          "downward misses must retain the full miss distance");
+  require(std::fabs(vanillaSkyFogDistance(1.0f, 512.0f, false) - 512.0f) < 0.0001f,
+          "non-Numos skies must retain the full miss distance");
+}
+
+void testCelestialFogCorrectionMath() {
+  const Color background { 0.10f, 0.20f, 0.40f };
+  const Color fogColor { 0.70f, 0.60f, 0.50f };
+  const Color sunRadiance { 0.30f, 0.24f, 0.08f };
+  const Color moonPremultiplied { 0.16f, 0.18f, 0.20f };
+  const float moonOpacity = 0.25f;
+  const Color cloudPremultiplied { 0.36f, 0.30f, 0.24f };
+  const float cloudOpacity = 0.60f;
+  const float fogOpacity = 0.75f;
+
+  const Color celestial = compositeMoon(
+      add(background, sunRadiance), moonPremultiplied, moonOpacity);
+  const Color fullyLayered = compositeCloud(
+      celestial, cloudPremultiplied, cloudOpacity, 1.0f);
+
+  const Color celestialCorrection = add(
+      multiply(sunRadiance, 1.0f - moonOpacity),
+      subtract(moonPremultiplied, multiply(fogColor, moonOpacity)));
+  Color actual = add(
+      fog(fullyLayered, fogColor, fogOpacity),
+      multiply(celestialCorrection,
+               fogOpacity * (1.0f - cloudOpacity)));
+  actual = restoreCloudAboveFog(
+      actual, fogColor, fogOpacity,
+      cloudPremultiplied, cloudOpacity, 1.0f);
+
+  const Color expected = compositeCloud(
+      compositeMoon(add(fog(background, fogColor, fogOpacity), sunRadiance),
+                    moonPremultiplied, moonOpacity),
+      cloudPremultiplied, cloudOpacity, 1.0f);
+  requireNear(actual, expected,
+              "celestial sprites must be restored above fog and below clouds");
+}
+
 void testTranslationHistoryWeight() {
   require(std::fabs(cloudTranslationHistoryWeight(0.0f) - 1.0f) < 0.0001f,
           "stationary camera must retain full cloud history");
@@ -248,6 +315,18 @@ void testSourceIntegration() {
                   "fogColor.a * cloudHorizonVisibility",
                   "cloud depth-fog correction");
   requireContains(compositeShader,
+                  "const float kVanillaSkyPlaneHeight = 16.0f;",
+                  "vanilla sky-plane fog height");
+  requireContains(compositeShader,
+                  "kVanillaSkyPlaneHeight / upwardView",
+                  "view-dependent vanilla sky fog distance");
+  requireContains(compositeShader,
+                  "celestialFogCorrection",
+                  "fog-disabled vanilla celestial restoration");
+  requireContains(compositeShader,
+                  "fogColor.a * (1.0f - cloudLayer.a)",
+                  "celestial correction remains behind clouds");
+  requireContains(compositeShader,
                   "cloudDistanceKm - verticalDistanceKm",
                   "cloud horizon slant-distance blend");
   requireContains(compositeShader,
@@ -299,6 +378,8 @@ void testSourceIntegration() {
 int main() {
   std::cout << "Begin Numos cloud depth fog tests" << std::endl;
   testFogCorrectionMath();
+  testVanillaSkyFogDistance();
+  testCelestialFogCorrectionMath();
   testTranslationHistoryWeight();
   testSourceIntegration();
   std::cout << "All Numos cloud depth fog tests passed" << std::endl;
