@@ -197,24 +197,25 @@ public:
                "with DISTANCE, and the exponential slice distribution already gives every slice the same relative "
                "depth resolution - so it needs far less than the screen axes do. Cost is linear in this value.",
                args.minValue = 4, args.maxValue = 128);
-    RTX_OPTION("rtx.atmosphere", bool, aerialPerspectiveSceneShadow, false,
+    RTX_OPTION("rtx.atmosphere", bool, aerialPerspectiveSceneShadow, true,
                "Trace the scene for sun occlusion of the air column the aerial perspective volume integrates.\n"
-               "Off by default, and the reason is structural rather than a matter of cost. This volume is applied "
-               "only to pixels that hit geometry - a primary miss returns early in the composite - so any shadowing "
-               "of the column is clipped exactly to the occluder's screen-space silhouette. One pixel to the side "
-               "the ray reaches the sky, receives no aerial perspective at all, and so receives no darkening either. "
-               "The lit-to-shadowed boundary therefore lands on the silhouette itself, and the result reads as the "
-               "object's outline stamped onto the haze rather than as a shadow cast through it. A real shaft "
-               "continues past the object across the sky behind it, which this construction cannot express at any "
-               "resolution or sample count.\n"
-               "Shadow shafts belong to the global volumetrics grid, which integrates for every pixel including sky "
-               "misses and therefore carries its shadows across silhouettes without a seam. The two systems already "
-               "meet: this volume begins where rtx.volumetrics.froxelMaxDistanceMeters ends, so widening that range "
-               "hands more of the shadowed near field to the system that resolves it correctly. This matches both "
-               "Hillaire EGSR 2020, whose sky-view LUT is never shadowed, and Unreal, which pairs an unshadowed "
-               "SkyAtmosphere with Volumetric Fog for god rays.\n"
-               "Enable it only where the silhouette artifact is preferable to unshadowed haze. Costs roughly a "
-               "shadow ray per froxel step within aerialPerspectiveSceneShadowRangeMeters.");
+               "The volume covers the air BETWEEN the camera and a surface. Untraced, it treats that air as fully "
+               "sunlit even when the surface is precisely what is hiding the sun - and since the forward-scatter "
+               "lobe peaks in exactly that direction, the result is a bright halo bleeding through walls and terrain "
+               "wherever the sun sits behind them. One opaque shadow ray per march step removes it, and because the "
+               "visibility is averaged over the column rather than decided once, a doorway reads correctly: the "
+               "indoor part of the column is shadowed while the part past the threshold is not.\n"
+               "Known limitation: this volume is applied only to pixels that hit geometry - a primary miss returns "
+               "early in the composite - so the shadowing is clipped to the occluder's screen-space silhouette. One "
+               "pixel to the side the ray reaches the sky, receives no aerial perspective, and so receives no "
+               "darkening either, which reads as the object's outline stamped onto the haze rather than as a shaft "
+               "cast through it. A real shaft continues past the object across the sky behind it, which this "
+               "construction cannot express at any resolution or sample count.\n"
+               "Shadow shafts proper belong to the global volumetrics grid, which integrates for every pixel "
+               "including sky misses and therefore carries its shadows across silhouettes without a seam. The two "
+               "systems already meet: this volume begins where rtx.volumetrics.froxelMaxDistanceMeters ends, so "
+               "widening that range hands more of the shadowed near field to the system that resolves it correctly.\n"
+               "Costs roughly a shadow ray per froxel step within aerialPerspectiveSceneShadowRangeMeters.");
     RTX_OPTION_ARGS("rtx.atmosphere", int, aerialPerspectiveSceneShadowDebug, 0,
                "Diagnostic for aerialPerspectiveSceneShadow. Every way that feature can silently fail - the "
                "constant not reaching the bake, the TLAS descriptor never binding, the rays missing the "
