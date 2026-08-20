@@ -121,15 +121,6 @@ exe = executable('test_atmosphere_sky_indirect_scale',
 test('test_atmosphere_sky_indirect_scale', exe, env: test_env)
 tests += exe
 
-exe = executable('test_numos_cloud_depth_fog',
-  files('test_numos_cloud_depth_fog.cpp'),
-  include_directories : test_include_path,
-  dependencies : test_unit_deps,
-  win_subsystem : 'console',
-  override_options: ['cpp_std='+dxvk_cpp_std])
-test('test_numos_cloud_depth_fog', exe, env: test_env)
-tests += exe
-
 exe = executable('test_atmosphere_celestial_textures',
   files('test_atmosphere_celestial_textures.cpp',
         '../../../src/dxvk/rtx_render/rtx_fork_celestial_textures.cpp'),

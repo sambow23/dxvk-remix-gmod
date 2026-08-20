@@ -773,35 +773,6 @@ void applyFog(
     radianceOutput += fogColor.a * (1.0f - cloudLayer.a)
                     * celestialFogCorrection;
   }
-
-  // Numos clouds are a foreground sky layer and should remain above the final
-  // depth-fog blend. The current history stores the exact temporally-smoothed
-  // premultiplied cloud RGB + opacity used by the primary sky miss. Applying
-  // f * (P - F * a) after the normal fog blend is algebraically equivalent to
-  // compositing that cloud layer over the fogged sky background. Fade that
-  // correction by curved-shell slant distance: zenith clouds remain above the
-  // depth fog, while horizon-grazing clouds converge smoothly on the same fog
-  // color instead of exposing a second sky-color band. Volumetric fog returns
-  // above and therefore keeps attenuating clouds as before.
-  if (hasNumosCloudLayer)
-  {
-    const vec3 cloudRadiance = cloudLayer.rgb * cb.atmosphereArgs.cloudBrightness;
-    float cloudDistanceKm;
-    vec3 cloudPointYUpKm;
-    float cloudHorizonVisibility = 0.0f;
-    if (intersectCloudLayer(primaryViewDirYUp, cb.atmosphereArgs,
-                            cloudDistanceKm, cloudPointYUpKm)) {
-      const float verticalDistanceKm = max(
-        cb.atmosphereArgs.cloudAltitude - cb.atmosphereArgs.cameraWorldPosYUpKm.y,
-        0.0f);
-      const float slantExcessKm = max(cloudDistanceKm - verticalDistanceKm, 0.0f);
-      const float horizonFogRate = max(cb.atmosphereArgs.cloudAerialHazePerKm,
-                                       cb.atmosphereArgs.cloudAerialFadePerKm);
-      cloudHorizonVisibility = exp(-max(horizonFogRate, 0.0f) * slantExcessKm);
-    }
-    radianceOutput += fogColor.a * cloudHorizonVisibility
-                    * (cloudRadiance - fogColor.rgb * cloudLayer.a);
-  }
   
   // TODO: Disable fog for particle layer to avoid flickering, need to find a proper way to apply fog to particles
   // particleLayerOutput.rgb = lerp(particleLayerOutput.rgb, fogColor.rgb, fogColor.a);

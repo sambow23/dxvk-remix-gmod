@@ -1,6 +1,8 @@
 #include "../../../src/dxvk/rtx_render/rtx_fork_celestial_textures.h"
 #include "../../../src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -42,6 +44,16 @@ void requireNotContains(const std::string& haystack, const char* needle, const c
   }
 }
 
+float vanillaSkyFogDistance(float upwardView,
+                            float maxFogDistance,
+                            bool numosSky = true) {
+  if (!numosSky || upwardView <= 1.0e-4f) {
+    return maxFogDistance;
+  }
+
+  return std::min(maxFogDistance, 16.0f / upwardView);
+}
+
 }  // namespace
 
 int main() {
@@ -75,6 +87,15 @@ int main() {
   require(args.celestialTextureBrightness == 0.0f, "celestial texture brightness default");
   require(args.celestialTextureEdgeOpacity == 0.0f, "celestial texture edge opacity default");
   require(sizeof(AtmosphereArgs) % 16u == 0u, "atmosphere args alignment");
+
+  require(std::fabs(vanillaSkyFogDistance(1.0f, 512.0f) - 16.0f) < 0.0001f,
+          "zenith sky fog distance follows the vanilla sky plane");
+  require(std::fabs(vanillaSkyFogDistance(0.5f, 512.0f) - 32.0f) < 0.0001f,
+          "slanted sky fog distance follows the vanilla sky plane");
+  require(std::fabs(vanillaSkyFogDistance(0.0f, 512.0f) - 512.0f) < 0.0001f,
+          "horizon sky fog retains the full miss distance");
+  require(std::fabs(vanillaSkyFogDistance(1.0f, 512.0f, false) - 512.0f) < 0.0001f,
+          "non-Numos skies retain the full miss distance");
 
   const std::string options = readFile("src/dxvk/rtx_render/rtx_options.h");
   requireContains(options,
@@ -178,6 +199,27 @@ int main() {
   requireNotContains(skyShader,
                      "computeCelestialDiskUv(viewDir, sunDir, args.sunAngularRadius",
                      "sun texture path should not use physical sun radius");
+
+  const std::string compositeShader = readFile(
+      "src/dxvk/shaders/rtx/pass/composite/composite.comp.slang");
+  requireContains(compositeShader,
+                  "const float kVanillaSkyPlaneHeight = 16.0f;",
+                  "vanilla sky-plane fog height");
+  requireContains(compositeShader,
+                  "kVanillaSkyPlaneHeight / upwardView",
+                  "view-dependent vanilla sky fog distance");
+  requireContains(compositeShader,
+                  "celestialFogCorrection",
+                  "fog-disabled vanilla celestial restoration");
+  requireContains(compositeShader,
+                  "fogColor.a * (1.0f - cloudLayer.a)",
+                  "celestial correction remains behind clouds");
+  requireNotContains(compositeShader,
+                     "cloudHorizonVisibility",
+                     "clouds must not be restored above depth fog");
+  requireNotContains(compositeShader,
+                     "cloudRadiance - fogColor.rgb * cloudLayer.a",
+                     "cloud post-fog correction must be removed");
 
   return 0;
 }

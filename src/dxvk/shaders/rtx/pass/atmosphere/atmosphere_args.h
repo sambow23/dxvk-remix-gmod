@@ -756,16 +756,4 @@ struct AtmosphereArgs {
   uint celestialTextureFlags;
   float celestialTextureBrightness;
   float celestialTextureEdgeOpacity;
-
-  // Final cloud presentation brightness (fork). Applied after temporal
-  // smoothing so live changes do not contaminate or linger in cloud history.
-  // Presentation-only; zeroed in normalizeForSkyLutCache. Camera travel and
-  // the remaining pads share this row to preserve the full-vec4 constant-
-  // buffer growth rule.
-  float cloudBrightness;
-  float cloudCameraTravelKm; // Stable logical camera travel this frame. Used
-                             // only to reject stale cloud history during real
-                             // translation; excludes view-bob displacement.
-  float padCloudBrightness1;
-  float padCloudBrightness2;
 };

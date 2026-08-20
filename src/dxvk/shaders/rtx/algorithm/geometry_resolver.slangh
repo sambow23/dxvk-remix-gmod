@@ -1943,10 +1943,10 @@ void geometryResolverVertex(
 #ifdef ATMOSPHERE_AVAILABLE
     else if (cb.skyMode == 1)
     {
-      // A cloud ray spans a thick volume, so there is no single finite depth
-      // that can be reprojected without shearing history during view bob.
-      // Rotation-only reprojection remains stable; evalSkyRadiance retires
-      // history from the separately supplied logical-camera translation.
+      // Primary view ray â€” enable cloud temporal smoothing. The motion vector
+      // for sky misses comes from calcMotionVectorForRayMiss (already used
+      // below to write PrimaryScreenSpaceMotionVector), and historyResolution
+      // is the downscaled render extent (where this raygen writes).
       const vec2 cloudMotion = calcMotionVectorForRayMiss(geometryResolverState.pixelCoordinate);
       const uint2 cloudHistoryRes = cb.camera.resolution;
       skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,

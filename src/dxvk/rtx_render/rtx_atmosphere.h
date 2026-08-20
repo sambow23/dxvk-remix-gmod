@@ -24,7 +24,6 @@
 #include "rtx_resources.h"
 #include "rtx_mipmap.h"
 #include "rtx_common_object.h"
-#include "rtx_fast_noise.h"
 #include "rtx_texture.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
 #include "rtx_option.h"
@@ -48,12 +47,6 @@ struct LightManager;
 // Hillaire physically-based atmospheric scattering: LUT resources + compute dispatches.
 class RtxAtmosphere : public CommonDeviceObject {
 public:
-  RTX_OPTION_ARGS("rtx.atmosphere", float, cloudBrightness, 1.0f,
-                  "Linear multiplier applied to final Numos cloud radiance. "
-                  "Does not change cloud opacity, density, lighting, or shadows.",
-                  args.minValue = 0.0f,
-                  args.maxValue = 8.0f);
-
   explicit RtxAtmosphere(DxvkDevice* device);
   ~RtxAtmosphere();
 
@@ -1226,8 +1219,6 @@ private:
   Vector3  m_cloudRenderUpYUp      { 0.0f, 1.0f, 0.0f };
   uint32_t m_cloudRenderFrameIdx   { 0u };
   Vector3  m_cameraWorldPosYUpKm   { 0.0f, 0.0f, 0.0f };
-  float    m_cloudCameraTravelKm    { 0.0f };
-  bool     m_cloudCameraPositionValid { false };
 
   // Time-of-day clock. Integrated once per frame by advanceTimeCycle(); read by the const
   // getAtmosphereArgs(). m_lastAuthoredTimeOfDayHours tracks the option so an edit to it (UI scrub,

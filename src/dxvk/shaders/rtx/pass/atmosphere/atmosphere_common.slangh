@@ -645,20 +645,6 @@ float cloudPlanetRadius(AtmosphereArgs args) {
   return max(kMinRadius, args.planetRadius * exp(-args.cloudCurvature * 5.0f));
 }
 
-// Cloud-shell geometry is evaluated in a local tangent frame whose XZ origin
-// follows the camera while Y remains world-absolute. Density/noise sampling
-// stays in world space. Keeping those two frames separate prevents large
-// world XZ coordinates from changing the apparent planet radius while still
-// making character translation move through a stable cloud field.
-vec3 cloudGeometryPosition(vec3 worldPosYUpKm, AtmosphereArgs args) {
-  return worldPosYUpKm
-       - vec3(args.cameraWorldPosYUpKm.x, 0.0f, args.cameraWorldPosYUpKm.z);
-}
-
-vec3 cloudRayOrigin(AtmosphereArgs args) {
-  return vec3(0.0f, args.cameraWorldPosYUpKm.y, 0.0f);
-}
-
 // Compute height fraction within the cloud slab from a world-space sample
 // position. hf=0 at slab base (cloudAltitude); hf=1 at slab top
 // (cloudAltitude + cloudThickness). Saturates outside the slab. Uses the
@@ -681,21 +667,10 @@ float computeCloudHeightFractionR(vec3 samplePos, float cloudR,
   return saturate((altitudeAboveSea - slabAltitudeKm) / max(slabThicknessKm, 0.001f));
 }
 
-float computeCloudHeightFractionR(vec3 samplePos, float cloudR,
-                                  float slabAltitudeKm, float slabThicknessKm,
-                                  vec3 cameraWorldPosYUpKm) {
-  vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
-  vec3 geometryPos = samplePos
-                   - vec3(cameraWorldPosYUpKm.x, 0.0f, cameraWorldPosYUpKm.z);
-  float altitudeAboveSea = length(geometryPos - planetCenter) - cloudR;
-  return saturate((altitudeAboveSea - slabAltitudeKm) / max(slabThicknessKm, 0.001f));
-}
-
 float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args,
                                   float slabAltitudeKm, float slabThicknessKm) {
   return computeCloudHeightFractionR(samplePos, cloudPlanetRadius(args),
-                                     slabAltitudeKm, slabThicknessKm,
-                                     args.cameraWorldPosYUpKm);
+                                     slabAltitudeKm, slabThicknessKm);
 }
 
 float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
@@ -735,60 +710,33 @@ vec2 cloudDomeDirToUv(vec3 dirYUp) {
   return vec2(u, v);
 }
 
-// Intersect a camera ray with one curved cloud slab. Distances are in km.
-// The camera's world height participates in the shell intersection, while
-// horizontal translation is handled by world-anchored density sampling.
-bool intersectCloudShell(vec3 rayDir, AtmosphereArgs args,
-                         float slabAltitudeKm, float slabThicknessKm,
-                         out float tEntry, out float tExit) {
-  tEntry = -1.0f;
-  tExit = -1.0f;
-
-  if (rayDir.y <= 0.001f) return false;
-
-  float cloudR = cloudPlanetRadius(args);
-  vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
-  vec3 rayOrigin = cloudRayOrigin(args);
-  float baseRadius = cloudR + slabAltitudeKm;
-  float topRadius = baseRadius + slabThicknessKm;
-
-  float t0top, t1top;
-  if (!intersectSphere(rayOrigin, rayDir, planetCenter, topRadius, t0top, t1top)) {
-    return false;
-  }
-
-  float originRadius = length(rayOrigin - planetCenter);
-  if (originRadius < baseRadius) {
-    float t0base, t1base;
-    if (!intersectSphere(rayOrigin, rayDir, planetCenter, baseRadius, t0base, t1base)) {
-      return false;
-    }
-    tEntry = t1base;
-  } else if (originRadius <= topRadius) {
-    tEntry = 0.0f;
-  } else {
-    tEntry = t0top;
-  }
-
-  tEntry = max(tEntry, 0.0f);
-  tExit = t1top;
-  return tExit > tEntry;
-}
-
 // Intersect view ray with the cloud shell. Returns true and the hit distance
 // if we hit the upward-looking cloud sphere at altitude args.cloudAltitude.
-// hitPos is world-anchored for density/control-field consumers.
+// Ray origin is at the camera (0,0,0) in Y-up space; the cloud sphere uses
+// the effective curvature-adjusted planet radius (see cloudPlanetRadius).
 bool intersectCloudLayer(vec3 rayDir, AtmosphereArgs args, out float t, out vec3 hitPos) {
   t = -1.0f;
   hitPos = vec3(0.0f);
 
-  float tExit;
-  if (!intersectCloudShell(rayDir, args, args.cloudAltitude,
-                           args.cloudThickness, t, tExit)) {
+  // Looking below the horizon: no cloud layer hit above us.
+  if (rayDir.y <= 0.001f) return false;
+
+  float cloudR = cloudPlanetRadius(args);
+  vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
+  float cloudSphereRadius = cloudR + args.cloudAltitude;
+
+  float t0, t1;
+  if (!intersectSphere(vec3(0.0f), rayDir, planetCenter, cloudSphereRadius, t0, t1)) {
     return false;
   }
 
-  hitPos = args.cameraWorldPosYUpKm + rayDir * t;
+  // We're inside the cloud sphere; the far side is what we want (upward ray
+  // going through the layer from below).
+  float hitT = t1 > 0.0f ? t1 : t0;
+  if (hitT <= 0.0f) return false;
+
+  t = hitT;
+  hitPos = rayDir * hitT;
   return true;
 }
 
@@ -1736,10 +1684,11 @@ CloudColumn computeCloudColumn(vec4 placement, float coverageLocal,
 // sampleDSun / sampleDAmbient. This commit lands the bake infrastructure
 // only — no production rendering reads from these grids yet.
 //
-// Coordinate frame: cloud-shell geometry uses a camera-local Y-up tangent
-// frame while density remains world-anchored. The voxel grid follows the
-// local convention: horizontal origin is the camera, vertical 0 is at slab
-// base (cloudAltitude).
+// Coordinate frame: the cloud math throughout atmosphere_common.slangh
+// assumes the camera sits at the world origin in Y-up space (see
+// `intersectCloudLayer`'s "Ray origin is at the camera (0,0,0) in Y-up
+// space" comment). The voxel grid follows the same convention: horizontal
+// origin is the camera, vertical 0 is at slab base (cloudAltitude).
 // ===========================================================================
 
 // Slab-exit ray-intersect: given a ray starting at `originYUpKm` (Y-up, km)

@@ -465,11 +465,6 @@ namespace {
     args.lightningEnvelope           = 0.0f;
     args.lightningHistoryFade        = 0.0f;
     args.cloudHistoryWeight          = 0.0f;
-    // Final cloud presentation brightness is applied after all cloud/LUT work.
-    args.cloudBrightness             = 0.0f;
-    args.cloudCameraTravelKm         = 0.0f;
-    // BUG FIX (2026-07-16): starRotation was not zeroed anywhere, re-baking the entire LUT cascade every
-    // frame at night. Zeroed here in the base so every derived key inherits it.
     // Star / Milky Way fields feed ONLY runtime miss shading (evalNightSky /
     // evalStarField) — never any LUT bake. BUG FIX (fork — 2026-07-16, GT7
     // cross-audit): normalizeForSkyViewLutKey's comment always claimed these
@@ -495,10 +490,9 @@ namespace {
     args.milkyWayDustAmount          = 0.0f;
     args.milkyWayCoreColor           = vec3(0.0f, 0.0f, 0.0f);
     args.milkyWayDustColor           = vec3(0.0f, 0.0f, 0.0f);
-  args.celestialTextureFlags       = 0u;
-  args.celestialTextureAngularRadius = 0.0f;
-  args.celestialTextureBrightness  = 0.0f;
-  args.celestialTextureEdgeOpacity = 0.0f;
+    args.celestialTextureFlags       = 0u;
+    args.celestialTextureAngularRadius = 0.0f;
+    args.celestialTextureBrightness  = 0.0f;
     args.celestialTextureEdgeOpacity = 0.0f;
   }
 
@@ -964,10 +958,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Cloud temporal-smoother EMA weight (fork — crispness pass). Composite-
     // only; zeroed in normalizeForSkyLutCache so slider drags never re-bake.
     args.cloudHistoryWeight      = std::min(std::max(RtxAtmosphere::cloudHistoryWeight(), 0.0f), 0.98f);
-    // Final cloud presentation multiplier. Applying it after temporal
-    // smoothing makes live changes immediate and keeps history unscaled.
-    args.cloudBrightness         = std::min(std::max(RtxAtmosphere::cloudBrightness(), 0.0f), 8.0f);
-    args.cloudCameraTravelKm     = m_cloudCameraTravelKm;
     // Interior density texture + edge wisp cut (fork — 2026-07-16). Live;
     // both feed the shared sampler, so the D_sun/D_ambient bakes track them
     // automatically.
@@ -2327,13 +2317,6 @@ void RtxAtmosphere::setCloudRenderCameraBasis(const Vector3& forwardYUp,
 }
 
 void RtxAtmosphere::setCloudShadowCameraPosition(const Vector3& cameraWorldPosYUpKm) {
-  if (m_cloudCameraPositionValid) {
-    const float travelKm = length(cameraWorldPosYUpKm - m_cameraWorldPosYUpKm);
-    m_cloudCameraTravelKm = std::isfinite(travelKm) ? travelKm : 0.0f;
-  } else {
-    m_cloudCameraTravelKm = 0.0f;
-    m_cloudCameraPositionValid = true;
-  }
   m_cameraWorldPosYUpKm = cameraWorldPosYUpKm;
 }
 
@@ -2794,11 +2777,8 @@ AtmosphereArgs RtxAtmosphere::updateFrame(RtxContext& ctx,
   // using a floating render origin submit rebased camera positions, so add the
   // published origin offset back before converting to atmosphere coordinates.
   const Vector3 worldOriginOffset = fork_camera_origin::readWorldOriginOffsetFromGameState();
-  Vector3 cameraPosRenderUnits;
-  if (!fork_camera_origin::tryReadStableCameraPositionFromGameState(cameraPosRenderUnits)) {
-    cameraPosRenderUnits = camera.getPosition(/*freecam=*/false);
-  }
-  const Vector3 cameraPosWorldUnitsYUp = toYUp(cameraPosRenderUnits + worldOriginOffset);
+  const Vector3 cameraPosWorldUnitsYUp = toYUp(
+    camera.getPosition(/*freecam=*/false) + worldOriginOffset);
   const float sceneScaleSafe = std::max(RtxOptions::sceneScale(), 1e-5f);
   const float kmPerWorldUnit = 1.0f / (100000.0f * sceneScaleSafe);
   setCloudShadowCameraPosition(cameraPosWorldUnitsYUp * kmPerWorldUnit);

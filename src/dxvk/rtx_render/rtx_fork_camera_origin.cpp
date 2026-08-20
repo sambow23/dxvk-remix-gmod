@@ -53,30 +53,6 @@ namespace dxvk {
       return Vector3(x, y, z);
     }
 
-    bool tryReadStableCameraPositionFromGameState(Vector3& outPosition) {
-      std::string rawX;
-      std::string rawY;
-      std::string rawZ;
-      auto& gameState = fork_game_state::GameStateStore::get();
-      if (!gameState.tryGet(kStableCameraGameValueX, rawX)
-          || !gameState.tryGet(kStableCameraGameValueY, rawY)
-          || !gameState.tryGet(kStableCameraGameValueZ, rawZ)) {
-        return false;
-      }
-
-      float x = 0.0f;
-      float y = 0.0f;
-      float z = 0.0f;
-      if (!tryParseWorldOriginComponent(rawX, x)
-          || !tryParseWorldOriginComponent(rawY, y)
-          || !tryParseWorldOriginComponent(rawZ, z)) {
-        return false;
-      }
-
-      outPosition = Vector3(x, y, z);
-      return true;
-    }
-
     Vector3 calculatePreviousCameraHistoryOffset(
       bool hasPreviousOrigin,
       const Vector3& previousOrigin,
