@@ -756,4 +756,12 @@ struct AtmosphereArgs {
   uint celestialTextureFlags;
   float celestialTextureBrightness;
   float celestialTextureEdgeOpacity;
+
+  // Stable logical-camera travel for this frame. Used only to reject stale
+  // cloud history during real translation; excludes view-bob displacement.
+  // The remaining fields pad this new constant-buffer row to 16 bytes.
+  float cloudCameraTravelKm;
+  float padCloudCameraTravel0;
+  float padCloudCameraTravel1;
+  float padCloudCameraTravel2;
 };

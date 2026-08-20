@@ -1219,6 +1219,8 @@ private:
   Vector3  m_cloudRenderUpYUp      { 0.0f, 1.0f, 0.0f };
   uint32_t m_cloudRenderFrameIdx   { 0u };
   Vector3  m_cameraWorldPosYUpKm   { 0.0f, 0.0f, 0.0f };
+  float    m_cloudCameraTravelKm    { 0.0f };
+  bool     m_cloudCameraPositionValid { false };
 
   // Time-of-day clock. Integrated once per frame by advanceTimeCycle(); read by the const
   // getAtmosphereArgs(). m_lastAuthoredTimeOfDayHours tracks the option so an edit to it (UI scrub,

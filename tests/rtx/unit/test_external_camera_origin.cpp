@@ -21,13 +21,17 @@
 */
 
 #include <cmath>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
+#include <string>
 
 #include "../../../src/dxvk/rtx_render/rtx_fork_camera_origin.h"
 #include "../../../src/dxvk/rtx_render/rtx_fork_game_state.h"
 #include "../../../src/dxvk/rtx_render/rtx_fork_hooks.h"
 #include "../../../src/dxvk/rtx_render/rtx_lights.h"
+#include "../../../src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h"
 
 namespace dxvk {
   Logger Logger::s_instance("test_external_camera_origin.log");
@@ -45,6 +49,25 @@ void requireNear(float actual, float expected, const char* label) {
   if (std::fabs(actual - expected) > 0.001f) {
     throw std::runtime_error(label);
   }
+}
+
+std::string readFile(const char* path) {
+  std::ifstream file(std::string(BUILD_SOURCE_ROOT) + path, std::ios::binary);
+  if (!file) {
+    throw std::runtime_error(std::string("failed to open ") + path);
+  }
+
+  return std::string(
+      std::istreambuf_iterator<char>(file),
+      std::istreambuf_iterator<char>());
+}
+
+void requireContains(const std::string& haystack, const char* needle, const char* label) {
+  require(haystack.find(needle) != std::string::npos, label);
+}
+
+void requireNotContains(const std::string& haystack, const char* needle, const char* label) {
+  require(haystack.find(needle) == std::string::npos, label);
 }
 
 void readsPublishedWorldOriginOffset() {
@@ -67,6 +90,73 @@ void invalidPublishedWorldOriginFallsBackToZero() {
   const dxvk::Vector3 offset = dxvk::fork_camera_origin::readWorldOriginOffsetFromGameState();
 
   require(offset == dxvk::Vector3(0.0f), "invalid origin offset falls back to zero");
+}
+
+void readsPublishedStableCameraPosition() {
+  auto& gameState = dxvk::fork_game_state::GameStateStore::get();
+  gameState.set(dxvk::fork_camera_origin::kStableCameraGameValueX, "12.25");
+  gameState.set(dxvk::fork_camera_origin::kStableCameraGameValueY, "64.5");
+  gameState.set(dxvk::fork_camera_origin::kStableCameraGameValueZ, "-7.75");
+
+  dxvk::Vector3 position(0.0f);
+  require(dxvk::fork_camera_origin::tryReadStableCameraPositionFromGameState(position),
+          "stable camera position is available");
+  requireNear(position.x, 12.25f, "stable camera x");
+  requireNear(position.y, 64.5f, "stable camera y");
+  requireNear(position.z, -7.75f, "stable camera z");
+}
+
+void invalidPublishedStableCameraPositionIsRejected() {
+  auto& gameState = dxvk::fork_game_state::GameStateStore::get();
+  gameState.set(dxvk::fork_camera_origin::kStableCameraGameValueX, "12.25");
+  gameState.set(dxvk::fork_camera_origin::kStableCameraGameValueY, "view-bob");
+  gameState.set(dxvk::fork_camera_origin::kStableCameraGameValueZ, "-7.75");
+
+  const dxvk::Vector3 sentinel(1.0f, 2.0f, 3.0f);
+  dxvk::Vector3 position = sentinel;
+  require(!dxvk::fork_camera_origin::tryReadStableCameraPositionFromGameState(position),
+          "invalid stable camera position is rejected");
+  require(position == sentinel, "invalid stable camera position leaves output unchanged");
+}
+
+void cloudTranslationRejectsHistoryWithoutViewBob() {
+  requireNear(std::exp2(-0.0f / 0.000025f), 1.0f,
+              "stationary camera retains cloud history");
+  requireNear(std::exp2(-0.000025f / 0.000025f), 0.5f,
+              "2.5 cm camera travel halves cloud history");
+  requireNear(std::exp2(-0.0001f / 0.000025f), 0.0625f,
+              "10 cm camera travel retires cloud history");
+}
+
+void cloudAnchoringSourceIntegration() {
+  AtmosphereArgs args = {};
+  require(args.cloudCameraTravelKm == 0.0f, "cloud camera travel defaults to zero");
+  require(sizeof(AtmosphereArgs) % 16u == 0u, "atmosphere args remain 16-byte aligned");
+
+  const std::string atmosphereCommon = readFile(
+      "src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh");
+  requireContains(atmosphereCommon, "vec3 cloudGeometryPosition",
+                  "camera-local cloud geometry helper");
+  requireContains(atmosphereCommon,
+                  "- vec3(args.cameraWorldPosYUpKm.x, 0.0f, args.cameraWorldPosYUpKm.z)",
+                  "cloud shell follows camera horizontally");
+  requireContains(atmosphereCommon,
+                  "vec3(0.0f, args.cameraWorldPosYUpKm.y, 0.0f)",
+                  "cloud shell retains world camera height");
+
+  const std::string skyShader = readFile(
+      "src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh");
+  requireContains(skyShader, "-args.cloudCameraTravelKm / 0.000025f",
+                  "logical translation rejects stale cloud history");
+  requireNotContains(skyShader, "args.cloudBrightness",
+                     "cloud brightness remains reverted");
+
+  const std::string compositeShader = readFile(
+      "src/dxvk/shaders/rtx/pass/composite/composite.comp.slang");
+  requireNotContains(compositeShader, "cloudHorizonVisibility",
+                     "cloud post-fog restoration remains reverted");
+  requireNotContains(compositeShader, "cloudRadiance - fogColor.rgb * cloudLayer.a",
+                     "clouds remain behind depth fog");
 }
 
 void calculatesPreviousHistoryOffsetAcrossOriginHops() {
@@ -147,6 +237,10 @@ int main() {
     std::cout << "Begin external camera origin tests" << std::endl;
     readsPublishedWorldOriginOffset();
     invalidPublishedWorldOriginFallsBackToZero();
+    readsPublishedStableCameraPosition();
+    invalidPublishedStableCameraPositionIsRejected();
+    cloudTranslationRejectsHistoryWithoutViewBob();
+    cloudAnchoringSourceIntegration();
     calculatesPreviousHistoryOffsetAcrossOriginHops();
     missingPreviousOriginDoesNotOffsetHistory();
     stableExternalHashSurvivesLocalPositionJump();

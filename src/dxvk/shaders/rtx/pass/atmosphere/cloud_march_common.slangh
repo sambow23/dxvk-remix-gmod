@@ -771,19 +771,16 @@ bool integrateCloudSample(float tSampleKm,
   sdfStepKmOut = 0.0f;
 
   // World-anchored sample position (Y-up km). The slab intersection in the
-  // caller runs with ray origin = vec3(0) and planet center = (0, -cloudR, 0),
-  // so tSampleKm is measured along the view ray from the camera. Adding
+  // caller runs in the camera-local tangent frame, so tSampleKm is measured
+  // along the view ray from the camera. Adding
   // cameraWorldPosYUpKm anchors the sample's WORLD position to the player's
   // km-scale Y-up coordinates — the noise/coverage/type fields then translate
   // with the world rather than with the camera, giving the parallax depth cue
   // that was missing (clouds were reading as cardboard cutouts moving rigidly
-  // with the player). Height-fraction math and slab geometry stay correct
-  // because cameraWorldPosYUpKm magnitudes are small at FNV scale (~tens
-  // of meters Y, sub-km XZ at sceneScale=2) compared to cloudThickness
-  // (~3 km) and planet radius (~952 km curvature-adjusted), so the
-  // length()-based altitude reading shifts negligibly. Voxel grids
-  // (D_sun / D_ambient) are world-anchored on the bake side, so this also
-  // brings the runtime lookup into alignment with the bake's convention.
+  // with the player). computeCloudHeightFraction converts this world position
+  // back to the same camera-local tangent frame for curved-shell geometry.
+  // Voxel grids (D_sun / D_ambient) are world-anchored on the bake side, so
+  // this also brings the runtime lookup into alignment with the bake.
   vec3 samplePos = args.cameraWorldPosYUpKm + viewDirYUp * tSampleKm;
 
   // Spatial coverage / type fields: per-sample lerp between the slab entry
@@ -971,8 +968,8 @@ bool integrateCloudSample(float tSampleKm,
   //                   so horizon-grazing rays don't pile up into a wall
   // At default 0.05/0.05 both effects are mild; setting either to 0
   // disables that half of the aerial perspective independently.
-  // tSampleKm is true camera distance in EVERY consumer of this helper (all
-  // keep the camera-at-origin convention), so haze/fade behave identically
+  // tSampleKm is true camera distance in EVERY consumer of this helper, so
+  // haze/fade behave identically
   // across passes.
   accumColor += stepRadiance * viewTransmittance * aerialT_haze;
   viewTransmittance *= mix(1.0f, stepTransmittance, aerialT_fade);
@@ -1000,17 +997,9 @@ void marchCloudSlab(vec3   viewDirYUp,
   // tests against the base + top shells of the curvature-adjusted cloud
   // planet, but with slabAltitudeKm / slabThicknessKm threaded through so
   // layer 2 hits its own altitude band).
-  float cloudR = cloudPlanetRadius(args);
-  vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
-  float baseRadius = cloudR + slabAltitudeKm;
-  float topRadius  = cloudR + slabAltitudeKm + slabThicknessKm;
-
-  float t0base, t1base, t0top, t1top;
-  if (!intersectSphere(vec3(0.0f), viewDirYUp, planetCenter, baseRadius, t0base, t1base)) return;
-  if (!intersectSphere(vec3(0.0f), viewDirYUp, planetCenter, topRadius,  t0top,  t1top))  return;
-
-  float tEntry = t1base;
-  float tExit  = t1top;
+  float tEntry, tExit;
+  if (!intersectCloudShell(viewDirYUp, args, slabAltitudeKm,
+                           slabThicknessKm, tEntry, tExit)) return;
   tEntry = max(tEntry, tMinClamp);
   if (tMaxClamp > 0.0f) {
     tExit = min(tExit, tMaxClamp);
@@ -1207,18 +1196,9 @@ void marchEchoDeck(vec3   viewDirYUp,
                    AtmosphereArgs args,
                    inout vec3  accumColor,
                    inout float viewTransmittance) {
-  float cloudR = cloudPlanetRadius(args);
-  vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
-  float baseRadius = cloudR + slabAltitudeKm;
-  float topRadius  = cloudR + slabAltitudeKm + slabThicknessKm;
-
-  float t0base, t1base, t0top, t1top;
-  if (!intersectSphere(vec3(0.0f), viewDirYUp, planetCenter, baseRadius, t0base, t1base)) return;
-  if (!intersectSphere(vec3(0.0f), viewDirYUp, planetCenter, topRadius,  t0top,  t1top))  return;
-
-  float tEntry = max(t1base, 0.0f);
-  float tExit  = t1top;
-  if (tEntry >= tExit || tExit <= 0.0f) return;
+  float tEntry, tExit;
+  if (!intersectCloudShell(viewDirYUp, args, slabAltitudeKm,
+                           slabThicknessKm, tEntry, tExit)) return;
 
   // Low step budget — the echo deck's headline perf lever, user-adjustable via
   // cloudLayer2StepFloor / cloudLayer2StepMax (decoupled from layer 1's

@@ -35,15 +35,17 @@
 // Composited into primary sky-miss when cloudRenderRTEnable is on (gated by
 // RTX_OPTION). A debug view (enum 876) shows the raw RT for inspection.
 //
-// Coordinate frame: ray-vs-slab intersection runs in camera-at-origin Y-up
-// space (the established cloud-math convention — see `intersectCloudLayer`'s
-// "Ray origin is at the camera (0,0,0) in Y-up space" comment), so the
-// per-step `t` distances are measured from the camera. Per-sample positions
+// Coordinate frame: ray-vs-slab intersection runs in a camera-local Y-up
+// tangent frame. XZ follows the camera, while the ray origin retains the
+// camera's world height so the curved shell stays tied to cloudAltitude.
+// Per-step `t` distances are measured from the camera. Sample positions
 // passed to the density / lighting helpers, however, are WORLD-ANCHORED:
 // `samplePos = args.cameraWorldPosYUpKm + viewDirYUp * t`. This anchors the
 // noise / coverage / type fields and the D_sun / D_ambient voxel-grid
 // lookups to the player's world position (km-scale Y-up coords pushed by
-// setCloudShadowCameraPosition()) so the cloud volume translates with the
+// setCloudShadowCameraPosition()). Integrations may supply this as a stable
+// logical position distinct from their bobbed visual camera, so view bob
+// cannot warp the density anchor. The cloud volume then translates with the
 // world rather than rigidly with the camera — the parallax depth cue that
 // distinguishes a 3D volume from cardboard cutouts.
 //
