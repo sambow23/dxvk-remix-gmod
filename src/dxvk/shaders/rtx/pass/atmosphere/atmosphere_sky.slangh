@@ -1269,7 +1269,15 @@ vec3 evalSkyRadiance(
         // weight so the flash tracks near-live and never embeds. The jitter
         // noise the EMA normally hides is masked by the flash itself; weight
         // returns to the knob value as the fade expires. Inert at fade 0.
+        // A thick volume has no single finite depth that can be reprojected
+        // correctly. Keep stable rotation-only sky reprojection and rapidly
+        // retire history while the logical camera translates. The anchor
+        // supplied by mc-rtx excludes view bob, so standing still retains
+        // full smoothing while real player motion responds live.
+        const float translationHistoryWeight = exp2(
+            -args.cloudCameraTravelKm / 0.000025f); // 2.5 cm half-distance
         float historyWeight = saturate(args.cloudHistoryWeight)
+                            * translationHistoryWeight
                             * (1.0f - 0.8f * saturate(args.lightningHistoryFade));
         vec4 blended = lerp(currentPremul, history, historyWeight);
         smoothedCloud = vec4(blended.rgb, blended.a);
@@ -1289,12 +1297,14 @@ vec3 evalSkyRadiance(
 
     // Composite: smoothedCloud is premultiplied, so the standard "over" op
     // is `radiance * (1 - alpha) + premul.rgb`.
-    radiance = radiance * (1.0f - smoothedCloud.a) + smoothedCloud.rgb;
+    radiance = radiance * (1.0f - smoothedCloud.a)
+             + smoothedCloud.rgb * args.cloudBrightness;
   } else {
     // No temporal smoothing — premultiplied over (cloudLayer.rgb is already
     // premultiplied; the old mix() here was the same double-multiply bug as
     // the smoothing path above).
-    radiance = radiance * (1.0f - cloudLayer.a) + cloudLayer.rgb;
+    radiance = radiance * (1.0f - cloudLayer.a)
+             + cloudLayer.rgb * args.cloudBrightness;
   }
 
   // Star composite (fork). Stars were held out of `radiance` above so they
