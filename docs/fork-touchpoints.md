@@ -3947,3 +3947,29 @@ previous Ray Reconstruction CNN/Transformer/D compatibility behaviour.
   relevant DLSS or DLSS-RR model selector in the user menu.*
 - **src/dxvk/rtx_render/rtx_fork_upscaler_ui.cpp** - fork-owned change.
   *Shows the DLSS-G model selector in the frame-generation panel.*
+
+---
+
+## Workstream - independent aerial perspective scale (fork - 2026-08-21)
+
+Adds rtx.atmosphere.aerialPerspectiveScale, a game-units-per-centimetre
+calibration used only by the aerial perspective volume. Its default value of 0
+preserves legacy behaviour by inheriting rtx.sceneScale; a positive override
+calibrates the volume's depth range, near fades, and scene-shadow distances
+without affecting the sky, cloud system, or global volumetrics. The froxel
+handoff remains in global-volumetrics world units so the two systems do not
+double count.
+
+- **src/dxvk/rtx_render/rtx_atmosphere.h** - fork-owned change. *Declares the
+  persisted scale option.*
+- **src/dxvk/rtx_render/rtx_atmosphere.cpp** - fork-owned change. *Converts
+  AP metric controls with the independent scale and keeps the global-volumetrics
+  handoff in its native world units.*
+- **src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h** - fork-owned
+  change. *Repurposes the AP reserve word as the volume-local
+  world-units-per-kilometre value.*
+- **src/dxvk/shaders/rtx/pass/atmosphere/aerial_perspective_lut.comp.slang** -
+  fork-owned change. *Uses the volume-local conversion for integration and scene
+  shadow rays.*
+- **src/dxvk/rtx_render/rtx_atmosphere_ui.cpp** - fork-owned change. *Exposes
+  the independent Scene Unit Scale control in the Aerial Perspective panel.*
