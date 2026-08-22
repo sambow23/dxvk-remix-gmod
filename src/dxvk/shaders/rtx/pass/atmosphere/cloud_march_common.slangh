@@ -1199,6 +1199,7 @@ void marchEchoDeck(vec3   viewDirYUp,
   float tEntry, tExit;
   if (!intersectCloudShell(viewDirYUp, args, slabAltitudeKm,
                            slabThicknessKm, tEntry, tExit)) return;
+  const float cloudR = cloudPlanetRadius(args);
 
   // Low step budget — the echo deck's headline perf lever, user-adjustable via
   // cloudLayer2StepFloor / cloudLayer2StepMax (decoupled from layer 1's

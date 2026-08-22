@@ -858,8 +858,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.haloMoonBrightness              = RtxAtmosphere::haloMoonBrightness();
   args.celestialTextureFlags           = getCelestialTextureFlags();
   args.celestialTextureAngularRadius   =
-    std::max(RtxOptions::celestialTextureSizeDeg(), 0.0f) * dxvk::kDegreesToRadians * 0.5f;
-  args.celestialTextureBrightness      = std::max(RtxOptions::celestialTextureBrightness(), 0.0f);
+    std::max(RtxAtmosphere::celestialTextureSizeDeg(), 0.0f) * dxvk::kDegreesToRadians * 0.5f;
+  args.celestialTextureBrightness      = std::max(RtxAtmosphere::celestialTextureBrightness(), 0.0f);
   args.celestialTextureEdgeOpacity     = std::min(std::max(RtxAtmosphere::celestialTextureEdgeOpacity(), 0.0f), 1.0f);
   // Perf-bisect shader gate (fork — 2026-06-11, diagnostic). Packed into the
   // former padMoonNee2 slot. Only bit 1 (= flat sky miss) remains; bit 0

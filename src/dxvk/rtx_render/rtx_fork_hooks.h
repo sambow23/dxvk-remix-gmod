@@ -78,7 +78,7 @@ namespace dxvk {
     // pixels in the composite pass. Game-state driven, so no RTX_OPTION values
     // are modified and nothing needs restoring on dimension change.
     // No private-member access; no friend declaration needed.
-    // Implementation in rtx_fork_api_entry.cpp.
+    // Implementation in rtx_fork_atmosphere.cpp.
     bool isSkylessDimension();
 
     // Checks for a USD mesh/light replacement keyed on the API mesh handle hash.
