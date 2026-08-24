@@ -123,6 +123,18 @@ namespace dxvk {
       return chain;
     }
 
+    // Throttled to roughly one line per call site per second: submit() runs every frame
+    // and an ungated log buries the rest of the file within seconds.
+    bool debugLogDue(uint64_t& lastEmittedMs) {
+      constexpr uint64_t kIntervalMs = 1000;
+      const uint64_t nowMs = GlobalTime::get().absoluteTimeMs();
+      if (lastEmittedMs != 0 && nowMs - lastEmittedMs < kIntervalMs) {
+        return false;
+      }
+      lastEmittedMs = nowMs;
+      return true;
+    }
+
   }  // anonymous namespace
 
   bool PrecipitationSystem::ensureTexture(RtxContext& ctx) {
@@ -554,6 +566,23 @@ namespace dxvk {
     const float effectiveIntensity = wx ? wx->precipitationIntensity : intensity();
     const bool active = enable() && effectiveIntensity > 0.0f && maxParticles() > 0;
 
+    // Diagnostics for "no drops at all". Every step below can fail without producing a
+    // log line of its own, so a single run with rtx.weather.precipitation.debugLogging
+    // on must be enough to say which one did.
+    if (debugLogging()) {
+      static uint64_t s_lastGateLogMs = 0;
+      if (debugLogDue(s_lastGateLogMs)) {
+        Logger::info(str::format(
+          "[RTX Precipitation] submit gate: weatherBlender=",
+          ctx.getSceneManager().getWeatherBlender() ? "present" : "absent",
+          " snapshot=", wx ? "active" : "dormant",
+          " effectiveIntensity=", effectiveIntensity,
+          " enable=", enable() ? "1" : "0",
+          " maxParticles=", maxParticles(),
+          " -> ", active ? "ACTIVE" : "INACTIVE (nothing is submitted this frame)"));
+      }
+    }
+
     if (!active) {
       if (m_wasActive) {
         m_activeDesc.reset();  // forget so re-enabling starts fresh rather than waiting out the dwell
@@ -563,11 +592,25 @@ namespace dxvk {
     }
 
     if (!ctx.getSceneManager().getCamera().isValid(ctx.getDevice()->getCurrentFrameId())) {
+      if (debugLogging()) {
+        static uint64_t s_lastCameraLogMs = 0;
+        if (debugLogDue(s_lastCameraLogMs)) {
+          Logger::info(str::format(
+            "[RTX Precipitation] main camera is not valid on frame ",
+            ctx.getDevice()->getCurrentFrameId(), "; no emitter submitted"));
+        }
+      }
       return;
     }
 
     if (!ensureResources(ctx)) {
       // ensureResources logs its own failure; don't spam per frame.
+      if (debugLogging()) {
+        static uint64_t s_lastResourceLogMs = 0;
+        if (debugLogDue(s_lastResourceLogMs)) {
+          Logger::info("[RTX Precipitation] ensureResources failed; no emitter submitted");
+        }
+      }
       return;
     }
 
@@ -615,6 +658,20 @@ namespace dxvk {
       desc,
       {}
     });
+
+    if (debugLogging()) {
+      static uint64_t s_lastSubmitLogMs = 0;
+      if (debugLogDue(s_lastSubmitLogMs)) {
+        const size_t submeshCount = ctx.getSceneManager().getAssetReplacer()->accessExternalMesh(
+          reinterpret_cast<remixapi_MeshHandle>(kMeshHandleValue)).size();
+        Logger::info(str::format(
+          "[RTX Precipitation] submitting emitter: submeshes=", submeshCount,
+          " budget=", desc.maxNumParticles,
+          " spawnRate=", desc.spawnRatePerSecond,
+          " ttl=", desc.maxTimeToLive,
+          " (a submesh count of 0 means the emitter mesh registration was lost)"));
+      }
+    }
 
     ctx.commitExternalGeometryToRT(std::move(state));
     m_wasActive = true;
@@ -773,6 +830,9 @@ namespace dxvk {
 
     RemixGui::Checkbox("Debug: Show Emitter Plane", &debugShowEmitterObject());
     RemixGui::SetTooltipToLastWidgetOnHover(debugShowEmitterObject().getDescription());
+
+    RemixGui::Checkbox("Debug: Log Spawn Path", &debugLoggingObject());
+    RemixGui::SetTooltipToLastWidgetOnHover(debugLoggingObject().getDescription());
 
     ImGui::TreePop();
   }
