@@ -684,7 +684,7 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
 // `enableCloudTemporalSmoothing` (fork) — when true, the cloud layer alpha
 // blends against the previous frame's screen-space cloud history at the same
 // pixel coordinate before compositing. Kills the DLSS-perceived flatness that
-// the per-frame FAST-noise jitter (added in commits 148e3fa5 and d327f3d8)
+// the per-frame blue-noise jitter
 // otherwise produces. The blend uses a fixed history weight (0.92) which
 // matches the volumetric system's age-EMA settled state after ~10 frames.
 //
@@ -740,7 +740,7 @@ vec3 evalSkyRadiance(
   }
 
   // Transform view direction to Y-up space if needed
-  vec3 viewDirYUp = isZUp ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
+  vec3 viewDirYUp = worldToAtmosphereYUp(viewDir, isZUp, args.flipUpAxis != 0);
   viewDirYUp = normalize(viewDirYUp);
 
   // Sample the pre-baked sky-view LUT instead of marching the atmosphere live.
@@ -769,7 +769,6 @@ vec3 evalSkyRadiance(
   //   - stars are held aside and composited AFTER the cloud composite below
   //     using pow(cloud_T, starCloudExtinctionPower) so HDR point-stars die
   //     through cumulus cores instead of pinpointing through them.
-  // Note: Sun disk rendering removed - direct lighting handles sun contribution.
   vec3 starLayer    = vec3(0.0f);
   vec3 airglowLayer = vec3(0.0f);
   evalNightSky(viewDirYUp, args, starLayer, airglowLayer);
@@ -946,7 +945,7 @@ vec3 evalSkyRadiance(
     radiance += (args.cloudSkyBleedStrength * zenithFade) * bleedCloud.rgb;
   }
 
-  // Temporal cloud smoothing (fork). Per-frame FAST-noise jitter on the cloud
+  // Temporal cloud smoothing. Per-frame blue-noise jitter on the cloud
   // ray-march (commits 148e3fa5 / d327f3d8) creates brightness variance that
   // DLSS sees as noise and averages out, producing visible flatness. We blend
   // the raw current cloud against a screen-space history at the reprojected

@@ -41,7 +41,6 @@
 //!>       NEE_CACHE_ENABLE=1
 
 
-
 //!variant integrate_indirect_pom_material_opaque_translucent_closestHit.rchit
 //!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
 //!>       NEE_CACHE_ENABLE=0
@@ -64,7 +63,6 @@
 //!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_ALL
 //!>       NEE_CACHE_ENABLE=1
 //!>       OPAQUE_MATERIAL_USE_POM=1
-
 
 
 /* NRC */
@@ -119,7 +117,6 @@
 //!>       ENABLE_NRC=1
 //!>       NEE_CACHE_ENABLE=1
 //!>       OPAQUE_MATERIAL_USE_POM=1
-
 
 
 // WBOIT
@@ -224,7 +221,15 @@
 //!>       OPAQUE_MATERIAL_USE_POM=1
 //!>       UNORDERED_RESOLVE_WBOIT
 
+
+// Atmosphere variants
+
+
+/* NRC WBOIT atmosphere */
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 #define RAY_PIPELINE
 #define INTEGRATE_INDIRECT
@@ -238,7 +243,6 @@
 // important in reflections off shiny surfaces (as without this it can make areas with many particles look weird in reflections).
 #define RESOLVE_OPACITY_LIGHTING_APPROXIMATION 1
 #define RESOLVER_USE_VOLUMETRIC_ATTENUATION 1
-#define ATMOSPHERE_AVAILABLE
 
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/common_bindings.slangh"

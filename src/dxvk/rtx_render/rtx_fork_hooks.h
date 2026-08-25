@@ -45,12 +45,8 @@ using remixapi_LightHandle = struct remixapi_LightHandle_T*;
 // Only the implementation files that call device-path hooks include it directly.
 namespace dxvk { class D3D9DeviceEx; }
 
-// RaytraceArgs (for updateAtmosphereConstants) and Resources::RaytracingOutput
-// (for dispatchScreenOverlay) both require the full type to appear in a function
-// declaration. rtx_resources.h is the canonical header for both; it is already
-// pulled transitively by most translation units that include rtx_fork_hooks.h.
+// Resources::RaytracingOutput is used by the screen-overlay hooks.
 #include "rtx_resources.h"
-#include "rtx/pass/raytrace_args.h"
 
 // Tonemap shader args structs (ToneMappingApplyToneMappingArgs)
 // needed by fork_hooks::populateTonemapOperatorArgs.
@@ -74,37 +70,6 @@ namespace dxvk {
 
   namespace fork_hooks {
 
-    // Constructs the RtxAtmosphere instance during RtxContext initialization.
-    // Must be called after GlobalTime::get().init() in the RtxContext constructor.
-    // NOTE: requires RtxContext to declare this as a friend for access to the
-    // private m_atmosphere and m_device members. See rtx_context.h.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    void initAtmosphere(RtxContext& ctx);
-
-    // Sets constants.skyMode, detects sky mode transitions (clearing skybox
-    // buffers when switching to Numos), and when Numos
-    // is active ensures m_atmosphere exists, calls initialize /
-    // computeLuts, and writes atmosphereArgs into the constant block.
-    // NOTE: requires RtxContext to declare this as a friend for access to private
-    // members m_atmosphere, m_lastSkyMode, m_skyColorFormat, m_skyRtColorFormat,
-    // and m_device. See rtx_context.h.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants);
-
-    // Ensures m_atmosphere is initialized (idempotent) and binds the three
-    // atmosphere LUT textures unconditionally, because they are declared in
-    // common_bindings.slangh for all shader passes.
-    // NOTE: requires RtxContext to declare this as a friend for access to private
-    // members m_atmosphere and m_device. See rtx_context.h.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    void bindAtmosphereLuts(RtxContext& ctx);
-
-    // Returns true when the caller should skip rasterized sky rendering because
-    // Numos mode is active.
-    // No private-member access — uses only the public RtxOptions::skyMode() API.
-    // No friend declaration needed.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    bool injectRtxAtmosphereSkySkip();
 
     // Checks for a USD mesh/light replacement keyed on the API mesh handle hash.
     // Returns the replacement vector if one exists, null otherwise.
@@ -211,14 +176,6 @@ namespace dxvk {
       DxvkDevice* device,
       uint64_t externalId);
 
-    // Per-frame weather preset blender update. Reads __weather.target and
-    // __weather.blend_seconds from the GameStateStore and writes blended weather
-    // params to the Derived layer of their underlying RTX_OPTIONs. Dormant when
-    // no target is set — zero behavioural change vs upstream.
-    // NOTE: requires RtxContext to declare this as a friend for access to the
-    // private m_weatherBlender member. See rtx_context.h. (Wired in Task 3.)
-    // Implementation in rtx_fork_weather.cpp.
-    void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds);
 
     // Emplaces a new external light into m_externalLights and stamps
     // frameLastTouched. Called from the "new light" branch of addExternalLight.
@@ -267,13 +224,6 @@ namespace dxvk {
     // Implementation in rtx_fork_overlay.cpp.
     void imguiContextPin(struct ImGuiContext* ctx, struct ImPlotContext* plotCtx);
 
-    // Renders the atmosphere preset buttons and parameter tree inside the
-    // "Sky Tuning" collapsing header. Owns the skyModeCombo static and branches
-    // on SkyMode::Numos vs SkyboxRasterization.
-    // No private-member access — uses only public RtxOptions and ImGui APIs.
-    // No friend declaration needed.
-    // Implementation in rtx_fork_atmosphere.cpp.
-    void showAtmosphereUI();
 
     // Invokes the registered plugin draw callback for the Plugin tab in the dev
     // menu. Called from the kTab_Wrapper switch case in ImGUI::showMainMenu.
@@ -480,12 +430,6 @@ namespace dxvk {
     // Implementation in rtx_fork_tonemap.cpp.
     void showTonemapOperatorUI();
 
-    // Renders the weather preset UI inside the existing atmosphere ImGui tree.
-    // Includes preset dropdown, blend duration slider, current/target/progress
-    // display, "Pause Weather Blender" toggle, and per-preset slider sub-trees.
-    // No private-member access. (Wired in Task 4.)
-    // Implementation in rtx_fork_weather.cpp.
-    void showWeatherUI();
 
     // --- FSR 3.1 upscaling, RCAS sharpening and frame generation -------------
     //
@@ -581,20 +525,6 @@ namespace dxvk {
     // upscaler; the option itself lives at rtx.sharpening.sharpness.
     // Implementation in rtx_fork_upscaler_ui.cpp.
     void showSharedSharpnessSlider();
-    // Submits the weather precipitation emitter (rain / snow / blowing sand) for
-    // this frame. Called from RtxContext::injectRTX immediately BEFORE
-    // SceneManager::prepareSceneData, which is where the particle simulation
-    // runs — submitting after it would lose this frame's spawn contexts.
-    // Dormant unless rtx.weather.precipitation.intensity is non-zero, which the
-    // weather blender drives from the per-preset precipitation fields.
-    // No private-member access. Implementation in rtx_fork_precipitation.cpp.
-    void submitPrecipitation(class RtxContext& ctx);
-
-    // Renders the global (non-per-preset) precipitation controls — budget, spawn
-    // volume, collision. The per-preset look values are generated into the
-    // weather preset editor automatically by WEATHER_PRESET_FIELD_LIST.
-    // No private-member access. Implementation in rtx_fork_precipitation.cpp.
-    void showPrecipitationUI();
 
   } // namespace fork_hooks
 

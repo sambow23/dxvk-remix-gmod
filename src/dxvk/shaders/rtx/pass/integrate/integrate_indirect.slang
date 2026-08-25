@@ -206,7 +206,14 @@
 //!>       UNORDERED_RESOLVE_WBOIT
 
 
+// Atmosphere variants
+
+
+/* NRC WBOIT atmosphere */
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 #define INTEGRATE_INDIRECT
 #define RAB_HAS_PREVIOUS_GBUFFER 1
@@ -215,7 +222,6 @@
 // important in reflections off shiny surfaces (as without this it can make areas with many particles look weird in reflections).
 #define RESOLVE_OPACITY_LIGHTING_APPROXIMATION 1
 #define RESOLVER_USE_VOLUMETRIC_ATTENUATION 1
-#define ATMOSPHERE_AVAILABLE
 
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/common_bindings.slangh"

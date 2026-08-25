@@ -29,20 +29,16 @@
 //!variant volume_restir_spatial_resampling.comp
 //!>       VOLUME_RESTIR_MODE=SPATIAL_REUSE
 
+// Atmosphere variants
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 // Note: Required to enable volumetric radiance scale functionality on this pass to ensure any
 // volumetric ReSTIR operations done with respect to light radiance take it into account (e.g.
 // ensuring lights that are significantly boosted are sampled from more).
 #define ENABLE_VOLUMETRIC_RADIANCE_SCALE 1
-
-// Fork (2026-05-12, C6): expose the cloud voxel grid + cloud-noise samplers
-// declared in common_bindings.slangh so the atmosphere helpers
-// (sampleAtmosphereSunLightVolume -> sampleCloudGroundShadow_OptionB, plus
-// sampleDSun / sampleDAmbient / fastJitter) resolve to bound globals. Matches
-// the same #define used by the surface integrators in integrate_direct.slang
-// and integrate_indirect.slang.
-#define ATMOSPHERE_AVAILABLE
 
 #define INITIAL       0
 #define VISIBILITY    1

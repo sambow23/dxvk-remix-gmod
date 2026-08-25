@@ -1,94 +1,43 @@
 #pragma once
 
-// rtx_fork_precipitation.h — fork-owned precipitation (rain / snow / blowing
-// sand) particle system, driven by the Numos weather presets.
+// rtx_precipitation.h — rain/snow/sand particle system driven by the Numos weather presets.
 //
-// WHAT THIS IS
-//   A runtime-internal port of the rain effect from xoxor4d's NFS Carbon RTX
-//   mod (https://github.com/xoxor4d/nfsc-rtx, src/comp/modules/rain.cpp). That
-//   mod builds its rain game-side: CreateMaterial + CreateMesh for a quad
-//   "spawner", then one DrawInstance per frame carrying an
-//   InstanceInfoParticleSystemEXT anchored to the camera. This file does the
-//   same thing from INSIDE the runtime, against the same
-//   RtxParticleSystemManager, so precipitation becomes a property of a weather
-//   preset instead of something every game integration has to re-implement.
+// Port of xoxor4d's NFS Carbon RTX rain (game-side CreateMaterial+CreateMesh+DrawInstance) made
+// runtime-internal so precipitation is a weather preset property, not a per-game integration task.
 //
-// HOW IT PLUGS INTO WEATHER
-//   Eleven fields in WEATHER_PRESET_FIELD_LIST (group "Precipitation") are
-//   blended by WeatherBlender exactly like every other weather param and
-//   written to the live RTX_OPTIONs declared below. This class reads only those live options,
-//   so it works identically whether the values came from a preset blend, a
-//   user.conf override, or a hand-drag in the dev menu.
+// The descriptor is dwell-gated (descUpdateIntervalMs) because RtxParticleSystemManager keys systems
+// on materialHash ^ desc.calcHash(): a descriptor that changes every frame allocates a new system
+// every frame. Orphans crossfade out on their own (no new spawns, particles finish lifetime).
 //
-// PER-FRAME SHAPE
-//   fork_hooks::submitPrecipitation(RtxContext&) runs once per frame from
-//   RtxContext::injectRTX, immediately BEFORE SceneManager::prepareSceneData
-//   (which is where RtxParticleSystemManager::simulate lives — submitting after
-//   it would cost a frame of latency and miss the spawn contexts). It submits a
-//   single hidden emitter quad through SceneManager::submitExternalDraw with an
-//   optionalParticleDesc attached; the particle manager owns everything after
-//   that (spawn, simulate, geometry generation, draw submission).
-//
-// DESCRIPTOR STABILITY (important)
-//   RtxParticleSystemManager keys its particle systems on
-//   materialHash ^ desc.calcHash(). A descriptor that changes every frame
-//   therefore allocates a BRAND NEW particle system (with full
-//   maxNumParticles-sized VB/IB/particle buffers) every frame, and the orphans
-//   only age out after maxTimeToLive. Weather blends move these values
-//   continuously, so the descriptor is re-evaluated on a dwell timer
-//   (descUpdateIntervalMs) rather than per frame. Crossing a step leaves the
-//   previous system alive with no new spawns; its particles finish their
-//   lifetime and the manager evicts it — i.e. transitions crossfade for free.
-//
-// See docs/fork-touchpoints.md for the upstream touchpoints this file needs.
+#include <cstdint>
+#include <optional>
+#include <vector>
 
 #include "rtx_option.h"
+#include "rtx_common_object.h"
 #include "rtx_types.h"
 #include "rtx_materials.h"
 #include "../../util/util_vector.h"
 #include "../../util/util_matrix.h"
 #include "rtx/pass/particles/particle_system_common.h"
 
-#include <cstdint>
-#include <optional>
-#include <vector>
-
 namespace dxvk {
 
+  // Full weather types live in rtx_weather.h.
+  struct WeatherSnapshot;
+
   class RtxContext;
-  class DxvkContext;
   class DxvkDevice;
 
-  namespace fork_precipitation {
-
-    // -------------------------------------------------------------------------
-    // PrecipitationSystem — one instance per process (the emitter mesh/material
-    // are keyed on fixed handles, so a second instance would collide). Owns the
-    // procedural drop texture, the unit-quad emitter, and the dwell-gated
-    // descriptor.
-    // -------------------------------------------------------------------------
-    class PrecipitationSystem {
+  class PrecipitationSystem : public CommonDeviceObject {
     public:
-      static PrecipitationSystem& get();
+      void submit(RtxContext& ctx);       // per-frame; cheap no-op when disabled or intensity == 0
+      static void showImguiSettings();   // "Precipitation (global)" tree: budget/volume/collision knobs
 
-      // Per-frame entry point (see PER-FRAME SHAPE above). Cheap no-op while
-      // disabled or while intensity is zero.
-      void submit(RtxContext& ctx);
-
-      // "Precipitation (global)" tree in the weather panel — the knobs that are
-      // deliberately NOT per-preset (budget, geometry of the spawn volume,
-      // collision). The per-preset look values are generated automatically into
-      // the preset editor by the weather field table.
-      static void showImguiSettings();
-
-      // --- Blend targets -----------------------------------------------------
-      // Written every frame by WeatherBlender::applyBlendedValues (Derived
-      // layer) from the matching precipitation* preset fields. Authoring these
-      // directly is supported and useful when the blender is dormant.
       RTX_OPTION("rtx.weather.precipitation", float, intensity, 0.0f,
-                 "Master precipitation dial. 0 disables the system entirely; 1 saturates the particle budget "
-                 "(rtx.weather.precipitation.maxParticles). Driven by the weather preset field "
-                 "'precipitationIntensity'.");
+                 "Base/fallback precipitation dial. 0 disables the system entirely; 1 saturates the particle "
+                 "budget (rtx.weather.precipitation.maxParticles). An active WeatherSnapshot supplies the "
+                 "effective preset intensity without mutating this option.");
       RTX_OPTION("rtx.weather.precipitation", float, fallSpeed, 8.0f,
                  "Vertical fall speed in meters/second. Real rain terminal velocity is roughly 4-9 m/s; snow is "
                  "0.5-1.5 m/s. Combined with wind (see windResponse) to produce the actual travel direction.");
@@ -114,8 +63,8 @@ namespace dxvk {
                  "bleeds off the wind push with time constant 1/drag: wind-driven looks (blizzard, sandstorm) want "
                  "LOW drag with high turbulence, not the reverse.");
       RTX_OPTION("rtx.weather.precipitation", float, skyLight, 1.0f,
-                 "Strength of the SKYLIGHT the drops pick up, 1 = physical. Driven by the weather preset field "
-                 "'precipitationSkyLight' and blended like every other look value, so a blizzard can author "
+                 "Base/fallback strength of the SKYLIGHT the drops pick up, 1 = physical. Active weather "
+                 "supplies precipitationSkyLight through the WeatherSnapshot, so a blizzard can author "
                  "different skylight than a drizzle. Mechanism: precipitation particles are shaded by the "
                  "renderer's particle lighting approximation (albedo x froxel volumetric radiance), but the "
                  "froxel grid contains NO skylight - its integrator only samples the analytic light pool - so "
@@ -136,15 +85,9 @@ namespace dxvk {
                  "degrees. Values above ~0.1 are for deliberately wind-driven looks (blizzard, sandstorm) where "
                  "near-horizontal travel is the point.");
 
-      // --- Appearance overrides (fork - 2026-07-26) --------------------------
-      // Global user-taste modifiers applied ON TOP of the blended per-preset
-      // look in buildDesc. They exist because the per-preset fields above are
-      // OWNED by the WeatherBlender whenever a preset is active - it rewrites
-      // them every frame, so dragging them in the dev menu never sticks and
-      // the only look knobs that held were the material ones (roughness /
-      // metallic). These stack multiplicatively, persist across presets and
-      // weather transitions, and save like any other rtx option. Defaults are
-      // all identity, so untouched configs produce bit-identical descriptors.
+      // Global user-taste multipliers applied ON TOP of the blended per-preset look.
+      // The per-preset fields are owned by the WeatherBlender snapshot while active, so these are
+      // independent user-taste multipliers that remain editable across presets. All default to identity.
       RTX_OPTION("rtx.weather.precipitation.appearance", Vector3, tintColor, Vector3(1.0f, 1.0f, 1.0f),
                  "Global tint multiplied into the per-preset particle color. White (1,1,1) leaves the preset "
                  "color unchanged. Applies to every preset (rain, snow, sand) - it is a user-taste override, "
@@ -173,9 +116,6 @@ namespace dxvk {
                  "[1-v, 1+v] times the effective opacity (clamped at 1). Mixing fainter and stronger drops "
                  "adds depth; 0.3-0.5 reads naturally. 0 keeps every drop identical (the previous behavior).");
 
-      // --- Globals -----------------------------------------------------------
-      // Budget / spawn-volume geometry / collision. NOT per-preset: these are
-      // integration + performance choices, not weather look.
       RTX_OPTION("rtx.weather.precipitation", bool, enable, true,
                  "Master switch for the weather precipitation particle system.");
       RTX_OPTION("rtx.weather.precipitation", int, maxParticles, 24000,
@@ -187,11 +127,7 @@ namespace dxvk {
       RTX_OPTION("rtx.weather.precipitation", float, spawnHeightMeters, 14.0f,
                  "Height of the spawn plane above the camera, in meters. Particles are seeded here and fall past "
                  "the viewer.");
-      // NOTE: there is deliberately no "bias the volume along the view
-      // direction" option. Any such bias makes the spawn volume follow the
-      // camera's ROTATION, which drags freshly spawned particles along when the
-      // player turns (the spawn shader smears new particles between the
-      // emitter's previous and current transform). See buildEmitterTransform.
+      // No view-direction bias: it would follow camera ROTATION, dragging freshly spawned particles when turning.
       RTX_OPTION("rtx.weather.precipitation", float, fallMarginMeters, 8.0f,
                  "Extra fall distance below the camera before particles expire, in meters. Larger keeps drops "
                  "visible further down the screen; smaller recycles the budget sooner.");
@@ -239,10 +175,10 @@ namespace dxvk {
                  "Render the emitter quad instead of hiding it. Diagnostic: shows exactly where particles are "
                  "spawned and which way the plane is tilted.");
 
-    private:
-      PrecipitationSystem() = default;
+      explicit PrecipitationSystem(DxvkDevice* device)
+        : CommonDeviceObject(device) { }
 
-      // Resolved per-frame look/motion values (blended options + derived math).
+    private:
       struct Params {
         Vector3 fallDirection { 0.0f, 0.0f, -1.0f };  // unit, world space
         float   speedMetersPerSec = 8.0f;             // magnitude along fallDirection
@@ -255,51 +191,31 @@ namespace dxvk {
       bool ensureMaterial(RtxContext& ctx);
       bool ensureMesh(RtxContext& ctx);
 
-      static Params resolveParams();
-      static RtxParticleSystemDesc buildDesc(const Params& params);
+      static Params resolveParams(const WeatherSnapshot* wx);
+      static RtxParticleSystemDesc buildDesc(const Params& params, const WeatherSnapshot* wx);
       static Matrix4 buildEmitterTransform(RtxContext& ctx, const Params& params);
 
-      // Dwell-gated descriptor adoption — see DESCRIPTOR STABILITY above. Also
-      // (on the same dwell) re-registers the drop material when roughness /
-      // metallic changed, since a material re-registration forks the particle
-      // system identity exactly like a descriptor change and must be paced the
-      // same way. Returns the descriptor to submit this frame.
-      const RtxParticleSystemDesc& refreshDesc(RtxContext& ctx, const Params& params);
+      // Also re-registers the drop material on the same dwell when roughness/metallic changed,
+      // since material re-registration forks the system identity just like a descriptor change.
+      const RtxParticleSystemDesc& refreshDesc(RtxContext& ctx, const Params& params, const WeatherSnapshot* wx);
 
-      // GPU resources, created once and reused. Null until the first enabled
-      // frame. They live for the lifetime of the device they were created on:
-      // SceneManager::clear() (camera cuts, game load) does NOT touch the asset
-      // replacer's external mesh/material tables, so nothing here needs a
-      // scene-clear hook. If the DxvkDevice itself is ever recreated (device
-      // reset, a second D3D9 device in the process) everything below is stale
-      // AND the new device's asset replacer has never seen our registrations —
-      // submit() detects the device change via m_resourceDevice and drops the
-      // lot so the next frame rebuilds cleanly.
+      // GPU resources are device-scoped with this CommonDeviceObject and are created once and reused.
       Rc<DxvkImage>     m_dropImage;
       Rc<DxvkImageView> m_dropImageView;
       bool m_materialRegistered = false;
       bool m_meshRegistered = false;
 
-      // Raw pointer used only for identity comparison — never dereferenced.
-      const DxvkDevice* m_resourceDevice = nullptr;
 
-      // Material constants actually registered with the asset replacer, so
-      // refreshDesc can detect a live edit of roughness()/metallic() (the
-      // material is otherwise registered exactly once and later option edits
-      // would silently do nothing).
+      // Cached so refreshDesc detects live edits (registration is once; later edits would silently do nothing).
       float m_materialRoughness = -1.0f;
       float m_materialMetallic = -1.0f;
 
-      // Emitter quad geometry (persistent host-visible buffers + the
-      // RasterGeometry registered with the asset replacer).
       Rc<DxvkBuffer> m_quadVertexBuffer;
       Rc<DxvkBuffer> m_quadIndexBuffer;
 
-      // Current (adopted) descriptor + the dwell timer that gates replacing it.
       std::optional<RtxParticleSystemDesc> m_activeDesc;
       uint64_t m_activeDescTimeMs = 0;
       bool     m_wasActive = false;
-    };
+  };
 
-  }  // namespace fork_precipitation
 }  // namespace dxvk

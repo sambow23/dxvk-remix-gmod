@@ -22,21 +22,17 @@
 
 //!variant volume_integrate_rayquery.comp
 
+// Atmosphere variant
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 // Note: Required to enable volumetric radiance scale functionality on this pass to affect
 // the integration of lighting in volumetrics. Should be enabled on any pass evaluating lights
 // with respect to volumetrics solely (if mixing of volumetric and non-volumetric lighting is
 // done, a new approach will be needed).
 #define ENABLE_VOLUMETRIC_RADIANCE_SCALE 1
-
-// Fork (2026-05-12, C6): expose the cloud voxel grid + cloud-noise samplers
-// declared in common_bindings.slangh so the atmosphere helpers
-// (sampleAtmosphereSunLightVolume -> sampleCloudGroundShadow_OptionB, plus
-// sampleDSun / sampleDAmbient / fastJitter) resolve to bound globals. Matches
-// the same #define used by the surface integrators in integrate_direct.slang
-// and integrate_indirect.slang.
-#define ATMOSPHERE_AVAILABLE
 
 #include "rtx/pass/common_bindings.slangh"
 #include "rtx/pass/volumetrics/volume_integrate_bindings.slangh"

@@ -62,11 +62,24 @@
 //!>       NEE_CACHE_ENABLE=1
 //!>       UNORDERED_RESOLVE_WBOIT
 
+
+// Atmosphere variants
+
+
+// NRC
+
+
+// WBOIT
+
+
+// NRC
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 #define RAY_PIPELINE
 #define INTEGRATE_INDIRECT
-#define ATMOSPHERE_AVAILABLE
 #define RAB_HAS_PREVIOUS_GBUFFER 1
 #define RAB_HAS_RTXDI_RESERVOIRS 1
 #define RAB_HAS_RESTIR_GI_RESERVOIRS 1

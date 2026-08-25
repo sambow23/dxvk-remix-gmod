@@ -132,9 +132,6 @@ Texture2D AtmosphereSkyViewLut;
 layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)
 SamplerState AtmosphereCloudNoise3DSampler;
 
-layout(binding = BINDING_ATMOSPHERE_FAST_NOISE)
-Texture2DArray<float2> AtmosphereFastNoise;
-
 // Cloud history textures (fork). See atmosphere_bindings.slangh for full notes.
 layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)
 Texture2D<float4> AtmosphereCloudHistoryPrev;
@@ -156,7 +153,7 @@ RWTexture2D<uint> AtmosphereCloudHistoryFrameIdCurr;
 // Cloud-occluded sky-ambient transmittance LUT (fork). 2D (azimuth, elevation),
 // R16F single-channel, baked per frame from camera position by
 // cloud_sky_transmittance_lut.comp.slang. Sampled via the linear/CLAMP sampler
-// produced alongside the bake (bound by fork_hooks::bindAtmosphereLuts).
+// produced alongside the bake (bound by RtxAtmosphere::bindResources).
 layout(binding = BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT)
 Texture2D<float> AtmosphereCloudSkyTransmittanceLut;
 

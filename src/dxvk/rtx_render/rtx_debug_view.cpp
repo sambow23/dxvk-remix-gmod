@@ -35,6 +35,7 @@
 #include "rtx_imgui.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"
+#include "rtx_atmosphere.h"
 #include "rtx_terrain_baker.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_nrd_context.h"
@@ -1441,10 +1442,12 @@ namespace dxvk {
     Resources::Resource terrain = common.getSceneManager().getTerrainBaker().getTerrainTexture(terrainTextureType);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_TERRAIN_INPUT, terrain.view, nullptr);
 
-    // Fork: cloud-occluded sky-ambient transmittance LUT diagnostic binding.
-    // The fork hook lazy-initializes the atmosphere so the resource is always
-    // valid after the call.
-    Resources::Resource cloudSkyTransLut = fork_hooks::getCloudSkyTransmittanceLut(*ctx);
+    // Numos atmosphere diagnostics. Initialize once so all lazily-created
+    // resources are valid before exposing them to the debug view.
+    RtxAtmosphere& atmosphere = common.metaAtmosphere();
+    atmosphere.initialize(ctx);
+
+    Resources::Resource cloudSkyTransLut = atmosphere.getCloudSkyTransmittanceLut();
     if (cloudSkyTransLut.isValid()) {
       ctx->bindResourceView(
         DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT,
@@ -1452,55 +1455,28 @@ namespace dxvk {
         nullptr);
     }
 
-    // Fork: Nubis Cubed cloud voxel grid diagnostic bindings (D_sun + D_ambient).
-    // The fork hooks lazy-initialize the atmosphere; the grids are allocated
-    // unconditionally inside the atmosphere init path so the resources are
-    // valid even when no cumulus geometry is active.
     {
-      Resources::Resource cloudDSun = fork_hooks::getCloudDSun(*ctx);
+      const Resources::Resource& cloudDSun = atmosphere.getCloudDSun();
       if (cloudDSun.isValid()) {
-        ctx->bindResourceView(
-          DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT,
-          cloudDSun.view,
-          nullptr);
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT, cloudDSun.view, nullptr);
       }
     }
     {
-      Resources::Resource cloudDAmbient = fork_hooks::getCloudDAmbient(*ctx);
+      const Resources::Resource& cloudDAmbient = atmosphere.getCloudDAmbient();
       if (cloudDAmbient.isValid()) {
-        ctx->bindResourceView(
-          DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT,
-          cloudDAmbient.view,
-          nullptr);
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT, cloudDAmbient.view, nullptr);
       }
     }
-    // Fork: cloud NVDF body SDF (Nubis3 conversion Phase A). Same lazy-init
-    // contract as the voxel grids above; the atmosphere init path runs the
-    // full synchronous NVDF bake, so a valid resource is always a complete
-    // field (the accessor returns the published FRONT buffer).
     {
-      Resources::Resource cloudNvdfSdf = fork_hooks::getCloudNvdfSdf(*ctx);
+      const Resources::Resource& cloudNvdfSdf = atmosphere.getCloudNvdfSdf();
       if (cloudNvdfSdf.isValid()) {
-        ctx->bindResourceView(
-          DEBUG_VIEW_BINDING_CLOUD_NVDF_SDF_INPUT,
-          cloudNvdfSdf.view,
-          nullptr);
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_NVDF_SDF_INPUT, cloudNvdfSdf.view, nullptr);
       }
     }
-    // Fork: Nubis Cubed screen-space cloud render RT (C4, 2026-05-12).
-    // Resource becomes valid after the first updateAtmosphereConstants pass
-    // has run ensureCloudRenderRT; before that, leave the binding unbound —
-    // the debug view case (876) tolerates a missing texture by returning
-    // zeros (the default Load behavior on an unbound texture). The
-    // ATMOSPHERE_AVAILABLE-gated binding declaration in the shader is
-    // independent of skyMode, so the binding-state remains consistent.
     {
-      Resources::Resource cloudRenderRT = fork_hooks::getCloudRenderRT(*ctx);
+      const Resources::Resource& cloudRenderRT = atmosphere.getCloudRenderRT();
       if (cloudRenderRT.isValid()) {
-        ctx->bindResourceView(
-          DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT,
-          cloudRenderRT.view,
-          nullptr);
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT, cloudRenderRT.view, nullptr);
       }
     }
 

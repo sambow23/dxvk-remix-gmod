@@ -62,9 +62,17 @@ struct AtmosphereArgs {
   vec3 mieScattering;
   float sunRayBrightness;  // Multiplier for direct sun ray brightness
 
+  // Aerosols absorb as well as scatter (Hillaire EGSR 2020, Table 1), so Mie extinction is
+  // scattering + absorption. Modelling only the scattering half leaves aerosol extinction at
+  // roughly half its physical value: haze brightens as it thickens instead of also darkening, and
+  // cannot be tinted. Raising this relative to
+  // mieScattering is what makes dust brown-and-dim rather than grey-and-bright.
+  vec3 mieAbsorption;  // Absorption coefficients (km^-1)
+  uint flipUpAxis;  // Negate the world up axis when converting into the atmosphere's Y-up frame
+
   // Ozone absorption (important for realistic sunset colors per Hillaire paper Section 3.4)
   vec3 ozoneAbsorption;  // Absorption coefficients (km^-1)
-  float ozoneLayerAltitude;  // Peak altitude of ozone layer (km)
+  float ozoneLayerAltitude;  // Peak altitude of the ozone tent profile (km)
 
   uint transmittanceLutWidth;
   uint transmittanceLutHeight;
@@ -72,7 +80,7 @@ struct AtmosphereArgs {
   uint skyViewLutWidth;
 
   uint skyViewLutHeight;
-  float ozoneLayerWidth;  // Width of ozone layer (km)
+  float ozoneLayerWidth;  // Half-width of the ozone tent profile (km); the paper's 30 km tent = 15
   float padRetired10;     // retired: viewAltitude (camera altitude offset, km) — never read by any pass.
   float multiScatterPhysicalStrength;  // 0 = pure analytical (artistic, preset-faithful), 1 = pure LUT-based hemisphere integration (physical)
 
@@ -643,4 +651,100 @@ struct AtmosphereArgs {
                                 // any further growth needs a new full
                                 // 16-byte row (see the CB-alignment
                                 // discipline note at the top).
+
+  // ----- Aerial perspective froxel volume (Hillaire EGSR 2020, Section 5.4) -----
+  // Camera-frustum-fitted 32^3 volume holding, per froxel, the atmospheric in-scattered luminance
+  // toward the camera in RGB and the mean transmittance in A, so applying it to a shaded pixel is a
+  // single multiply-add. This is what gives distant geometry its haze and desaturation; without it
+  // everything past the global volumetrics froxel range renders at full saturation and contrast.
+  //
+  // Rebuilt every frame (unlike the parameter-only transmittance / multiscattering / sky-view
+  // bakes), so none of it may invalidate those bakes.
+  //
+  // Grouping them last is only for readability - it is NOT what protects the cache. The
+  // bake-invalidation memcmp covers the WHOLE struct; what actually protects it is
+  // normalizeForSkyLutCache() explicitly zeroing every field here. Any field added below this
+  // point must be zeroed there too, or the entire LUT cascade re-bakes on every camera movement.
+  uint aerialPerspectiveLutSize;      // Width/height/depth of the volume; 0 when disabled
+  float aerialPerspectiveDepthRange;  // Depth covered by the volume, in world units
+  // Near bound of the volume, in world units, as a FORWARD distance - the same axis
+  // aerialPerspectiveDepthRange lives on, and the axis the volumetrics grid's own froxelMaxDistance
+  // is expressed on (it becomes a projection Z). In-scatter nearer than this is already integrated
+  // by that grid, so the volume starts here rather than at the camera.
+  //
+  // The depth slices are laid out over [this, depthRange], so this is also the volume's zero point:
+  // no slice is spent on the segment the grid owns, and the stored in-scatter has no kink at the
+  // handoff for the composite's interpolation to overshoot on. Floored to a small positive distance
+  // by the CPU side, since the slice distribution is exponential and the handoff is 0 whenever
+  // global volumetrics are disabled.
+  float aerialPerspectiveStartDistance;
+  uint isZUp;  // Non-zero when the game world is Z-up rather than the atmosphere's internal Y-up
+
+  // Camera basis in world units. cameraRight / cameraUp are pre-scaled by the frustum half extents
+  // at unit forward distance, so a ray built from them always has a forward component of exactly
+  // one and the slice index maps directly to forward distance.
+  vec3 cameraPosition;
+  float padAerial0;
+
+  vec3 cameraForward;
+  float padAerial1;
+
+  vec3 cameraRight;
+  float padAerial2;
+
+  vec3 cameraUp;
+  float padAerial3;
+
+  // Upper bound on the Mie anisotropy this volume's march may use; see
+  // aerialPerspectiveMieAnisotropyMax in rtx_atmosphere.h for why the volume needs a tamer lobe
+  // than the sky does. Grouped with the aerial perspective state and zeroed by
+  // normalizeForSkyLutCache: no bake reads it, so it must not invalidate the LUT cascade.
+  float aerialPerspectiveMieAnisotropyMax;
+
+  // How far from the camera, in world units, the bake is allowed to trace the scene for sun
+  // occlusion of the column it integrates. Samples beyond it are treated as sunlit, which is what
+  // the air above the rooftops is. Rides the former padAerial4 slot.
+  float aerialPerspectiveSceneShadowRange;
+
+  // What the bake's sun-occlusion hook should do. Diagnostic modes exist because the failure mode of
+  // this feature is silence: every way it can break (constant not arriving, TLAS descriptor unbound,
+  // rays missing the geometry) looks identical on screen to "working but the halo is from something
+  // else", and each costs a build-and-play cycle to guess at. Rides the former padAerial5 slot.
+  //   0 = off, no trace, always sunlit
+  //   1 = trace the scene (production)
+  //   2 = force fully occluded WITHOUT tracing. If the halo does not change under this, the
+  //       constant or the dispatch is broken, not the trace.
+  //   3 = trace, but invert the result. Isolates whether the rays hit anything at all: the halo
+  //       should survive ONLY where a ray found geometry.
+  uint aerialPerspectiveSceneShadowMode;
+
+  // Per-pixel near-field fade, in world units, applied by the composite rather than by the bake.
+  //
+  // The volume's integration domain starts at the global volumetrics handoff, which is
+  // rtx.volumetrics.froxelMaxDistanceMeters - 20 m by default, and 1 m when volumetrics are off.
+  // That bound is correct for the PHYSICS (it is where the froxel grid stops integrating) but far
+  // too near to be the bound on what this volume may PAINT: its scene-shadow term is resolved on a
+  // 32x32 screen grid, so a surface just past the handoff reads a column bilinearly blended from
+  // neighbours up to ~60 px away at 1080p. Wherever those neighbours look past the surface into
+  // sunlit air, the forward-scatter lobe lands on it as a halo - the bleed-through this fade exists
+  // to remove.
+  //
+  // Modelled on how D3D9 fog excludes nearby geometry (calculateFog in composite.slangh): a
+  // closed-form ramp evaluated from the SHADING PIXEL'S OWN view distance, so it carries no
+  // neighbourhood term and cannot bleed across a silhouette however coarse the volume it gates is.
+  // Below start the volume contributes nothing, across [start, end] it ramps in, past end it is
+  // unattenuated. Physically this gives up almost nothing: clear-air extinction over the first few
+  // hundred metres is negligible, so what lives in that range is overwhelmingly the artifact.
+  float aerialPerspectiveNearFadeStart;
+
+  float aerialPerspectiveNearFadeEnd;
+
+  // Depth slices in the volume, kept separate from its screen resolution above. The two axes carry
+  // different content: XY resolves how the haze varies with view DIRECTION, which near the sun is
+  // the Mie aureole and wants resolution, while Z resolves how it varies with DISTANCE, which the
+  // exponential slice distribution already makes smooth. Tying them together would charge a square
+  // for an axis that does not need it.
+  uint aerialPerspectiveLutDepthSlices;
+  float padAerial7;
+  float padAerial8;
 };

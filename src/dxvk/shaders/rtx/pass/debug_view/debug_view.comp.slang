@@ -505,11 +505,12 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       // in-game (helper bailed at slab-bottom intersect because a Y-up
       // vector was being treated as Z-up and double-swapped).
       const bool isZUpFlag = (cb.isZUp != 0u);
-      const vec3 sunDirCallerFrame = isZUpFlag
-          ? vec3(cb.atmosphereArgs.sunDirection.x,
-                 cb.atmosphereArgs.sunDirection.z,
-                 cb.atmosphereArgs.sunDirection.y)
-          : cb.atmosphereArgs.sunDirection;
+      // atmosphereYUpToWorld undoes the up flip before the axis swap, which is the order the
+      // CPU-side toWorld() in syncDistantLights uses and the only one that is correct - the two do
+      // not commute. Shared rather than re-derived on purpose: this case exists to mirror
+      // production, so a private copy of the conversion is the one thing it must not have.
+      const vec3 sunDirCallerFrame = atmosphereYUpToWorld(
+          cb.atmosphereArgs.sunDirection, isZUpFlag, cb.atmosphereArgs.flipUpAxis != 0);
       const vec3 sunDir = normalize(sunDirCallerFrame);
 
       // CRITICAL: match production NEE call shape exactly.
@@ -592,9 +593,8 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       // Replicates sampleCloudGroundShadow_OptionB_impl up through the
       // dSunTex.SampleLevel call. worldPos comes from the G-buffer in
       // caller's frame; swap to Y-up only if engine is Z-up.
-      const vec3 worldPosYUp = isZUpFlag
-          ? vec3(worldPos.x, worldPos.z, worldPos.y)
-          : worldPos;
+      const vec3 worldPosYUp =
+          worldToAtmosphereYUp(worldPos, isZUpFlag, cb.atmosphereArgs.flipUpAxis != 0);
       const float kmPerWorldUnit = 1.0f / max(cb.atmosphereArgs.worldUnitsPerKm, 1e-6f);
       const vec3 worldPosKm = worldPosYUp * kmPerWorldUnit;
       const float slabTopY = cb.atmosphereArgs.cloudAltitude

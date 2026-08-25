@@ -29,6 +29,10 @@
 
 namespace dxvk {
 
+// Forward declaration for the weather override pointer (full definition in
+// rtx_weather.h, included only by rtx_global_volumetrics.cpp).
+struct WeatherSnapshot;
+
   class RtxGlobalVolumetrics : public CommonDeviceObject, public RtxPass {
 
   public:
@@ -257,6 +261,18 @@ namespace dxvk {
 
     VolumeArgs getVolumeArgs(CameraManager const& cameraManager, FogState const& fogState, bool enablePortalVolumes) const;
 
+    /**
+     * \brief Set the per-frame weather snapshot override.
+     *
+     * When non-null, getVolumeArgs() reads blended volumetric weather values
+     * from the snapshot instead of the RTX_OPTION getters for every field that
+     * the WeatherBlender can drive. Frame-local: call once per frame before
+     * getVolumeArgs() runs; do NOT cache the pointer across frames.
+     */
+    void applyWeatherOverride(const dxvk::WeatherSnapshot* wx) {
+      m_weatherOverride = wx;
+    }
+
     void dispatch(class RtxContext* ctx, const Resources::RaytracingOutput& rtOutput, uint32_t numActiveFroxelVolumes);
     
     const Resources::Resource& getCurrentVolumeReservoirs() const { return m_volumeReservoirs[0]; }
@@ -270,7 +286,7 @@ namespace dxvk {
 
     void showPresetMenu();
     void showImguiUserSettings();
-    void showImguiSettings();
+    void showImguiSettings(const WeatherSnapshot* weatherSnapshot = nullptr);
 
     void setQualityLevel(const QualityLevel desiredQualityLevel);
     void setPreset(const PresetType desiredPreset);
@@ -291,6 +307,12 @@ namespace dxvk {
     Resources::Resource m_volumeAccumulatedRadianceAge[2];
     bool m_swapTextures = false;
     bool m_rebuildFroxels = false;
+
+    // Per-frame weather snapshot override. Set once per frame
+    // by applyWeatherOverride() (called from rtx_context.cpp before
+    // getVolumeArgs runs). getVolumeArgs() reads the snapshot's fields instead
+    // of the RTX_OPTION getters for every weather-blendable volumetric param.
+    const dxvk::WeatherSnapshot* m_weatherOverride = nullptr;
 
     DxvkRaytracingPipelineShaders getPipelineShaders(bool useRayQuery) const;
 
