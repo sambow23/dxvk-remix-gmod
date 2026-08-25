@@ -4006,3 +4006,153 @@ double count.
   shadow rays.*
 - **src/dxvk/rtx_render/rtx_atmosphere_ui.cpp** - fork-owned change. *Exposes
   the independent Scene Unit Scale control in the Aerial Perspective panel.*
+
+---
+
+## Fix - precipitation spawned zero particles (stale emitter instance index) (fork - 2026-08-23)
+
+User report: with the `thunderstorm` preset active under an API-driven integration
+(BetaRT drives Remix purely through `remixapi_*`; no D3D9 draw calls), the
+"Precipitation (global)" panel showed `Scene TLAS: available` but
+`Spawn rays: 0   shelter kills: 0   landing hits: 0   relocated: 0`, and no drop ever
+appeared. Not a regression - the path had never worked.
+
+**Root cause.** `RtxParticleSystemManager::spawnParticles` records its emitter as
+`RtInstance::getVectorIdx()`, a slot index into `InstanceManager::m_instances`, and
+`RtxParticleSystemManager::writeSpawnContextsToGpu` dereferences that index later.
+Between those two points sits `SceneManager::prepareSceneData`, whose first real step is
+`garbageCollection()`; `InstanceManager::garbageCollection()` removes an instance by
+swapping the vector's **back** element into the freed slot and popping. Any emitter added
+late in the frame is that back element.
+
+The precipitation emitter is added as late as it is possible to be - `RtxContext::injectRTX`
+calls `PrecipitationSystem::submit` immediately before `prepareSceneData` - and it is added
+*fresh every frame*: `ExternalDrawState::computeExternalDrawIdentityHash` hashes
+`objectToWorld`, and the emitter is camera-glued with a wind-driven basis, so its identity
+changes whenever the camera or the weather drift moves. `SceneManager::submitExternalDraw`
+looks the emitter up with `findOrCreateReplacementInstance(externalKey, /*allowSpatialReassociation*/ false)`,
+so a changed transform misses L1 (identity) and misses L2 (which requires a bit-exact
+transform hash) and cannot fall through to the spatial nearest-neighbour path - a brand new
+`ReplacementInstance`, hence a brand new `RtInstance` at the back of the vector, on every
+frame.
+
+So every frame: spawn records index `size-1`, GC removes at least one instance (at minimum
+the emitter instance this scheme orphaned a few frames earlier), the emitter is swapped to a
+lower slot, the recorded index is now `>= size`, and `writeSpawnContextsToGpu` takes its
+"I dont see this case being hit" branch - which zeroes `context.spawnParticleCount` for the
+whole particle system. `simulate()` then sees `particleCount == 0` and `continue`s before
+dispatching the spawn kernel, which is why the occlusion counters read 0 while
+`Scene TLAS: available` stayed true (the particle system object itself exists and is
+refreshed every frame, so `s_spawnTraceTlasValid` keeps being stored `true`). No log line is
+produced anywhere along that path.
+
+This is not specific to the API path in principle, but it is deterministic there: a
+conventional D3D9 emitter is a stable game mesh whose `RtInstance` keeps a low, stable slot,
+and GC only ever moves the back element, so its recorded index survives. A camera-glued
+emitter is always the back element.
+
+**Fix** (consumption side, so it protects every emitter, not just precipitation): the spawn
+context now also stores `RtInstance::getId()`, which is stable across the reindex, and the
+lookup validates the index against it, falling back to a scan keyed on the id. Only a
+genuinely destroyed instance now discards a spawn - and that case warns once instead of
+failing silently.
+
+**Instrumentation** (`rtx.weather.precipitation.debugLogging`, off by default, also exposed
+as "Debug: Log Spawn Path" in the precipitation panel): throttled to ~1 line/second/site,
+covering the submit gate (blender present / snapshot active / effective intensity / enable /
+budget), main-camera validity, `ensureResources` failure, the emitter mesh's submesh count at
+submission, and - from inside the particle manager - which exit `spawnParticles` took and
+whether the spawn context still resolved to a live instance.
+
+Not addressed, and worth a follow-up: the emitter still allocates a new `ReplacementInstance`
++ `RtInstance` every frame. That is now harmless for spawning, but it leaves
+`numFramesToKeepInstances` worth of orphaned hidden emitter instances alive at any time and
+denies the emitter any temporal history (`RtInstance::EmitterMotionState` is always seeded,
+never accumulated). Stabilising external-draw identity for camera-relative meshes would fix
+that class of problem properly.
+
+- **`src/dxvk/rtx_render/rtx_fork_particle_spawn.cpp`** - fork-owned addition.
+  *`fork_hooks::resolveSpawnEmitterInstance` (index hint validated against the stable
+  `RtInstance` id, id-keyed scan on drift, one-shot warn on genuine loss) and
+  `fork_hooks::particleSpawnDiagnostic` (throttled spawn-path logging).*
+- **`src/dxvk/rtx_render/rtx_fork_hooks.h`** - fork-owned change. *Declares both hooks.*
+- **`src/dxvk/rtx_render/rtx_particle_system.h`** - fork-touchpoint inline tweak - 2 blocks.
+  *`SpawnContext::instanceUid`; `spawnParticles` takes the emitter's stable id alongside its
+  vector index.*
+- **`src/dxvk/rtx_render/rtx_particle_system.cpp`** - fork-touchpoint inline tweak - 5 sites.
+  *Records the uid, resolves through `fork_hooks::resolveSpawnEmitterInstance` instead of
+  indexing the instance table directly, reports each `spawnParticles` exit through
+  `fork_hooks::particleSpawnDiagnostic`, and clears the latched `s_spawnTraceTlasValid` when no
+  particle system exists - it is only ever stored inside the has-systems branch, so the panel
+  kept reading "Scene TLAS: available" long after the last system was evicted, which made "no
+  system at all" and "system exists but spawned nothing" indistinguishable.*
+- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** - fork-touchpoint inline tweak - 1 LOC.
+  *Passes `instance->getId()` to `spawnParticles`.*
+- **`src/dxvk/rtx_render/rtx_precipitation.h`** - fork-owned change. *Adds
+  `rtx.weather.precipitation.debugLogging`.*
+- **`src/dxvk/rtx_render/rtx_precipitation.cpp`** - fork-owned change. *Throttle helper plus
+  the four submit-path diagnostic sites and the panel checkbox.*
+- **`src/dxvk/meson.build`** - fork-owned change. *Builds the new fork module.*
+- **`RtxOptions.md`** - REGEN PENDING (new `rtx.weather.precipitation.debugLogging`).
+
+---
+
+## Fix - particles were invisible at metric scene scale (scene-scale-naive size cull) (fork - 2026-08-23)
+
+Follow-up to the stale-emitter-index fix above. With spawning repaired
+(`Spawn rays 1834, landing hits 1311` confirmed in game) precipitation still rendered
+nothing: every drop's vertices were being cleared by the geometry pass.
+
+**Root cause.** `particle_system_generate_geometry.comp.slang` culled on
+`max(size.x, size.y) < 0.1f`, where `size` had already been converted to WORLD units by
+`* particleCb.sceneScale`. Particle sizes are authored in centimetres -
+`RtxParticleSystemDesc::minSize` / `maxSize` are documented as centimetres, and
+`RtxParticleSystemManager::ParticleSystem::allocStaticBuffers` bakes them into the
+animation-data texture unscaled, so `GpuParticle::size()` returns raw centimetres. The
+guard was therefore "smaller than 1 mm" at the Remix default `rtx.sceneScale = 1`, which
+is the sensible degenerate-geometry check it was written to be - but "smaller than 10 cm"
+at `rtx.sceneScale = 0.01`. The thunderstorm preset authors a 0.38 x 9.0 cm drop; scaled,
+that is 0.09 world units, just under the 0.1 cliff, so 100% of drops were cleared. The
+global preset default `rtx.particles.globalPreset.minSpawnSize = 10 cm` landing exactly on
+0.1 world units at that scale corroborates that the constant was written assuming a scene
+scale near 1.
+
+**Fix.** Test the AUTHORED (pre-`sceneScale`) size against the same 0.1 constant. That
+restores the constant's original physical meaning (1 mm of authored size) at every scene
+scale and is bit-identical at `sceneScale = 1`. Deliberately fixed generally rather than by
+flooring precipitation's drop size: 0.38 x 9.0 cm is physically correct for rain, and any
+other consumer running at a metric scene scale hits the same wall. Nothing is at risk of
+surviving that should not - the world-unit test is only a cheap pre-cull that skips the
+projection math, and the screen-space cull immediately after it
+(`particleCb.minParticleSize`, in pixels) is the real visibility gate and is already
+scale-free.
+
+**Audited and found correct** (every other spatial/velocity quantity in the pipeline is
+converted explicitly): `collisionThickness`, `attractorRadius`, `attractorForce`,
+`turbulenceForce`, `gravityForce`, `maxVelocity`, `initialVelocityFromNormal`, the fork's
+`shelterProbeDistance`, and `RtxParticleSystemManager::resolveSpawnPrevTransform`'s
+`discontinuityFloor`. `minParticleSize` is in pixels and `kMinimumParticleLife` in seconds,
+both scale-free.
+
+**Audited and NOT fixed, reported instead:**
+
+- `particle_system_evolve.comp.slang:145` - `turbulenceFrequency` is a spatial FREQUENCY
+  (cycles per centimetre, per its own option description) but is converted with
+  `* particleCb.sceneScale` like a length. Converting cycles/cm to cycles/world-unit
+  requires DIVIDING by `sceneScale`, so at `sceneScale = 0.01` the turbulence feature size
+  comes out 10,000x too large and the effect degenerates from small-scale flutter into a
+  near-uniform drift (the same factor applies to its time axis). Not touched here because
+  it is wrong at every scene scale except 1 and correcting it would change the look of
+  every existing tuned integration; it cannot make anything invisible. Affects the snow /
+  blizzard / sandstorm presets and thunderstorm's 0.20 turbulence, not visibility.
+- `particle_system_generate_geometry.comp.slang:~313` - `chopMantissaLSB(position, 4)` is a
+  relative-precision vertex compression, so its absolute error grows with distance from the
+  world origin. At metric scene scale a 3.8 mm drop width is only ~30x the quantum at 1000
+  world units out. Harmless under `MCRTX_FLOATING_ORIGIN=1`, which keeps coordinates near
+  the origin; worth remembering for any integration that does not rebase.
+- `particle_system_evolve.comp.slang:48` - `kCollisionBias` is declared and never used.
+
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_generate_geometry.comp.slang`** -
+  fork-touchpoint inline tweak - 1 block. *Keeps the authored size alongside the world-space
+  size and runs the degenerate-particle guard against the authored one, with the unit
+  reasoning recorded at the site.*

@@ -174,6 +174,15 @@ namespace dxvk {
       RTX_OPTION("rtx.weather.precipitation", bool, debugShowEmitter, false,
                  "Render the emitter quad instead of hiding it. Diagnostic: shows exactly where particles are "
                  "spawned and which way the plane is tilted.");
+      RTX_OPTION("rtx.weather.precipitation", bool, debugLogging, false,
+                 "Log the precipitation spawn path to the Remix log, throttled to roughly one line per "
+                 "call site per second. Answers 'why are there no drops' without a debugger: whether a "
+                 "weather snapshot is supplying an intensity, whether the camera is valid, whether the "
+                 "emitter texture/material/mesh resources came up, how many submeshes the emitter mesh "
+                 "registered, and - from the particle manager itself - whether the emitter reached "
+                 "spawnParticles, how many particles it asked for, and whether the spawn context still "
+                 "resolved to a live instance when the simulation consumed it. Off by default; this is "
+                 "log spam, not telemetry.");
 
       explicit PrecipitationSystem(DxvkDevice* device)
         : CommonDeviceObject(device) { }
