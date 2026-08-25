@@ -751,16 +751,10 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
 
   // Brightness multiplier
   args.sunRayBrightness = 1.0f;
-  
+
   // Ozone absorption (Base * Density Multiplier)
   float ozoneDensity = RtxAtmosphere::ozoneDensity();
   args.ozoneAbsorption = RtxAtmosphere::ozoneAbsorption() * ozoneDensity;
-  
-  // Override ozone from GameState (BetaRT dynamic sunset control)
-  float gsOzoneMultiplier = 1.0f;
-  if (tryReadGameStateFloat("__atmosphere.sunsetOzoneMultiplier", gsOzoneMultiplier)) {
-    args.ozoneAbsorption = args.ozoneAbsorption * gsOzoneMultiplier;
-  }
   
   // Internal ozone params
   args.ozoneLayerAltitude = RtxAtmosphere::ozoneLayerAltitude();
@@ -776,12 +770,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // sky reddens even when clouds are disabled.
   args.multiScatterStrength = RtxAtmosphere::multiScatterStrength();
   args.sunsetSaturation     = RtxAtmosphere::sunsetSaturation();
-
-  // Override sunset saturation from GameState (BetaRT dynamic sunset control)
-  float gsSunsetSaturationScale = 1.0f;
-  if (tryReadGameStateFloat("__atmosphere.sunsetSaturationScale", gsSunsetSaturationScale)) {
-    args.sunsetSaturation = args.sunsetSaturation * gsSunsetSaturationScale;
-  }
 
   // Diffuse-indirect sky radiance multiplier. Applied per-ray in evalSkyRadiance
   // (post-LUT-sample), so it never feeds any LUT bake — see normalizeForSkyLutCache,
