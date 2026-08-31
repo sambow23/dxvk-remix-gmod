@@ -2,6 +2,10 @@
 
 [![Build Status](https://github.com/RemixProjGroup/dxvk-remix/actions/workflows/build.yml/badge.svg)](https://github.com/RemixProjGroup/dxvk-remix/actions/workflows/build.yml)
 
+Please consider donating to fund development (and keep me housed)!
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/J3J3BCC3L)
+
 **Remix Plus** is a community-maintained fork of NVIDIA's
 [`dxvk-remix`](https://github.com/NVIDIAGameWorks/dxvk-remix) — created
 and led by [Kim2091](https://github.com/Kim2091) — that extends the
