@@ -172,6 +172,7 @@ cd dxvk-remix
 PATH="$PWD/scripts-common/xwin:$PATH" meson setup _Comp64Clang \
   --cross-file build-win64-clang.txt \
   --buildtype debugoptimized \
+  -Dwerror=false \
   -Denable_tests=false \
   -Denable_rtxio=true
 
