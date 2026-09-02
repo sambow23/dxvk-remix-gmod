@@ -28,13 +28,18 @@
 
 // Todo: Potentially make these configurable by an option in the future or auto-detected. This will require the ray portal
 // info to be in its own buffer though likely to not make the RaytraceArgs bigger than it needs to be.
-static const uint8_t maxRayPortalPairCount = uint8_t(1);
-// WARNING! When increasing maxRayPortalCount, also change invalidRayPortalIndex to something higher,
-// because RTXDI gradient computation relies on there being (2*maxRayPortalCount) portals in the RaytraceArgs array,
-// where the upper half comes from the previous frame.
-static const uint32_t maxRayPortalCount = 2;
-// Note: Ray portal index only given 3 bits for packing reasons, giving a max of 7 ray portals that can be active at once,
-// or 3 pairs of 2 which should be enough for most things.
+// Ray traversal and direct-light sampling support two reciprocal pairs. The
+// packed portal-space state and dedicated volumetric cameras remain limited to
+// the first pair; additional pairs fall back to combined/main portal space.
+static const uint8_t maxRayPortalPairCount = uint8_t(2);
+// RTXDI gradient computation keeps current- and previous-frame portal data in
+// adjacent halves of the RaytraceArgs array.
+static const uint32_t maxRayPortalCount = 4;
+// Only the original pair has dedicated packed portal-space state, virtual
+// cameras and volumetric volumes.
+static const uint8_t maxDedicatedRayPortalCount = uint8_t(2);
+// Keep this synchronized with RTXDI_INVALID_PORTAL_INDEX. RTXDI uses this
+// sentinel when deciding whether a portal index is safe to dereference.
 static const uint8_t invalidRayPortalIndex = uint8_t(0x7);
 
 struct PortalTransform

@@ -38,6 +38,7 @@
 #include "../dxvk_objects.h"
 #include "../imgui/dxvk_imgui.h"
 #include "rtx_context.h"
+#include "rtx_ray_portal_manager.h"
 #include "rtx_texture_manager.h"
 
 #include <remix/remix_c.h>
@@ -2419,6 +2420,18 @@ namespace {
 
 extern "C"
 {
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_GetRayPortalCapabilities(
+    uint32_t* out_maxActivePortalSurfaces,
+    uint32_t* out_maxDedicatedPortalVolumes) {
+    if (!out_maxActivePortalSurfaces || !out_maxDedicatedPortalVolumes) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    *out_maxActivePortalSurfaces = maxRayPortalCount;
+    *out_maxDedicatedPortalVolumes = maxDedicatedRayPortalCount;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_CreatePersistentInstance(
     const remixapi_InstanceInfo* info,
     remixapi_PersistentInstanceHandle* out_handle) {
