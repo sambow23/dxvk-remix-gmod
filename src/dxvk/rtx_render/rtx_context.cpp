@@ -601,6 +601,10 @@ namespace dxvk {
     // Note: Only engage ray tracing when it is enabled, the camera is valid and when no shaders are currently being compiled asynchronously (as
     // trying to render before shaders are done compiling will cause Remix to block).
     if (isRaytracingEnabled && isCameraValid && !asyncShaderCompilationActive) {
+      AccelManager& accelManager = getSceneManager().getAccelManager();
+      accelManager.beginFrameGpuTiming(this);
+      DEFER(rtxFrameGpuTiming, accelManager.endFrameGpuTiming(this);)
+
       if (targetImage == nullptr) {
         targetImage = m_state.om.renderTargets.color[0].view->image();  
       }
@@ -684,20 +688,25 @@ namespace dxvk {
         // Generate ray tracing constant buffer
         updateRaytraceArgsConstantBuffer(rtOutput, downscaledExtent, targetImage->info().extent);
 
-        // Volumetric Lighting
-        dispatchVolumetrics(rtOutput);
-        
-        // Path Tracing
-        dispatchPathTracing(rtOutput);
+        {
+          accelManager.beginRayTracingGpuTiming(this);
+          DEFER(rayTracingGpuTiming, accelManager.endRayTracingGpuTiming(this);)
 
-        // Neural Radiance Cache
-        m_common->metaNeuralRadianceCache().dispatchTrainingAndResolve(*this, rtOutput);
+          // Volumetric Lighting
+          dispatchVolumetrics(rtOutput);
 
-        // RTXDI confidence
-        m_common->metaRtxdiRayQuery().dispatchConfidence(this, rtOutput);
+          // Path Tracing
+          dispatchPathTracing(rtOutput);
 
-        // ReSTIR GI
-        m_common->metaReSTIRGIRayQuery().dispatch(this, rtOutput);
+          // Neural Radiance Cache
+          m_common->metaNeuralRadianceCache().dispatchTrainingAndResolve(*this, rtOutput);
+
+          // RTXDI confidence
+          m_common->metaRtxdiRayQuery().dispatchConfidence(this, rtOutput);
+
+          // ReSTIR GI
+          m_common->metaReSTIRGIRayQuery().dispatch(this, rtOutput);
+        }
         
         if (captureScreenImage && captureDebugImage) {
           takeScreenshot("baseReflectivity", rtOutput.m_primaryBaseReflectivity.image(Resources::AccessType::Read));

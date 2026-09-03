@@ -21,6 +21,7 @@
 */
 #pragma once
 
+#include <array>
 #include <mutex>
 #include <vector>
 #include <unordered_set>
@@ -29,6 +30,7 @@
 #include "rtx_types.h"
 #include "rtx_common_object.h"
 #include "rtx_gpu_crash_recorder.h"
+#include "rtx_option.h"
 #include "rtx_staging.h"
 #include "rtx_point_instancer_system.h"
 #include "../util/util_vector.h"
@@ -45,6 +47,25 @@ class OpacityMicromapManager;
 
 // AccelManager is responsible for maintaining the acceleration structures (BLAS and TLAS)
 class AccelManager : public CommonDeviceObject {
+  friend class ImGUI;
+
+  RTX_OPTION("rtx.accelerationStructure", bool, enableBlasBaking, false,
+             "Enables experimental runtime baking of stable dedicated and merged BLASes for faster tracing.");
+  RTX_OPTION("rtx.accelerationStructure", bool, enableSpatialBlasClustering, true,
+             "Spatially partitions merged geometry into bounded BLASes to reduce overlap during ray traversal.");
+  RTX_OPTION("rtx.accelerationStructure", uint32_t, spatialBlasClusterMaxPrimitives, 50000,
+             "Maximum aggregate primitive count in a spatially clustered merged BLAS. 0: Unlimited.");
+  RTX_OPTION("rtx.accelerationStructure", uint32_t, spatialBlasClusterMaxGeometries, 32,
+             "Maximum geometry count in a spatially clustered merged BLAS. 0: Unlimited.");
+  RTX_OPTION("rtx.accelerationStructure", uint32_t, staticBlasMinStableFrames, 60,
+             "Number of active unchanged frames before an eligible BLAS is rebuilt for fast tracing.");
+  RTX_OPTION("rtx.accelerationStructure", uint32_t, maxBlasRefits, 120,
+             "Maximum number of BLAS refits before an optional full rebuild restores traversal quality. 0: Disabled.");
+  RTX_OPTION("rtx.accelerationStructure", uint32_t, maxMaintenanceOperationsPerFrame, 1,
+             "Maximum optional BLAS promotion, quality rebuild, or compaction operations per frame. 0: Unlimited.");
+  RTX_OPTION("rtx.accelerationStructure", uint32_t, blasCompactionMinSavingsPercent, 10,
+             "Minimum measured memory savings required before compacting a baked BLAS, in percent.");
+
   class BlasBucket {
   public:
     std::vector<VkAccelerationStructureGeometryKHR> geometries {};
@@ -61,10 +82,12 @@ class AccelManager : public CommonDeviceObject {
     uint32_t reorderedSurfacesOffset = UINT32_MAX;
     bool hasOmmInstances = false;
     bool hasSssInstances = false;
+    bool bakeEligible = true;
 
     // The PooledBlas assigned to this bucket by createBlasBuffersAndInstances.
     // Stored here so the per-bucket cache can capture it after buildBlases.
     PooledBlas* assignedBlas = nullptr;
+    PooledBlas* previousBlas = nullptr;
     
     // Tries to add a geometry instance to the bucket. The addition is successful if either:
     //   a) the bucket is empty,
@@ -81,7 +104,7 @@ class AccelManager : public CommonDeviceObject {
     uint8_t instanceMask = 0;
     bool usesUnorderedApproximations = false;
     bool isSubsurface = false;
-    uint8_t pad = 0;
+    bool bakeEligible = false;
 
     bool operator==(const BlasBucketKey& other) const {
       return instanceMask == other.instanceMask &&
@@ -89,7 +112,8 @@ class AccelManager : public CommonDeviceObject {
              customIndexFlags == other.customIndexFlags &&
              instanceFlags == other.instanceFlags &&
              usesUnorderedApproximations == other.usesUnorderedApproximations &&
-             isSubsurface == other.isSubsurface;
+             isSubsurface == other.isSubsurface &&
+             bakeEligible == other.bakeEligible;
     }
   };
 
@@ -102,7 +126,7 @@ class AccelManager : public CommonDeviceObject {
           &BlasBucketKey::instanceMask,
           &BlasBucketKey::usesUnorderedApproximations,
           &BlasBucketKey::isSubsurface,
-          &BlasBucketKey::pad>(k));
+          &BlasBucketKey::bakeEligible>(k));
     }
   };
 
@@ -116,6 +140,9 @@ public:
   AccelManager& operator=(AccelManager const&) = delete;
 
   explicit AccelManager(DxvkDevice* device);
+  ~AccelManager() override;
+
+  void onDestroy() override;
 
   // Returns a GPU buffer containing the surface data for active instances
   const Rc<DxvkBuffer> getSurfaceBuffer() const { return m_surfaceBuffer; }
@@ -158,6 +185,11 @@ public:
 
   void buildTlas(Rc<DxvkContext> ctx);
 
+  void beginFrameGpuTiming(Rc<DxvkContext> ctx);
+  void endFrameGpuTiming(Rc<DxvkContext> ctx);
+  void beginRayTracingGpuTiming(Rc<DxvkContext> ctx);
+  void endRayTracingGpuTiming(Rc<DxvkContext> ctx);
+
   void dumpCrashState(const char* reason) const { m_gpuCrashRecorder.dump(reason); }
 
   // Returns the number of live BLAS objects
@@ -176,6 +208,108 @@ public:
   void invalidateOpacityMicromapBindings() { m_ommBindPending = true; }
 
 private:
+  static constexpr uint32_t kCompactionQueryCount = 256;
+
+  struct CompactionQuerySlot {
+    Rc<PooledBlas> blas;
+    uint64_t buildGeneration = 0;
+  };
+
+  struct BlasStats {
+    uint32_t dedicatedUpdateableCount = 0;
+    uint32_t dedicatedStaticCount = 0;
+    uint32_t dedicatedCompactedCount = 0;
+    uint32_t dedicatedPendingCompactionCount = 0;
+    uint32_t mergedUpdateableCount = 0;
+    uint32_t mergedStaticCount = 0;
+    uint32_t mergedCompactedCount = 0;
+    uint32_t mergedPendingCompactionCount = 0;
+    uint32_t mergedGeometryCount = 0;
+    uint32_t mergedMaxGeometryCount = 0;
+    uint32_t mergedBakeEligibleUpdateableCount = 0;
+    uint32_t mergedBakeReadyCount = 0;
+    uint32_t mergedMinStableFrames = 0;
+    uint32_t mergedMaxStableFrames = 0;
+    uint32_t mergedZeroStableCount = 0;
+    uint32_t mergedOneStableCount = 0;
+    uint32_t mergedAdvancingStableCount = 0;
+    uint32_t builds = 0;
+    uint32_t refits = 0;
+    uint32_t qualityRebuilds = 0;
+    uint32_t promotions = 0;
+    uint32_t compactions = 0;
+    uint64_t compactionBytesSaved = 0;
+  };
+
+  struct BlasActivityStats {
+    uint32_t builds = 0;
+    uint32_t refits = 0;
+    uint32_t qualityRebuilds = 0;
+    uint32_t promotions = 0;
+    uint32_t compactions = 0;
+
+    bool hasWork() const {
+      return builds != 0
+          || refits != 0
+          || qualityRebuilds != 0
+          || promotions != 0
+          || compactions != 0;
+    }
+  };
+
+  struct MergedBlasChurnStats {
+    uint64_t invalidations = 0;
+    uint64_t newAllocations = 0;
+    uint64_t contentRecoveries = 0;
+    uint64_t reassignments = 0;
+    uint64_t layoutChanges = 0;
+    uint64_t topologyChanges = 0;
+    uint64_t vertexChanges = 0;
+    uint64_t boneChanges = 0;
+    uint64_t transformChanges = 0;
+    uint64_t unknownChanges = 0;
+
+    void record(uint32_t changes) {
+      ++invalidations;
+      newAllocations += hasMergedBlasChange(changes, MergedBlasChange::NewAllocation);
+      reassignments += hasMergedBlasChange(changes, MergedBlasChange::Reassignment);
+      layoutChanges += hasMergedBlasChange(changes, MergedBlasChange::Layout);
+      topologyChanges += hasMergedBlasChange(changes, MergedBlasChange::Topology);
+      vertexChanges += hasMergedBlasChange(changes, MergedBlasChange::Vertex);
+      boneChanges += hasMergedBlasChange(changes, MergedBlasChange::Bone);
+      transformChanges += hasMergedBlasChange(changes, MergedBlasChange::Transform);
+      unknownChanges += hasMergedBlasChange(changes, MergedBlasChange::Unknown);
+    }
+  };
+
+  enum class GpuTimingScope : uint8_t {
+    Blas,
+    Tlas,
+    RayTracing,
+    Frame,
+  };
+
+  struct PendingGpuTiming {
+    GpuTimingScope scope = GpuTimingScope::Blas;
+    uint64_t generation = 0;
+    Rc<class DxvkGpuQuery> beginQuery;
+    Rc<class DxvkGpuQuery> endQuery;
+  };
+
+  struct GpuTimingValue {
+    float lastMs = 0.0f;
+    float lastWorkMs = 0.0f;
+    float averageMs = 0.0f;
+    bool hasSample = false;
+  };
+
+  struct GpuTimingStats {
+    GpuTimingValue blas;
+    GpuTimingValue tlas;
+    GpuTimingValue rayTracing;
+    GpuTimingValue frame;
+  };
+
   struct SurfaceInfo {
     uint32_t surfaceMaterialIndex;
     Vector3 worldPosition;
@@ -219,6 +353,22 @@ private:
 
   bool validateUpdateMode(const VkAccelerationStructureBuildGeometryInfoKHR& oldInfo, const VkAccelerationStructureBuildGeometryInfoKHR& newInfo);
 
+  void beginBlasMaintenance(uint32_t currentFrame);
+  bool consumeMaintenanceOperation();
+  bool createCompactionQueryPool();
+  void destroyCompactionQueryPool();
+  void issueCompactionQueries(Rc<DxvkContext> ctx);
+  void pollCompactionQueries();
+  bool compactBlas(Rc<DxvkContext> ctx, PooledBlas& blas);
+  void updateBlasReferences(uint64_t oldReference, uint64_t newReference);
+  void ensureBlasStorage(Rc<DxvkContext> ctx, PooledBlas& blas, size_t bufferSize, const char* name);
+  void refreshBlasStats();
+  void resetBlasLifecycle(PooledBlas& blas);
+  PendingGpuTiming beginGpuTiming(Rc<DxvkContext> ctx, GpuTimingScope scope);
+  void endGpuTiming(Rc<DxvkContext> ctx, PendingGpuTiming&& timing);
+  void pollGpuTimings();
+  void resetGpuTimingStats();
+
   std::vector<RtInstance*> m_reorderedSurfaces;
   std::vector<uint32_t> m_reorderedSurfacesFirstIndexOffset;
   std::vector<uint32_t> m_reorderedSurfacesPrimitiveIDPrefixSum;              // Exclusive prefix sum for this frame's surface primitive count array
@@ -249,6 +399,7 @@ private:
   // Tracks all dynamic BLAS references from the last full build so they can be
   // touched during the cached (skip) path to prevent GC from collecting them.
   std::vector<Rc<PooledBlas>> m_activeDynamicBlases;
+  std::vector<Rc<PooledBlas>> m_activeMergedBlases;
 
   // --- Dynamics-only rebuild cached state ---
   // Per-bucket cache from the last build.  Each entry corresponds to one merged
@@ -302,14 +453,31 @@ private:
   void createAndBuildIntersectionBlas(Rc<DxvkContext> ctx, class DxvkBarrierSet& execBarriers);
   
   Rc<DxvkBuffer> getScratchMemory(const size_t requiredScratchAllocSize);
+  Rc<DxvkAccelStructure> createBlasAccelerationStructure(size_t bufferSize, const char* name) const;
   Rc<PooledBlas> createPooledBlas(size_t bufferSize, const char* name) const;
 
   // The recorder currently lives here because it only captures acceleration
   // structure state. Move it higher if crash recording expands beyond AS data.
   RtxGpuCrashRecorder m_gpuCrashRecorder;
+  VkQueryPool m_compactionQueryPool = VK_NULL_HANDLE;
+  std::array<CompactionQuerySlot, kCompactionQueryCount> m_compactionQuerySlots;
+  uint32_t m_nextCompactionQuery = 0;
+  uint32_t m_maintenanceOperationsThisFrame = 0;
+  bool m_compactionQueryPoolCreationFailed = false;
+  bool m_spatialClusteringConfigInitialized = false;
+  bool m_previousSpatialClusteringEnabled = false;
+  uint32_t m_previousSpatialClusterMaxPrimitives = 0;
+  uint32_t m_previousSpatialClusterMaxGeometries = 0;
+  BlasStats m_blasStats;
+  BlasActivityStats m_blasActivityThisFrame;
+  MergedBlasChurnStats m_mergedBlasChurnStats;
+  GpuTimingStats m_gpuTimingStats;
+  PendingGpuTiming m_activeFrameGpuTiming;
+  PendingGpuTiming m_activeRayTracingGpuTiming;
+  std::vector<PendingGpuTiming> m_pendingGpuTimings;
+  uint64_t m_gpuTimingGeneration = 0;
   VkDeviceSize m_scratchAlignment;
   Rc<DxvkBuffer> m_scratchBuffer;
 };
 
 }  // namespace dxvk
-

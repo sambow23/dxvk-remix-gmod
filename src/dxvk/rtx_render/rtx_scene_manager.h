@@ -187,6 +187,7 @@ public:
   const std::vector<RtInstance*>& getInstanceTable() const { return m_instanceManager.getInstanceTable(); }
   
   const InstanceManager& getInstanceManager() const { return m_instanceManager; }
+  AccelManager& getAccelManager() { return m_accelManager; }
   const AccelManager& getAccelManager() const { return m_accelManager; }
   const LightManager& getLightManager() const { return m_lightManager; }
   const GraphManager& getGraphManager() const { return m_graphManager; }

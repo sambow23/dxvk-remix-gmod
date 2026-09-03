@@ -45,6 +45,9 @@
 #include "rtx_render/graph/rtx_graph_gui.h"
 #include "rtx_render/rtx_utils.h"
 #include "rtx_render/rtx_shader_manager.h"
+// NV-DXVK start: Experimental runtime BLAS baking controls
+#include "rtx_render/rtx_accel_manager.h"
+// NV-DXVK end
 #include "rtx_render/rtx_camera.h"
 #include "rtx_render/rtx_context.h"
 #include "rtx_render/rtx_hash_collision_detection.h"
@@ -4341,6 +4344,114 @@ namespace dxvk {
       RemixGui::Checkbox("Force Merge All Meshes", &RtxOptions::forceMergeAllMeshesObject());
       RemixGui::Checkbox("Minimize BLAS Merging", &RtxOptions::minimizeBlasMergingObject());
       RemixGui::Separator();
+      // NV-DXVK start: Experimental runtime BLAS baking controls
+      RemixGui::Checkbox("Enable Runtime BLAS Baking [Experimental]", &AccelManager::enableBlasBakingObject());
+      ImGui::BeginDisabled(!AccelManager::enableBlasBaking());
+      RemixGui::Checkbox("Spatially Cluster Merged BLAS", &AccelManager::enableSpatialBlasClusteringObject());
+      ImGui::BeginDisabled(!AccelManager::enableSpatialBlasClustering());
+      RemixGui::DragInt("Maximum Primitives Per Spatial Cluster", &AccelManager::spatialBlasClusterMaxPrimitivesObject(),
+                        100.f, 0, 1000000, "%d", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragInt("Maximum Geometries Per Spatial Cluster", &AccelManager::spatialBlasClusterMaxGeometriesObject(),
+                        1.f, 0, 10000, "%d", ImGuiSliderFlags_AlwaysClamp);
+      if (RtxOptions::minimizeBlasMerging()) {
+        ImGui::TextWrapped("Spatial clustering only affects geometry routed through merged BLASes. Disable Minimize BLAS Merging for a useful comparison.");
+      }
+      ImGui::EndDisabled();
+      RemixGui::DragInt("Stable Frames Before Baking", &AccelManager::staticBlasMinStableFramesObject(),
+                        1.f, 0, 10000, "%d", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragInt("Maximum Refits Before Rebuild", &AccelManager::maxBlasRefitsObject(),
+                        1.f, 0, 10000, "%d", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragInt("Maintenance Operations Per Frame", &AccelManager::maxMaintenanceOperationsPerFrameObject(),
+                        1.f, 0, 100, "%d", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragInt("Minimum Compaction Savings", &AccelManager::blasCompactionMinSavingsPercentObject(),
+                        1.f, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::EndDisabled();
+
+      const auto& accelManager = common->getSceneManager().getAccelManager();
+      const auto& blasStats = accelManager.m_blasStats;
+      ImGui::Text("Dedicated BLAS: %u updateable, %u baked, %u compacted, %u pending compaction",
+                  blasStats.dedicatedUpdateableCount,
+                  blasStats.dedicatedStaticCount,
+                  blasStats.dedicatedCompactedCount,
+                  blasStats.dedicatedPendingCompactionCount);
+      ImGui::Text("Merged BLAS: %u updateable, %u baked, %u compacted, %u pending compaction",
+                  blasStats.mergedUpdateableCount,
+                  blasStats.mergedStaticCount,
+                  blasStats.mergedCompactedCount,
+                  blasStats.mergedPendingCompactionCount);
+      const uint32_t mergedBlasCount = blasStats.mergedUpdateableCount
+        + blasStats.mergedStaticCount
+        + blasStats.mergedCompactedCount;
+      ImGui::Text("Merged layout: %u geometries across %u BLAS (average %.1f, maximum %u)",
+                  blasStats.mergedGeometryCount,
+                  mergedBlasCount,
+                  mergedBlasCount != 0
+                    ? static_cast<double>(blasStats.mergedGeometryCount) / mergedBlasCount
+                    : 0.0,
+                  blasStats.mergedMaxGeometryCount);
+      const uint32_t mergedBakeIneligibleCount = blasStats.mergedUpdateableCount
+        - std::min(blasStats.mergedUpdateableCount, blasStats.mergedBakeEligibleUpdateableCount);
+      ImGui::Text("Merged baking: %u eligible updateable, %u ineligible, %u ready",
+                  blasStats.mergedBakeEligibleUpdateableCount,
+                  mergedBakeIneligibleCount,
+                  blasStats.mergedBakeReadyCount);
+      if (blasStats.mergedBakeEligibleUpdateableCount != 0) {
+        ImGui::Text("Merged stability (target %u frames):", AccelManager::staticBlasMinStableFrames());
+        ImGui::Text("  zero %u | one %u | advancing %u | ready %u",
+                    blasStats.mergedZeroStableCount,
+                    blasStats.mergedOneStableCount,
+                    blasStats.mergedAdvancingStableCount,
+                    blasStats.mergedBakeReadyCount);
+      }
+      const auto& churnStats = accelManager.m_mergedBlasChurnStats;
+      ImGui::Text("Eligible churn since mode change: %llu invalidations",
+                  static_cast<unsigned long long>(churnStats.invalidations));
+      ImGui::Text("  new %llu | recovered %llu",
+                  static_cast<unsigned long long>(churnStats.newAllocations),
+                  static_cast<unsigned long long>(churnStats.contentRecoveries));
+      ImGui::Text("  reassigned %llu",
+                  static_cast<unsigned long long>(churnStats.reassignments));
+      ImGui::Text("  layout %llu | topology %llu",
+                  static_cast<unsigned long long>(churnStats.layoutChanges),
+                  static_cast<unsigned long long>(churnStats.topologyChanges));
+      ImGui::Text("  vertices %llu | transforms %llu",
+                  static_cast<unsigned long long>(churnStats.vertexChanges),
+                  static_cast<unsigned long long>(churnStats.transformChanges));
+      ImGui::Text("  bones %llu | unknown %llu",
+                  static_cast<unsigned long long>(churnStats.boneChanges),
+                  static_cast<unsigned long long>(churnStats.unknownChanges));
+      ImGui::Text("Last activity: %u builds, %u refits, %u quality rebuilds, %u promotions, %u compactions",
+                  blasStats.builds,
+                  blasStats.refits,
+                  blasStats.qualityRebuilds,
+                  blasStats.promotions,
+                  blasStats.compactions);
+      ImGui::Text("Compaction memory saved: %.2f MiB",
+                  static_cast<double>(blasStats.compactionBytesSaved) / (1024.0 * 1024.0));
+
+      const auto& gpuTiming = accelManager.m_gpuTimingStats;
+      if (gpuTiming.blas.hasSample && gpuTiming.tlas.hasSample) {
+        ImGui::Text("AS GPU time/frame (EMA): BLAS %.3f ms, TLAS %.3f ms",
+                    gpuTiming.blas.averageMs,
+                    gpuTiming.tlas.averageMs);
+        ImGui::Text("Last non-zero AS sample: BLAS %.3f ms, TLAS %.3f ms",
+                    gpuTiming.blas.lastWorkMs,
+                    gpuTiming.tlas.lastWorkMs);
+        if (gpuTiming.frame.hasSample) {
+          ImGui::Text("RTX GPU work/frame: %.3f ms (EMA %.3f)",
+                      gpuTiming.frame.lastMs,
+                      gpuTiming.frame.averageMs);
+        }
+        if (gpuTiming.rayTracing.hasSample) {
+          ImGui::Text("AS-sensitive ray passes: %.3f ms (EMA %.3f)",
+                      gpuTiming.rayTracing.lastMs,
+                      gpuTiming.rayTracing.averageMs);
+        }
+      } else if (AccelManager::enableBlasBaking()) {
+        ImGui::TextUnformatted("GPU time: waiting for timestamp results");
+      }
+      RemixGui::Separator();
+      // NV-DXVK end
       RemixGui::Checkbox("Portals: Virtual Instance Matching", &RtxOptions::useRayPortalVirtualInstanceMatchingObject());
       RemixGui::Checkbox("Portals: Fade In Effect", &RtxOptions::enablePortalFadeInEffectObject());
       ImGui::Unindent();

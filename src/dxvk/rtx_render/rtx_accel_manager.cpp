@@ -24,6 +24,8 @@
 #include <mutex>
 #include <vector>
 
+#include "../util/util_defer.h"
+#include "dxvk_gpu_query.h"
 #include "rtx.h"
 #include "rtx_context.h"
 #include "rtx_opacity_micromap_manager.h"
@@ -61,9 +63,33 @@ namespace dxvk {
     , m_scratchAlignment(device->properties().khrDeviceAccelerationStructureProperties.minAccelerationStructureScratchOffsetAlignment) {
   }
 
+  AccelManager::~AccelManager() {
+    destroyCompactionQueryPool();
+  }
+
+  void AccelManager::onDestroy() {
+    clear();
+    destroyCompactionQueryPool();
+  }
+
   void AccelManager::clear() {
     m_gpuCrashRecorder.clear();
     m_blasPool.clear();
+    m_activeDynamicBlases.clear();
+    m_activeMergedBlases.clear();
+    m_gpuTimingStats = {};
+    m_blasActivityThisFrame = {};
+    m_mergedBlasChurnStats = {};
+    m_activeFrameGpuTiming = {};
+    m_activeRayTracingGpuTiming = {};
+    m_pendingGpuTimings.clear();
+    m_gpuTimingGeneration = 0;
+
+    for (auto& query : m_compactionQuerySlots) {
+      if (query.blas != nullptr) {
+        query.blas->lifecycle.cancelCompaction();
+      }
+    }
 
     // Invalidate incremental rebuild cache
     m_cachedBuckets.clear();
@@ -72,6 +98,463 @@ namespace dxvk {
     resetUniqueDynamicBlasGroups();
     m_lastProcessedGeneration = UINT64_MAX;
     m_ommBindPending = false;
+    m_spatialClusteringConfigInitialized = false;
+  }
+
+  void AccelManager::beginBlasMaintenance(uint32_t currentFrame) {
+    m_blasActivityThisFrame = {};
+    m_maintenanceOperationsThisFrame = 0;
+
+    pollCompactionQueries();
+    pollGpuTimings();
+
+    if (!enableBlasBaking()) {
+      return;
+    }
+
+    for (const auto& blas : m_activeDynamicBlases) {
+      blas->lifecycle.observe(currentFrame, false, blas->lifecycle.bakeEligible);
+    }
+    for (const auto& blas : m_activeMergedBlases) {
+      blas->lifecycle.observe(currentFrame, false, blas->lifecycle.bakeEligible);
+    }
+  }
+
+  bool AccelManager::consumeMaintenanceOperation() {
+    const uint32_t maxOperations = maxMaintenanceOperationsPerFrame();
+    if (maxOperations != 0 && m_maintenanceOperationsThisFrame >= maxOperations) {
+      return false;
+    }
+
+    ++m_maintenanceOperationsThisFrame;
+    return true;
+  }
+
+  bool AccelManager::createCompactionQueryPool() {
+    if (m_compactionQueryPool != VK_NULL_HANDLE) {
+      return true;
+    }
+    if (m_compactionQueryPoolCreationFailed) {
+      return false;
+    }
+
+    VkQueryPoolCreateInfo info { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+    info.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+    info.queryCount = kCompactionQueryCount;
+
+    const VkResult result = m_device->vkd()->vkCreateQueryPool(
+      m_device->handle(), &info, nullptr, &m_compactionQueryPool);
+    if (result != VK_SUCCESS) {
+      m_compactionQueryPoolCreationFailed = true;
+      Logger::warn(str::format("AccelManager: Failed to create BLAS compaction query pool: ", result));
+      return false;
+    }
+
+    return true;
+  }
+
+  void AccelManager::destroyCompactionQueryPool() {
+    for (auto& query : m_compactionQuerySlots) {
+      query = {};
+    }
+
+    if (m_compactionQueryPool != VK_NULL_HANDLE) {
+      m_device->vkd()->vkDestroyQueryPool(m_device->handle(), m_compactionQueryPool, nullptr);
+      m_compactionQueryPool = VK_NULL_HANDLE;
+    }
+  }
+
+  void AccelManager::pollCompactionQueries() {
+    if (m_compactionQueryPool == VK_NULL_HANDLE) {
+      return;
+    }
+
+    struct QueryResult {
+      uint64_t compactedSize;
+      uint64_t available;
+    };
+
+    for (auto& query : m_compactionQuerySlots) {
+      if (query.blas == nullptr) {
+        continue;
+      }
+
+      QueryResult queryResult {};
+      const uint32_t queryIndex = static_cast<uint32_t>(&query - m_compactionQuerySlots.data());
+      const VkResult result = m_device->vkd()->vkGetQueryPoolResults(
+        m_device->handle(),
+        m_compactionQueryPool,
+        queryIndex,
+        1,
+        sizeof(queryResult),
+        &queryResult,
+        sizeof(queryResult),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+
+      if (result == VK_NOT_READY || queryResult.available == 0) {
+        continue;
+      }
+
+      Rc<PooledBlas> blas = std::move(query.blas);
+      const uint64_t buildGeneration = query.buildGeneration;
+      query = {};
+
+      if (result == VK_SUCCESS) {
+        blas->lifecycle.acceptCompactionSize(
+          buildGeneration, queryResult.compactedSize, blasCompactionMinSavingsPercent());
+      } else if (blas->lifecycle.isCurrentCompactionQuery(buildGeneration)) {
+        blas->lifecycle.compactionState = BlasCompactionState::Rejected;
+      }
+    }
+  }
+
+  void AccelManager::issueCompactionQueries(Rc<DxvkContext> ctx) {
+    if (!enableBlasBaking()) {
+      return;
+    }
+
+    if (!createCompactionQueryPool()) {
+      const auto rejectQueries = [](const std::vector<Rc<PooledBlas>>& blases) {
+        for (const auto& blas : blases) {
+          if (blas->lifecycle.compactionState == BlasCompactionState::AwaitingQuery) {
+            blas->lifecycle.compactionState = BlasCompactionState::Rejected;
+          }
+        }
+      };
+      rejectQueries(m_activeDynamicBlases);
+      rejectQueries(m_activeMergedBlases);
+      return;
+    }
+
+    std::unordered_set<PooledBlas*> visited;
+    const auto issueQueries = [&](const std::vector<Rc<PooledBlas>>& blases) {
+      for (const auto& blas : blases) {
+        if (!visited.insert(blas.ptr()).second
+         || blas->lifecycle.compactionState != BlasCompactionState::AwaitingQuery) {
+          continue;
+        }
+
+        CompactionQuerySlot* query = nullptr;
+        uint32_t queryIndex = 0;
+        for (uint32_t i = 0; i < kCompactionQueryCount; ++i) {
+          const uint32_t candidateIndex = (m_nextCompactionQuery + i) % kCompactionQueryCount;
+          if (m_compactionQuerySlots[candidateIndex].blas == nullptr) {
+            queryIndex = candidateIndex;
+            query = &m_compactionQuerySlots[candidateIndex];
+            m_nextCompactionQuery = (candidateIndex + 1) % kCompactionQueryCount;
+            break;
+          }
+        }
+
+        if (query == nullptr) {
+          return false;
+        }
+
+        ctx->getCommandList()->cmdResetQueryPool(m_compactionQueryPool, queryIndex, 1);
+        const VkAccelerationStructureKHR accelerationStructure = blas->accelStructure->getAccelStructure();
+        ctx->vkCmdWriteAccelerationStructuresPropertiesKHR(
+          1,
+          &accelerationStructure,
+          VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+          m_compactionQueryPool,
+          queryIndex);
+        ctx->getCommandList()->trackResource<DxvkAccess::Read>(blas->accelStructure);
+
+        query->blas = blas;
+        query->buildGeneration = blas->lifecycle.buildGeneration;
+        blas->lifecycle.compactionState = BlasCompactionState::QueryPending;
+      }
+      return true;
+    };
+
+    if (issueQueries(m_activeDynamicBlases)) {
+      issueQueries(m_activeMergedBlases);
+    }
+  }
+
+  bool AccelManager::compactBlas(Rc<DxvkContext> ctx, PooledBlas& blas) {
+    if (!enableBlasBaking()
+     || blas.lifecycle.compactionState != BlasCompactionState::Ready
+     || !consumeMaintenanceOperation()) {
+      return false;
+    }
+
+    Rc<DxvkAccelStructure> source = blas.accelStructure;
+    Rc<DxvkAccelStructure> destination = createBlasAccelerationStructure(
+      blas.lifecycle.compactedSize, "BLAS Static Compacted");
+
+    VkCopyAccelerationStructureInfoKHR copyInfo { VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR };
+    copyInfo.src = source->getAccelStructure();
+    copyInfo.dst = destination->getAccelStructure();
+    copyInfo.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+    ctx->vkCmdCopyAccelerationStructureKHR(&copyInfo);
+
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(source);
+    ctx->getCommandList()->trackResource<DxvkAccess::Write>(destination);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(destination);
+
+    const uint64_t oldReference = blas.accelerationStructureReference;
+    const uint64_t savedBytes = blas.lifecycle.uncompactedSize - blas.lifecycle.compactedSize;
+    blas.accelStructure = std::move(destination);
+    blas.accelerationStructureReference = blas.accelStructure->getAccelDeviceAddress();
+    blas.lifecycle.markCompacted();
+    updateBlasReferences(oldReference, blas.accelerationStructureReference);
+
+    ++m_blasActivityThisFrame.compactions;
+    m_blasStats.compactionBytesSaved += savedBytes;
+    return true;
+  }
+
+  void AccelManager::updateBlasReferences(uint64_t oldReference, uint64_t newReference) {
+    for (auto& instances : m_mergedInstances) {
+      for (auto& instance : instances) {
+        if (instance.accelerationStructureReference == oldReference) {
+          instance.accelerationStructureReference = newReference;
+        }
+      }
+    }
+
+    for (auto& cached : m_cachedBuckets) {
+      if (cached.tlasInstance.accelerationStructureReference == oldReference) {
+        cached.tlasInstance.accelerationStructureReference = newReference;
+      }
+    }
+
+    for (auto& batch : m_pointInstancerBatches) {
+      if (batch.blasReference == oldReference) {
+        batch.blasReference = newReference;
+      }
+    }
+  }
+
+  void AccelManager::ensureBlasStorage(
+      Rc<DxvkContext> ctx, PooledBlas& blas, size_t bufferSize, const char* name) {
+    if (blas.accelStructure->info().size >= bufferSize) {
+      return;
+    }
+
+    Rc<DxvkAccelStructure> oldAccelStructure = blas.accelStructure;
+    const uint64_t oldReference = blas.accelerationStructureReference;
+    blas.accelStructure = createBlasAccelerationStructure(bufferSize, name);
+    blas.accelerationStructureReference = blas.accelStructure->getAccelDeviceAddress();
+    updateBlasReferences(oldReference, blas.accelerationStructureReference);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(oldAccelStructure);
+  }
+
+  void AccelManager::refreshBlasStats() {
+    BlasStats stats = m_blasStats;
+    stats.dedicatedUpdateableCount = 0;
+    stats.dedicatedStaticCount = 0;
+    stats.dedicatedCompactedCount = 0;
+    stats.dedicatedPendingCompactionCount = 0;
+    stats.mergedUpdateableCount = 0;
+    stats.mergedStaticCount = 0;
+    stats.mergedCompactedCount = 0;
+    stats.mergedPendingCompactionCount = 0;
+    stats.mergedGeometryCount = 0;
+    stats.mergedMaxGeometryCount = 0;
+    stats.mergedBakeEligibleUpdateableCount = 0;
+    stats.mergedBakeReadyCount = 0;
+    stats.mergedMinStableFrames = 0;
+    stats.mergedMaxStableFrames = 0;
+    stats.mergedZeroStableCount = 0;
+    stats.mergedOneStableCount = 0;
+    stats.mergedAdvancingStableCount = 0;
+
+    std::unordered_set<const PooledBlas*> visited;
+    const auto countBlases = [&](const std::vector<Rc<PooledBlas>>& blases,
+                                 uint32_t& updateableCount,
+                                 uint32_t& staticCount,
+                                 uint32_t& compactedCount,
+                                 uint32_t& pendingCompactionCount) {
+      for (const auto& blas : blases) {
+        if (!visited.insert(blas.ptr()).second) {
+          continue;
+        }
+
+        switch (blas->lifecycle.state) {
+          case BlasLifecycleState::Updateable:
+            ++updateableCount;
+            break;
+          case BlasLifecycleState::Static:
+            ++staticCount;
+            break;
+          case BlasLifecycleState::Compacted:
+            ++compactedCount;
+            break;
+        }
+
+        if (blas->lifecycle.compactionState == BlasCompactionState::AwaitingQuery
+         || blas->lifecycle.compactionState == BlasCompactionState::QueryPending
+         || blas->lifecycle.compactionState == BlasCompactionState::Ready) {
+          ++pendingCompactionCount;
+        }
+      }
+    };
+
+    countBlases(
+      m_activeDynamicBlases,
+      stats.dedicatedUpdateableCount,
+      stats.dedicatedStaticCount,
+      stats.dedicatedCompactedCount,
+      stats.dedicatedPendingCompactionCount);
+    countBlases(
+      m_activeMergedBlases,
+      stats.mergedUpdateableCount,
+      stats.mergedStaticCount,
+      stats.mergedCompactedCount,
+      stats.mergedPendingCompactionCount);
+
+    std::unordered_set<const PooledBlas*> mergedBlases;
+    for (const auto& blas : m_activeMergedBlases) {
+      if (!mergedBlases.insert(blas.ptr()).second) {
+        continue;
+      }
+
+      const uint32_t geometryCount = static_cast<uint32_t>(blas->primitiveCounts.size());
+      stats.mergedGeometryCount += geometryCount;
+      stats.mergedMaxGeometryCount = std::max(stats.mergedMaxGeometryCount, geometryCount);
+
+      if (blas->lifecycle.state == BlasLifecycleState::Updateable
+       && blas->lifecycle.bakeEligible) {
+        const uint32_t stableFrames = blas->lifecycle.stableFrameCount;
+        if (stats.mergedBakeEligibleUpdateableCount == 0) {
+          stats.mergedMinStableFrames = stableFrames;
+        } else {
+          stats.mergedMinStableFrames = std::min(stats.mergedMinStableFrames, stableFrames);
+        }
+        stats.mergedMaxStableFrames = std::max(stats.mergedMaxStableFrames, stableFrames);
+        ++stats.mergedBakeEligibleUpdateableCount;
+        if (blas->lifecycle.isBakeReady(staticBlasMinStableFrames())) {
+          ++stats.mergedBakeReadyCount;
+        } else if (stableFrames == 0) {
+          ++stats.mergedZeroStableCount;
+        } else if (stableFrames == 1) {
+          ++stats.mergedOneStableCount;
+        } else {
+          ++stats.mergedAdvancingStableCount;
+        }
+      }
+    }
+
+    if (m_blasActivityThisFrame.hasWork()) {
+      stats.builds = m_blasActivityThisFrame.builds;
+      stats.refits = m_blasActivityThisFrame.refits;
+      stats.qualityRebuilds = m_blasActivityThisFrame.qualityRebuilds;
+      stats.promotions = m_blasActivityThisFrame.promotions;
+      stats.compactions = m_blasActivityThisFrame.compactions;
+    }
+
+    m_blasStats = stats;
+  }
+
+  void AccelManager::resetBlasLifecycle(PooledBlas& blas) {
+    const uint64_t nextGeneration = blas.lifecycle.buildGeneration + 1;
+    blas.lifecycle = {};
+    blas.lifecycle.buildGeneration = nextGeneration;
+  }
+
+  AccelManager::PendingGpuTiming AccelManager::beginGpuTiming(
+      Rc<DxvkContext> ctx, GpuTimingScope scope) {
+    PendingGpuTiming timing;
+    timing.scope = scope;
+    timing.generation = m_gpuTimingGeneration;
+    if (!enableBlasBaking()) {
+      return timing;
+    }
+
+    timing.beginQuery = m_device->createGpuQuery(VK_QUERY_TYPE_TIMESTAMP, 0, 0);
+    timing.endQuery = m_device->createGpuQuery(VK_QUERY_TYPE_TIMESTAMP, 0, 0);
+    ctx->writeTimestamp(timing.beginQuery);
+    return timing;
+  }
+
+  void AccelManager::endGpuTiming(Rc<DxvkContext> ctx, PendingGpuTiming&& timing) {
+    if (timing.endQuery == nullptr) {
+      return;
+    }
+
+    ctx->writeTimestamp(timing.endQuery);
+    m_pendingGpuTimings.push_back(std::move(timing));
+    constexpr size_t kMaxPendingGpuTimings = 96;
+    if (m_pendingGpuTimings.size() > kMaxPendingGpuTimings) {
+      m_pendingGpuTimings.erase(m_pendingGpuTimings.begin());
+    }
+  }
+
+  void AccelManager::beginFrameGpuTiming(Rc<DxvkContext> ctx) {
+    m_activeFrameGpuTiming = beginGpuTiming(ctx, GpuTimingScope::Frame);
+  }
+
+  void AccelManager::endFrameGpuTiming(Rc<DxvkContext> ctx) {
+    endGpuTiming(ctx, std::move(m_activeFrameGpuTiming));
+    m_activeFrameGpuTiming = {};
+  }
+
+  void AccelManager::beginRayTracingGpuTiming(Rc<DxvkContext> ctx) {
+    m_activeRayTracingGpuTiming = beginGpuTiming(ctx, GpuTimingScope::RayTracing);
+  }
+
+  void AccelManager::endRayTracingGpuTiming(Rc<DxvkContext> ctx) {
+    endGpuTiming(ctx, std::move(m_activeRayTracingGpuTiming));
+    m_activeRayTracingGpuTiming = {};
+  }
+
+  void AccelManager::resetGpuTimingStats() {
+    ++m_gpuTimingGeneration;
+    m_gpuTimingStats = {};
+  }
+
+  void AccelManager::pollGpuTimings() {
+    const double timestampPeriod = m_device->properties().core.properties.limits.timestampPeriod;
+    for (auto timing = m_pendingGpuTimings.begin(); timing != m_pendingGpuTimings.end();) {
+      if (timing->generation != m_gpuTimingGeneration) {
+        timing = m_pendingGpuTimings.erase(timing);
+        continue;
+      }
+
+      DxvkQueryData beginData {};
+      DxvkQueryData endData {};
+      const DxvkGpuQueryStatus beginStatus = timing->beginQuery->getData(beginData);
+      const DxvkGpuQueryStatus endStatus = timing->endQuery->getData(endData);
+      if (beginStatus == DxvkGpuQueryStatus::Pending || endStatus == DxvkGpuQueryStatus::Pending) {
+        ++timing;
+        continue;
+      }
+
+      if (beginStatus == DxvkGpuQueryStatus::Available
+       && endStatus == DxvkGpuQueryStatus::Available
+       && endData.timestamp.time >= beginData.timestamp.time) {
+        const float elapsedMs = static_cast<float>(
+          static_cast<double>(endData.timestamp.time - beginData.timestamp.time) * timestampPeriod / 1000000.0);
+        GpuTimingValue* value = nullptr;
+        switch (timing->scope) {
+          case GpuTimingScope::Blas:
+            value = &m_gpuTimingStats.blas;
+            break;
+          case GpuTimingScope::Tlas:
+            value = &m_gpuTimingStats.tlas;
+            break;
+          case GpuTimingScope::RayTracing:
+            value = &m_gpuTimingStats.rayTracing;
+            break;
+          case GpuTimingScope::Frame:
+            value = &m_gpuTimingStats.frame;
+            break;
+        }
+
+        value->lastMs = elapsedMs;
+        value->averageMs = value->hasSample
+          ? value->averageMs * 0.9f + elapsedMs * 0.1f
+          : elapsedMs;
+        if (elapsedMs > 0.0f) {
+          value->lastWorkMs = elapsedMs;
+        }
+        value->hasSample = true;
+      }
+
+      timing = m_pendingGpuTimings.erase(timing);
+    }
   }
 
   void AccelManager::resetUniqueDynamicBlasGroups() {
@@ -184,6 +667,9 @@ namespace dxvk {
     }
 
     BlasEntry* blasEntry = instance->getBlas();
+    bakeEligible = bakeEligible && isMergedBlasBakeEligible(
+      blasEntry->input.getSkinningState().numBones,
+      instance->surface.isStatic);
 
     geometries.insert(geometries.end(), blasEntry->buildGeometries.begin(), blasEntry->buildGeometries.end());
     ranges.insert(ranges.end(), blasEntry->buildRanges.begin(), blasEntry->buildRanges.end());
@@ -389,15 +875,23 @@ namespace dxvk {
     return m_scratchBuffer;
   }
 
-  Rc<PooledBlas> AccelManager::createPooledBlas(size_t bufferSize, const char* name) const {
-    auto newBlas = new PooledBlas();
-
+  Rc<DxvkAccelStructure> AccelManager::createBlasAccelerationStructure(size_t bufferSize, const char* name) const {
     DxvkBufferCreateInfo bufferCreateInfo {};
     bufferCreateInfo.size = bufferSize;
     bufferCreateInfo.access = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
     bufferCreateInfo.stages = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
     bufferCreateInfo.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    newBlas->accelStructure = m_device->createAccelStructure(bufferCreateInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, name);
+
+    return m_device->createAccelStructure(
+      bufferCreateInfo,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+      name);
+  }
+
+  Rc<PooledBlas> AccelManager::createPooledBlas(size_t bufferSize, const char* name) const {
+    auto newBlas = new PooledBlas();
+    newBlas->accelStructure = createBlasAccelerationStructure(bufferSize, name);
 
     newBlas->accelerationStructureReference = newBlas->accelStructure->getAccelDeviceAddress();
 
@@ -441,6 +935,29 @@ namespace dxvk {
 
     auto& instances = instanceManager.getInstanceTable();
     const uint32_t currentFrame = m_device->getCurrentFrameId();
+    beginBlasMaintenance(currentFrame);
+    auto gpuTiming = beginGpuTiming(ctx, GpuTimingScope::Blas);
+    DEFER(blasGpuTiming, endGpuTiming(ctx, std::move(gpuTiming));)
+
+    const bool spatialClusteringEnabled = enableBlasBaking() && enableSpatialBlasClustering();
+    const uint32_t spatialClusterMaxPrimitives = spatialClusteringEnabled
+      ? spatialBlasClusterMaxPrimitives()
+      : 0;
+    const uint32_t spatialClusterMaxGeometries = spatialClusteringEnabled
+      ? spatialBlasClusterMaxGeometries()
+      : 0;
+    const bool spatialClusteringConfigChanged = !m_spatialClusteringConfigInitialized
+      || spatialClusteringEnabled != m_previousSpatialClusteringEnabled
+      || spatialClusterMaxPrimitives != m_previousSpatialClusterMaxPrimitives
+      || spatialClusterMaxGeometries != m_previousSpatialClusterMaxGeometries;
+    if (spatialClusteringConfigChanged) {
+      resetGpuTimingStats();
+      m_mergedBlasChurnStats = {};
+    }
+    m_spatialClusteringConfigInitialized = true;
+    m_previousSpatialClusteringEnabled = spatialClusteringEnabled;
+    m_previousSpatialClusterMaxPrimitives = spatialClusterMaxPrimitives;
+    m_previousSpatialClusterMaxGeometries = spatialClusterMaxGeometries;
 
     // --- Full-skip fast path ---
     // If no scene changes occurred since the last build, we can reuse all cached
@@ -452,8 +969,52 @@ namespace dxvk {
     {
       const uint64_t currentGeneration = instanceManager.getSceneGeneration();
       const bool sceneUnchanged = (currentGeneration == m_lastProcessedGeneration);
+      bool maintenanceNeedsTraversal = false;
 
-      if (sceneUnchanged && !m_ommBindPending && !m_reorderedSurfaces.empty()) {
+      if (enableBlasBaking() && sceneUnchanged) {
+        const auto compactReadyBlas = [&](const std::vector<Rc<PooledBlas>>& blases) {
+          for (const auto& blas : blases) {
+            if (blas->lifecycle.compactionState == BlasCompactionState::Ready
+             && compactBlas(ctx, *blas)) {
+              return true;
+            }
+          }
+          return false;
+        };
+        const bool compacted = compactReadyBlas(m_activeDynamicBlases)
+          || compactReadyBlas(m_activeMergedBlases);
+
+        if (!compacted) {
+          const auto hasBakeReadyBlas = [&](const std::vector<Rc<PooledBlas>>& blases) {
+            for (const auto& blas : blases) {
+              if (blas->lifecycle.isBakeReady(staticBlasMinStableFrames())) {
+                return true;
+              }
+            }
+            return false;
+          };
+          maintenanceNeedsTraversal = hasBakeReadyBlas(m_activeDynamicBlases)
+            || hasBakeReadyBlas(m_activeMergedBlases);
+        } else {
+          for (const auto& blas : m_activeDynamicBlases) {
+            if (blas->lifecycle.isBakeReady(staticBlasMinStableFrames())) {
+              maintenanceNeedsTraversal = true;
+              break;
+            }
+          }
+          if (!maintenanceNeedsTraversal) {
+            for (const auto& blas : m_activeMergedBlases) {
+              if (blas->lifecycle.isBakeReady(staticBlasMinStableFrames())) {
+                maintenanceNeedsTraversal = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (sceneUnchanged && !spatialClusteringConfigChanged && !maintenanceNeedsTraversal
+       && !m_ommBindPending && !m_reorderedSurfaces.empty()) {
         m_sceneUnchangedThisFrame = true;
         // Touch pooled (merged) BLAS
         for (auto& blas : m_blasPool) {
@@ -462,6 +1023,9 @@ namespace dxvk {
         // Touch dynamic BLAS
         for (auto& dynBlas : m_activeDynamicBlases) {
           dynBlas->frameLastTouched = currentFrame;
+        }
+        for (auto& mergedBlas : m_activeMergedBlases) {
+          mergedBlas->frameLastTouched = currentFrame;
         }
         // Reassign surface indices (cleared by InstanceManager::resetSurfaceIndices at frame end)
         for (uint32_t i = 0; i < m_reorderedSurfaces.size(); ++i) {
@@ -495,6 +1059,7 @@ namespace dxvk {
           m_ommBindPending = true;
           instanceManager.notifySceneChanged();
         }
+        refreshBlasStats();
         return;
       }
 
@@ -515,7 +1080,7 @@ namespace dxvk {
     if (hasValidBucketCache) {
       // When newly built OMMs need binding, force all buckets dirty so that
       // tryBindOpacityMicromap runs on every instance's BLAS rebuild.
-      if (m_ommBindPending) {
+      if (m_ommBindPending || spatialClusteringConfigChanged) {
         bucketDirty.resize(m_cachedBuckets.size(), true);
         anyBucketDirty = true;
         m_ommBindPending = false;
@@ -525,6 +1090,14 @@ namespace dxvk {
 
         for (uint32_t bi = 0; bi < m_cachedBuckets.size(); ++bi) {
           const auto& cachedBucket = m_cachedBuckets[bi];
+
+          if (enableBlasBaking()
+           && cachedBucket.assignedBlas != nullptr
+           && cachedBucket.assignedBlas->lifecycle.isBakeReady(staticBlasMinStableFrames())) {
+            bucketDirty[bi] = true;
+            anyBucketDirty = true;
+            continue;
+          }
 
           if (cachedBucket.instances.size() != cachedBucket.instanceCacheIdentities.size()) {
             bucketDirty[bi] = true;
@@ -604,6 +1177,7 @@ namespace dxvk {
     m_reorderedSurfacesFirstIndexOffset.clear();
     m_pointInstancerBatches.clear();
     m_activeDynamicBlases.clear();
+    m_activeMergedBlases.clear();
     memset(m_pointInstancerSlotsPerType, 0, sizeof(m_pointInstancerSlotsPerType));
     for (auto& mergedInst : m_mergedInstances) {
       mergedInst.clear();
@@ -647,8 +1221,21 @@ namespace dxvk {
       m_uniqueDynamicBlasIndex.reserve(instances.size());
     }
 
-    // Hash map for O(1) bucket lookup instead of O(buckets) linear search per instance
-    std::unordered_map<BlasBucketKey, BlasBucket*, BlasBucketKeyHash> bucketMap;
+    struct MergedBlasCandidate {
+      RtInstance* instance;
+      PooledBlas* previousBlas;
+      Vector3 worldCentroid;
+      uint32_t primitiveCount;
+      uint32_t geometryCount;
+    };
+    struct MergedBlasCandidateGroup {
+      std::vector<MergedBlasCandidate> candidates;
+    };
+
+    std::vector<MergedBlasCandidateGroup> mergedCandidateGroups;
+    mergedCandidateGroups.reserve(instances.size());
+    std::unordered_map<BlasBucketKey, size_t, BlasBucketKeyHash> mergedCandidateGroupIndex;
+    mergedCandidateGroupIndex.reserve(instances.size());
 
     for (RtInstance* instance : instances) {
       if (instance->isHidden()) {
@@ -682,6 +1269,7 @@ namespace dxvk {
       // Find the blas entry for this instance early so we can check the dynamic/merged cache.
       BlasEntry* blasEntry = instance->getBlas();
       assert(blasEntry);
+      PooledBlas* previousMergedBlas = nullptr;
 
       // On the incremental path, skip instances that belong to a clean cached bucket.
       // Their surfaces and TLAS instances will be restored from cache after the loop.
@@ -693,6 +1281,10 @@ namespace dxvk {
           // This instance is in a clean cached bucket — skip all per-instance work
           instance->clearBlasDirty();
           continue;
+        }
+        if (bucketIdxIt != m_instanceBucketIndex.end()
+         && bucketIdxIt->second < m_cachedBuckets.size()) {
+          previousMergedBlas = m_cachedBuckets[bucketIdxIt->second].assignedBlas.ptr();
         }
       }
 
@@ -758,6 +1350,7 @@ namespace dxvk {
         if (blasEntry->dynamicBlas != nullptr) {
           // Move the BLAS used by this geometry to the common pool.
           // This also ensures the dynamic blas resource that's still being used by previous TLAS is properly tracked for the next frame
+          resetBlasLifecycle(*blasEntry->dynamicBlas);
           m_blasPool.push_back(std::move(blasEntry->dynamicBlas));
           blasEntry->dynamicBlas = nullptr;
         }
@@ -771,7 +1364,6 @@ namespace dxvk {
           geometry.geometry.triangles.transformData.deviceAddress = transformDeviceAddress;
         }
 
-        // Try to merge the instance into a compatible bucket using O(1) hash lookup
         BlasBucketKey bucketKey = {};
         bucketKey.instanceMask = instance->getVkInstance().mask;
         bucketKey.instanceShaderBindingTableRecordOffset = instance->getVkInstance().instanceShaderBindingTableRecordOffset;
@@ -779,25 +1371,69 @@ namespace dxvk {
         bucketKey.instanceFlags = instance->getVkInstance().flags;
         bucketKey.usesUnorderedApproximations = instance->usesUnorderedApproximations();
         bucketKey.isSubsurface = instance->isSubsurface();
+        bucketKey.bakeEligible = isMergedBlasBakeEligible(
+          blasEntry->input.getSkinningState().numBones,
+          instance->surface.isStatic);
 
-        bool merged = false;
-        auto bucketIt = bucketMap.find(bucketKey);
-        if (bucketIt != bucketMap.end()) {
-          merged = bucketIt->second->tryAddInstance(instance);
+        auto groupIt = mergedCandidateGroupIndex.find(bucketKey);
+        if (groupIt == mergedCandidateGroupIndex.end()) {
+          const size_t groupIndex = mergedCandidateGroups.size();
+          groupIt = mergedCandidateGroupIndex.emplace(bucketKey, groupIndex).first;
+          mergedCandidateGroups.push_back({});
         }
 
-        // The instance couldn't be merged into any bucket - make a new one
-        if (!merged) {
-          auto newBucket = std::make_unique<BlasBucket>();
-          merged = newBucket->tryAddInstance(instance);
-          assert(merged);
-
-          bucketMap[bucketKey] = newBucket.get();
-          blasBuckets.push_back(std::move(newBucket));
-        }
+        mergedCandidateGroups[groupIt->second].candidates.push_back({
+          instance,
+          previousMergedBlas,
+          blasEntry->input.getGeometryData().boundingBox.getTransformedCentroid(instance->getTransform()),
+          blasPrims,
+          static_cast<uint32_t>(blasEntry->buildGeometries.size()),
+        });
 
         // Track the lifetime and states of the source geometry buffers
         trackBlasBuildResources(ctx, execBarriers, blasEntry);
+      }
+    }
+
+    for (const MergedBlasCandidateGroup& group : mergedCandidateGroups) {
+      SpatialBlasClusterPlan clusterPlan;
+      if (spatialClusteringEnabled) {
+        std::vector<SpatialBlasClusterItem> clusterItems;
+        clusterItems.reserve(group.candidates.size());
+        for (const MergedBlasCandidate& candidate : group.candidates) {
+          clusterItems.push_back({
+            candidate.worldCentroid.x,
+            candidate.worldCentroid.y,
+            candidate.worldCentroid.z,
+            candidate.primitiveCount,
+            candidate.geometryCount,
+          });
+        }
+        clusterPlan = planSpatialBlasClusters(
+          clusterItems,
+          spatialClusterMaxPrimitives,
+          spatialClusterMaxGeometries);
+      } else {
+        clusterPlan.orderedItemIndices.reserve(group.candidates.size());
+        for (size_t candidateIndex = 0; candidateIndex < group.candidates.size(); ++candidateIndex) {
+          clusterPlan.orderedItemIndices.push_back(candidateIndex);
+        }
+        clusterPlan.ranges.push_back({ 0, group.candidates.size(), 0, 0 });
+      }
+
+      for (const SpatialBlasClusterRange& clusterRange : clusterPlan.ranges) {
+        auto bucket = std::make_unique<BlasBucket>();
+        for (size_t rangeIndex = 0; rangeIndex < clusterRange.count; ++rangeIndex) {
+          const size_t orderedIndex = clusterRange.first + rangeIndex;
+          const MergedBlasCandidate& candidate = group.candidates[clusterPlan.orderedItemIndices[orderedIndex]];
+          const bool merged = bucket->tryAddInstance(candidate.instance);
+          assert(merged);
+          (void) merged;
+          if (bucket->previousBlas == nullptr) {
+            bucket->previousBlas = candidate.previousBlas;
+          }
+        }
+        blasBuckets.push_back(std::move(bucket));
       }
     }
 
@@ -851,29 +1487,67 @@ namespace dxvk {
         blasEntry->buildGeometries[0].geometry.triangles.pNext = nullptr;
       }
 
+      // Try to reuse our dynamic BLAS if it exists
+      Rc<PooledBlas>& selectedBlas = blasEntry->dynamicBlas;
+      const bool geometryUpdated = blasEntry->frameLastUpdated == currentFrame;
+      const bool bakeEligible = blasEntry->input.getSkinningState().numBones == 0;
+
+      if (selectedBlas != nullptr) {
+        selectedBlas->lifecycle.observe(currentFrame, geometryUpdated, bakeEligible);
+
+        if (!geometryUpdated && !forceRebuild
+         && selectedBlas->lifecycle.compactionState == BlasCompactionState::Ready) {
+          compactBlas(ctx, *selectedBlas);
+        }
+      }
+
+      const bool hasStaticBlas = selectedBlas != nullptr
+        && selectedBlas->lifecycle.state != BlasLifecycleState::Updateable;
+      const bool promoteToStatic = enableBlasBaking()
+        && selectedBlas != nullptr
+        && !geometryUpdated
+        && !forceRebuild
+        && selectedBlas->lifecycle.isBakeReady(staticBlasMinStableFrames())
+        && consumeMaintenanceOperation();
+      const bool qualityRebuild = enableBlasBaking()
+        && geometryUpdated
+        && selectedBlas != nullptr
+        && !hasStaticBlas
+        && !forceRebuild
+        && selectedBlas->lifecycle.needsQualityRebuild(maxBlasRefits())
+        && consumeMaintenanceOperation();
+
+      BlasLifecycleState buildState = BlasLifecycleState::Updateable;
+      if (promoteToStatic || (hasStaticBlas && !geometryUpdated)) {
+        buildState = BlasLifecycleState::Static;
+      }
+
       VkAccelerationStructureBuildGeometryInfoKHR buildInfo {};
       buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
       buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-      buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR | additionalAccelerationStructureFlags();
+      buildInfo.flags = buildState == BlasLifecycleState::Static
+        ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR | additionalAccelerationStructureFlags()
+        : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR | additionalAccelerationStructureFlags();
       buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
       buildInfo.geometryCount = 1;
       buildInfo.pGeometries = blasEntry->buildGeometries.data();
 
-      // Calculate the build sizes for this bucket
       VkAccelerationStructureBuildSizesInfoKHR sizeInfo {};
       sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
       m_device->vkd()->vkGetAccelerationStructureBuildSizesKHR(m_device->handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                                                                &buildInfo, &blasEntry->buildRanges[0].primitiveCount, &sizeInfo);
 
-      // Try to reuse our dynamic BLAS if it exists
-      Rc<PooledBlas>& selectedBlas = blasEntry->dynamicBlas;
+      bool build = selectedBlas == nullptr
+        || forceRebuild
+        || promoteToStatic
+        || qualityRebuild
+        || (geometryUpdated && hasStaticBlas)
+        || (selectedBlas != nullptr
+         && !hasStaticBlas
+         && selectedBlas->accelStructure->info().size != sizeInfo.accelerationStructureSize);
+      bool update = geometryUpdated && !build;
 
-      bool build = forceRebuild || !selectedBlas.ptr() || selectedBlas->accelStructure->info().size != sizeInfo.accelerationStructureSize;
-
-      // Validate that the selected blas is compatible with the current build info for update purposes
-      bool update = blasEntry->frameLastUpdated == currentFrame;
-      if (update && !build && !validateUpdateMode(selectedBlas->buildInfo, buildInfo)) {
-        // If an update is requested but the BLAS is not compatible with the current build info then force a rebuild
+      if (update && !validateUpdateMode(selectedBlas->buildInfo, buildInfo)) {
         update = false;
         build = true;
       }
@@ -883,9 +1557,11 @@ namespace dxvk {
         if (selectedBlas.ptr()) {
           // Move the BLAS used by this geometry to the common pool.
           // This also ensures the dynamic blas resource that's still being used by previous TLAS is properly tracked for the next frame
+          resetBlasLifecycle(*selectedBlas);
           m_blasPool.push_back(std::move(selectedBlas));
         }
         selectedBlas = createPooledBlas(sizeInfo.accelerationStructureSize, "BLAS Dynamic");
+        selectedBlas->lifecycle.observe(currentFrame, true, bakeEligible);
       }
 
       assert(selectedBlas.ptr());
@@ -915,6 +1591,20 @@ namespace dxvk {
         blasRangesToBuild.push_back(&blasEntry->buildRanges[0]);
 
         copyAccelerationStructureBuildGeometryInfo(buildInfo, selectedBlas->buildInfo);
+
+        if (build) {
+          selectedBlas->lifecycle.markBuilt(buildState, currentFrame, sizeInfo.accelerationStructureSize);
+          ++m_blasActivityThisFrame.builds;
+          if (promoteToStatic) {
+            ++m_blasActivityThisFrame.promotions;
+          }
+          if (qualityRebuild) {
+            ++m_blasActivityThisFrame.qualityRebuilds;
+          }
+        } else {
+          selectedBlas->lifecycle.markRefit();
+          ++m_blasActivityThisFrame.refits;
+        }
       }
 
       for (RtInstance* rtInstance : uniqueBlasEntry.instances) {
@@ -974,6 +1664,7 @@ namespace dxvk {
 
         // Touch the BLAS so GC doesn't collect it
         cached.assignedBlas->frameLastTouched = currentFrame;
+        m_activeMergedBlases.push_back(cached.assignedBlas);
 
         // Emit TLAS instance with updated surface offset
         auto tlasInst = cached.tlasInstance;
@@ -1033,6 +1724,8 @@ namespace dxvk {
     buildBlases(ctx, execBarriers, cameraManager, opacityMicromapManager, instanceManager, 
                 textures, instances, blasBuckets, blasToBuild, blasRangesToBuild,
                 instanceTransforms, totalScratchMemory);
+
+    refreshBlasStats();
 
     // If new OMMs were built this frame, force a full scene rebuild next frame
     // so tryBindOpacityMicromap runs on all instances and the BLASes pick up the new OMMs.
@@ -1182,11 +1875,26 @@ namespace dxvk {
       uint32_t primitiveCount;
       uint32_t pad;
     };
+    struct ChainedContentHashData {
+      XXH64_hash_t previousHash;
+      XXH64_hash_t value;
+    };
+    struct ChainedTransformHashData {
+      XXH64_hash_t previousHash;
+      VkTransformMatrixKHR transform;
+    };
+    struct ChainedLayoutHashData {
+      XXH64_hash_t previousHash;
+      uint64_t instanceIdentity;
+      uint32_t primitiveCount;
+      uint32_t geometryIndex;
+    };
     std::vector<BucketGeometryContentHashData> contentHashData;
 
     // Create or find a matching BLAS for each bucket, then build it
     for (const auto& bucket : blasBuckets) {
-      // Fill out the build info
+      // Start with the updateable layout so pooled storage selection remains
+      // compatible with the normal merged-BLAS path.
       VkAccelerationStructureBuildGeometryInfoKHR buildInfo {};
       buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
       buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
@@ -1195,23 +1903,10 @@ namespace dxvk {
       buildInfo.geometryCount = bucket->geometries.size();
       buildInfo.pGeometries = bucket->geometries.data();
 
-      // Calculate the build sizes for this bucket
       VkAccelerationStructureBuildSizesInfoKHR sizeInfo {};
       sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
       m_device->vkd()->vkGetAccelerationStructureBuildSizesKHR(m_device->handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                                                                &buildInfo, bucket->primitiveCounts.data(), &sizeInfo);
-
-      // Try to find an existing BLAS that is minimally sufficient to fit this bucket of geometries
-      PooledBlas* selectedBlas = nullptr;
-      for (const auto& blas : m_blasPool) {
-        size_t bufferSize = blas->accelStructure->info().size;
-        uint32_t paddedLastTouched = blas->frameLastTouched + 1 + (RtxOptions::enablePreviousTLAS() ? 1u : 0u); /* note: +2 because frameLastTouched is unsigned and init'd with UINT32_MAX, and keep the BLAS'es for one extra frame for previous TLAS access */
-        if (bufferSize >= sizeInfo.accelerationStructureSize &&
-            (!selectedBlas || bufferSize < selectedBlas->accelStructure->info().size) &&
-            paddedLastTouched <= currentFrame) {
-          selectedBlas = blas.ptr();
-        }
-      }
 
       struct TopologyHashData {
         XXH64_hash_t previousHash;
@@ -1236,36 +1931,16 @@ namespace dxvk {
             &TopologyHashData::firstVertex>(topologyHashData);
       }
 
-      // Must ensure that if we are updating an existing blas, rather than rebuilding, the blas is compatible with our new build info
-      // Cannot update a blas that contains OMM instances, this leads to sporadic device lost errors
-      if (!bucket->hasOmmInstances && selectedBlas &&
-          selectedBlas->topologyHash == newTopologyHash &&
-          validateUpdateMode(selectedBlas->buildInfo, buildInfo) &&
-          selectedBlas->primitiveCounts == bucket->primitiveCounts) {
-        buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
-      }
-
-      // There is no such BLAS - create one and put it into the pool
-      if (!selectedBlas) {
-        auto newBlas = createPooledBlas(sizeInfo.accelerationStructureSize, "BLAS Merged");
-
-        selectedBlas = newBlas.ptr();
-
-        m_blasPool.push_back(std::move(newBlas));
-      }
-      assert(selectedBlas);
-      selectedBlas->frameLastTouched = currentFrame;
-      selectedBlas->topologyHash = newTopologyHash;
-
-      // Record the assigned BLAS on the bucket so the per-bucket cache can capture it
-      bucket->assignedBlas = selectedBlas;
-
       // Compute a content hash for this bucket's geometry to detect when the
       // merged BLAS can skip its GPU build entirely.  Uses the existing
       // content-based geometry hashes (vertex position, index, bone) from
       // the BlasEntry rather than device addresses, since double-buffered
       // vertex buffers can reuse the same address with different data.
       XXH64_hash_t newContentHash = kEmptyHash;
+      XXH64_hash_t newLayoutHash = kEmptyHash;
+      XXH64_hash_t newVertexHash = kEmptyHash;
+      XXH64_hash_t newBoneHash = kEmptyHash;
+      XXH64_hash_t newTransformHash = kEmptyHash;
       {
         contentHashData.resize(bucket->geometries.size());
         if (!contentHashData.empty()) {
@@ -1283,6 +1958,33 @@ namespace dxvk {
           hashData.boneHash = blasEntry->modifiedGeometryData.lastBoneHash;
           hashData.transform = inst->getVkInstance().transform;
           hashData.primitiveCount = bucket->primitiveCounts[gi];
+
+          const ChainedLayoutHashData layoutHashData {
+            newLayoutHash,
+            inst->getCacheIdentity(),
+            hashData.primitiveCount,
+            gi,
+          };
+          newLayoutHash = hashStructByMemory<ChainedLayoutHashData,
+              &ChainedLayoutHashData::previousHash,
+              &ChainedLayoutHashData::instanceIdentity,
+              &ChainedLayoutHashData::primitiveCount,
+              &ChainedLayoutHashData::geometryIndex>(layoutHashData);
+
+          const ChainedContentHashData vertexHashData { newVertexHash, hashData.vertexHash };
+          newVertexHash = hashStructByMemory<ChainedContentHashData,
+              &ChainedContentHashData::previousHash,
+              &ChainedContentHashData::value>(vertexHashData);
+
+          const ChainedContentHashData boneHashData { newBoneHash, hashData.boneHash };
+          newBoneHash = hashStructByMemory<ChainedContentHashData,
+              &ChainedContentHashData::previousHash,
+              &ChainedContentHashData::value>(boneHashData);
+
+          const ChainedTransformHashData transformHashData { newTransformHash, hashData.transform };
+          newTransformHash = hashStructByMemory<ChainedTransformHashData,
+              &ChainedTransformHashData::previousHash,
+              &ChainedTransformHashData::transform>(transformHashData);
         }
 
         // Geometry order is part of the merged BLAS layout and affects primitive
@@ -1298,17 +2000,149 @@ namespace dxvk {
         }
       }
 
-      const bool canSkipBuild = (buildInfo.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR) &&
-                                 (selectedBlas->contentHash == newContentHash) &&
-                                 (newContentHash != kEmptyHash);
-      selectedBlas->contentHash = newContentHash;
+      const MergedBlasContentSignature currentSignature {
+        newContentHash,
+        newLayoutHash,
+        newTopologyHash,
+        newVertexHash,
+        newBoneHash,
+        newTransformHash,
+      };
 
-      if (!canSkipBuild) {
+      // Exact-content reuse is safe across pointer churn because it does not write the BLAS referenced by the previous TLAS.
+      PooledBlas* selectedBlas = bucket->previousBlas;
+      if (selectedBlas != nullptr && selectedBlas->frameLastTouched == currentFrame) {
+        selectedBlas = nullptr;
+      }
+
+      bool recoveredByContent = false;
+      if (selectedBlas == nullptr && newContentHash != kEmptyHash) {
+        for (const auto& blas : m_blasPool) {
+          if (blas->frameLastTouched != currentFrame
+           && hasSameMergedBlasBuildContent(blas->mergedContentSignature, currentSignature)
+           && blas->primitiveCounts == bucket->primitiveCounts) {
+            selectedBlas = blas.ptr();
+            recoveredByContent = true;
+            break;
+          }
+        }
+      }
+
+      if (selectedBlas == nullptr) {
+        PooledBlas* updateableBlas = nullptr;
+        PooledBlas* storageBlas = nullptr;
+        for (const auto& blas : m_blasPool) {
+          const size_t bufferSize = blas->accelStructure->info().size;
+          const uint32_t paddedLastTouched = blas->frameLastTouched + 1 + (RtxOptions::enablePreviousTLAS() ? 1u : 0u); /* note: +2 because frameLastTouched is unsigned and init'd with UINT32_MAX, and keep the BLAS'es for one extra frame for previous TLAS access */
+          if (bufferSize < sizeInfo.accelerationStructureSize || paddedLastTouched > currentFrame) {
+            continue;
+          }
+
+          if (canRefitMergedBlas(
+                blas->lifecycle.state,
+                blas->topologyHash,
+                newTopologyHash,
+                blas->primitiveCounts,
+                bucket->primitiveCounts)
+           && (updateableBlas == nullptr || bufferSize < updateableBlas->accelStructure->info().size)) {
+            updateableBlas = blas.ptr();
+          }
+
+          if (storageBlas == nullptr || bufferSize < storageBlas->accelStructure->info().size) {
+            storageBlas = blas.ptr();
+          }
+        }
+        selectedBlas = updateableBlas != nullptr ? updateableBlas : storageBlas;
+      }
+
+      bool newBlas = false;
+      if (selectedBlas == nullptr) {
+        auto pooledBlas = createPooledBlas(sizeInfo.accelerationStructureSize, "BLAS Merged");
+        selectedBlas = pooledBlas.ptr();
+        m_blasPool.push_back(std::move(pooledBlas));
+        newBlas = true;
+      }
+      assert(selectedBlas);
+
+      const bool reusedPreviousBlas = bucket->previousBlas != nullptr
+        && selectedBlas == bucket->previousBlas;
+      const bool contentUnchanged = !newBlas
+        && hasSameMergedBlasBuildContent(selectedBlas->mergedContentSignature, currentSignature)
+        && selectedBlas->primitiveCounts == bucket->primitiveCounts;
+      if (enableBlasBaking() && bucket->bakeEligible && recoveredByContent) {
+        ++m_mergedBlasChurnStats.contentRecoveries;
+      }
+      if (enableBlasBaking() && bucket->bakeEligible && !contentUnchanged) {
+        m_mergedBlasChurnStats.record(classifyMergedBlasChanges(
+          newBlas,
+          reusedPreviousBlas,
+          selectedBlas->mergedContentSignature,
+          currentSignature));
+      }
+      selectedBlas->lifecycle.observe(currentFrame, !contentUnchanged, bucket->bakeEligible);
+
+      if (contentUnchanged
+       && selectedBlas->lifecycle.compactionState == BlasCompactionState::Ready) {
+        compactBlas(ctx, *selectedBlas);
+      }
+
+      const bool hasStaticBlas = selectedBlas->lifecycle.state != BlasLifecycleState::Updateable;
+      const bool canUpdate = !newBlas
+        && !hasStaticBlas
+        && !bucket->hasOmmInstances
+        && selectedBlas->topologyHash == newTopologyHash
+        && validateUpdateMode(selectedBlas->buildInfo, buildInfo)
+        && selectedBlas->primitiveCounts == bucket->primitiveCounts;
+      const bool promoteToStatic = enableBlasBaking()
+        && contentUnchanged
+        && selectedBlas->lifecycle.isBakeReady(staticBlasMinStableFrames())
+        && consumeMaintenanceOperation();
+      const bool qualityRebuild = enableBlasBaking()
+        && !contentUnchanged
+        && canUpdate
+        && selectedBlas->lifecycle.needsQualityRebuild(maxBlasRefits())
+        && consumeMaintenanceOperation();
+
+      const BlasLifecycleState buildState = promoteToStatic || (hasStaticBlas && contentUnchanged)
+        ? BlasLifecycleState::Static
+        : BlasLifecycleState::Updateable;
+      buildInfo.flags = buildState == BlasLifecycleState::Static
+        ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR | additionalAccelerationStructureFlags()
+        : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR | additionalAccelerationStructureFlags();
+      m_device->vkd()->vkGetAccelerationStructureBuildSizesKHR(m_device->handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                                               &buildInfo, bucket->primitiveCounts.data(), &sizeInfo);
+
+      const bool build = newBlas
+        || promoteToStatic
+        || qualityRebuild
+        || (!contentUnchanged && (hasStaticBlas || !canUpdate));
+      const bool update = !contentUnchanged && !build && canUpdate;
+
+      if (build) {
+        ensureBlasStorage(ctx, *selectedBlas, sizeInfo.accelerationStructureSize,
+                          buildState == BlasLifecycleState::Static ? "BLAS Merged Static" : "BLAS Merged");
+      } else if (update) {
+        buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+      }
+
+      selectedBlas->frameLastTouched = currentFrame;
+      selectedBlas->topologyHash = newTopologyHash;
+      selectedBlas->contentHash = newContentHash;
+      selectedBlas->mergedContentSignature = currentSignature;
+      bucket->assignedBlas = selectedBlas;
+
+      for (const auto& pooledBlas : m_blasPool) {
+        if (pooledBlas.ptr() == selectedBlas) {
+          m_activeMergedBlases.push_back(pooledBlas);
+          break;
+        }
+      }
+
+      if (build || update) {
         // Use the selected BLAS for the build
         buildInfo.dstAccelerationStructure = selectedBlas->accelStructure->getAccelStructure();
 
-        if (buildInfo.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR) {
-          // Set the src to the dst if we're updating
+        if (update) {
           buildInfo.srcAccelerationStructure = buildInfo.dstAccelerationStructure;
         }
 
@@ -1316,7 +2150,8 @@ namespace dxvk {
         selectedBlas->primitiveCounts = bucket->primitiveCounts;
 
         // Allocate a scratch buffer slice
-        const size_t requiredScratchAllocSize = align(sizeInfo.buildScratchSize + m_scratchAlignment, m_scratchAlignment);
+        const VkDeviceSize scratchSize = update ? sizeInfo.updateScratchSize : sizeInfo.buildScratchSize;
+        const size_t requiredScratchAllocSize = align(scratchSize + m_scratchAlignment, m_scratchAlignment);
         buildInfo.scratchData.deviceAddress = totalScratchMemory;
         totalScratchMemory += requiredScratchAllocSize;
 
@@ -1328,6 +2163,20 @@ namespace dxvk {
         // Put the merged BLAS into the build queue
         blasToBuild.push_back(buildInfo);
         blasRangesToBuild.push_back(bucket->ranges.data());
+
+        if (update) {
+          selectedBlas->lifecycle.markRefit();
+          ++m_blasActivityThisFrame.refits;
+        } else {
+          selectedBlas->lifecycle.markBuilt(buildState, currentFrame, sizeInfo.accelerationStructureSize);
+          ++m_blasActivityThisFrame.builds;
+          if (promoteToStatic) {
+            ++m_blasActivityThisFrame.promotions;
+          }
+          if (qualityRebuild) {
+            ++m_blasActivityThisFrame.qualityRebuilds;
+          }
+        }
       } else {
         // BLAS content is unchanged — skip the GPU build but still track the resource for read
         ctx->getCommandList()->trackResource<DxvkAccess::Read>(selectedBlas->accelStructure);
@@ -1850,6 +2699,9 @@ namespace dxvk {
       return;
     }
 
+    auto gpuTiming = beginGpuTiming(ctx, GpuTimingScope::Tlas);
+    DEFER(tlasGpuTiming, endGpuTiming(ctx, std::move(gpuTiming));)
+
     m_gpuCrashRecorder.recordScene(
       m_device->getCurrentFrameId(),
       m_lastProcessedGeneration,
@@ -1869,6 +2721,8 @@ namespace dxvk {
       VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
       VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_SHADER_READ_BIT);
+
+    issueCompactionQueries(ctx);
 
     for (auto&& blas : m_blasPool) {
       ctx->getCommandList()->trackResource<DxvkAccess::Read>(blas->accelStructure);

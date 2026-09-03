@@ -22,6 +22,7 @@
 #pragma once
 
 #include "rtx_constants.h"
+#include "rtx_accel_policy.h"
 #include "rtx_utils.h"
 #include "rtx_materials.h"
 #include "rtx_hashing.h"
@@ -906,6 +907,10 @@ struct PooledBlas : public RcObject {
   // When the merged BLAS content (geometry addresses + primitive counts) is
   // unchanged, the GPU build can be skipped entirely.
   XXH64_hash_t contentHash = kEmptyHash;
+
+  MergedBlasContentSignature mergedContentSignature;
+
+  BlasLifecycle lifecycle;
 
   explicit PooledBlas();
   ~PooledBlas();
